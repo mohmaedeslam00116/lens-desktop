@@ -115,13 +115,20 @@ export interface LiveEvent {
     | 'plan_rejected'
     | 'session_state'
     | 'cancelled'
-    | 'budget_exhausted';
+    | 'budget_exhausted'
+    | 'skill_activated';
   eventId?: number;
   sessionId?: string;
   state?: SessionState;
   plan?: ResearchPlan;
   partialDraft?: PartialEvidenceDraft;
   extensionPayload?: ResearchExtensionPayload;
+  skillName?: string;
+  skillScope?: 'workspace' | 'user' | 'builtin';
+  activationMethod?: 'pre_activated' | 'dynamic_tool';
+  mappedTools?: string[];
+  unmappedTools?: string[];
+  notices?: string[];
   message?: string;
   step?: string;
   thought?: string;

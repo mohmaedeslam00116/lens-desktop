@@ -5,6 +5,21 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface LLMToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, any>;
+}
+
+export type ToolCallHandler = (call: {
+  name: string;
+  arguments: Record<string, any>;
+}) => Promise<{
+  success: boolean;
+  result?: any;
+  error?: string;
+}>;
+
 export interface LLMRequestOptions {
   provider: LLMProvider;
   model?: string;
@@ -12,6 +27,8 @@ export interface LLMRequestOptions {
   apiKey?: string;
   endpoint?: string;
   temperature?: number;
+  tools?: LLMToolDefinition[];
+  toolHandler?: ToolCallHandler;
   onChunk?: (chunk: string) => void;
 }
 
@@ -25,10 +42,10 @@ export class ModelClient {
     apiKey?: string,
     endpoint?: string
   ): Promise<ModelOption[]> {
-    const norm = provider.toLowerCase().trim();
+    const normalizedProvider = provider.toLowerCase().trim();
 
     // 1. Ollama (local)
-    if (norm === 'ollama') {
+    if (normalizedProvider === 'ollama') {
       try {
         const url = `${(endpoint || 'http://localhost:11434').replace(/\/$/, '')}/api/tags`;
         const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
@@ -54,7 +71,7 @@ export class ModelClient {
     const key = apiKey.trim();
 
     // 3. Google Gemini
-    if (norm === 'gemini' || norm === 'google') {
+    if (normalizedProvider === 'gemini' || normalizedProvider === 'google') {
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
         const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -94,7 +111,7 @@ export class ModelClient {
     }
 
     // 4. OpenAI
-    if (norm === 'openai') {
+    if (normalizedProvider === 'openai') {
       try {
         const res = await fetch('https://api.openai.com/v1/models', {
           headers: { 'Authorization': `Bearer ${key}` },
@@ -131,7 +148,7 @@ export class ModelClient {
     }
 
     // 5. Groq
-    if (norm === 'groq') {
+    if (normalizedProvider === 'groq') {
       try {
         const res = await fetch('https://api.groq.com/openai/v1/models', {
           headers: { 'Authorization': `Bearer ${key}` },
@@ -159,7 +176,7 @@ export class ModelClient {
     }
 
     // 6. DeepSeek
-    if (norm === 'deepseek') {
+    if (normalizedProvider === 'deepseek') {
       try {
         const res = await fetch('https://api.deepseek.com/models', {
           headers: { 'Authorization': `Bearer ${key}` },
@@ -187,7 +204,7 @@ export class ModelClient {
     }
 
     // 7. OpenRouter
-    if (norm === 'openrouter') {
+    if (normalizedProvider === 'openrouter') {
       try {
         const res = await fetch('https://openrouter.ai/api/v1/models', {
           headers: { 'Authorization': `Bearer ${key}` },
@@ -208,7 +225,7 @@ export class ModelClient {
     }
 
     // 8. Mistral
-    if (norm === 'mistral') {
+    if (normalizedProvider === 'mistral') {
       try {
         const res = await fetch('https://api.mistral.ai/v1/models', {
           headers: { 'Authorization': `Bearer ${key}` },
@@ -229,7 +246,7 @@ export class ModelClient {
     }
 
     // 9. Anthropic
-    if (norm === 'anthropic') {
+    if (normalizedProvider === 'anthropic') {
       try {
         const res = await fetch('https://api.anthropic.com/v1/models', {
           headers: {
@@ -321,6 +338,41 @@ export class ModelClient {
     }
   }
 
+  static formatProviderTools(provider: string, tools: LLMToolDefinition[]): any {
+    const normalizedProvider = provider.toLowerCase().trim();
+    if (!tools || tools.length === 0) return undefined;
+
+    if (normalizedProvider === 'gemini' || normalizedProvider === 'google') {
+      return [
+        {
+          functionDeclarations: tools.map(t => ({
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters
+          }))
+        }
+      ];
+    }
+
+    if (normalizedProvider === 'anthropic') {
+      return tools.map(t => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.parameters
+      }));
+    }
+
+    // OpenAI and compatible (Groq, DeepSeek, OpenRouter, Mistral)
+    return tools.map(t => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters
+      }
+    }));
+  }
+
   static async generate(options: LLMRequestOptions): Promise<string> {
     const provider = options.provider.toLowerCase().trim();
 
@@ -355,6 +407,10 @@ export class ModelClient {
       }
     };
 
+    if (options.tools && options.tools.length > 0) {
+      body.tools = this.formatProviderTools('gemini', options.tools);
+    }
+
     if (systemMsg) {
       body.systemInstruction = {
         parts: [{ text: systemMsg }]
@@ -374,7 +430,34 @@ export class ModelClient {
 
     const data = await res.json() as any;
     const candidate = data.candidates?.[0];
-    const text = candidate?.content?.parts?.map((p: any) => p.text).join('') || '';
+    const parts = candidate?.content?.parts || [];
+    const funcCallPart = parts.find((p: any) => p.functionCall);
+
+    if (funcCallPart && options.toolHandler) {
+      const toolCallResult = await options.toolHandler({
+        name: funcCallPart.functionCall.name,
+        arguments: funcCallPart.functionCall.args || {}
+      });
+
+      const nextMessages: ChatMessage[] = [
+        ...options.messages,
+        {
+          role: 'assistant',
+          content: `Activated skill: ${funcCallPart.functionCall.args?.name || ''}`
+        },
+        {
+          role: 'user',
+          content: `Tool response for ${funcCallPart.functionCall.name}: ${JSON.stringify(toolCallResult)}`
+        }
+      ];
+
+      return await this.generateGemini({
+        ...options,
+        messages: nextMessages
+      });
+    }
+
+    const text = parts.map((p: any) => p.text || '').join('');
 
     if (options.onChunk && text) {
       options.onChunk(text);
@@ -393,6 +476,18 @@ export class ModelClient {
       .filter(m => m.role !== 'system')
       .map(m => ({ role: m.role, content: m.content }));
 
+    const payload: any = {
+      model,
+      messages,
+      system: systemMsg,
+      max_tokens: 4096,
+      temperature: options.temperature ?? 0.3
+    };
+
+    if (options.tools && options.tools.length > 0) {
+      payload.tools = this.formatProviderTools('anthropic', options.tools);
+    }
+
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -400,13 +495,7 @@ export class ModelClient {
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json'
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        system: systemMsg,
-        max_tokens: 4096,
-        temperature: options.temperature ?? 0.3
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!res.ok) {
@@ -415,7 +504,32 @@ export class ModelClient {
     }
 
     const data = await res.json() as any;
-    const text = data.content?.map((c: any) => c.text).join('') || '';
+    const toolUseBlock = data.content?.find((c: any) => c.type === 'tool_use');
+    if (toolUseBlock && options.toolHandler) {
+      const toolResult = await options.toolHandler({
+        name: toolUseBlock.name,
+        arguments: toolUseBlock.input || {}
+      });
+
+      const nextMessages: ChatMessage[] = [
+        ...options.messages,
+        {
+          role: 'assistant',
+          content: `Activated skill: ${toolUseBlock.input?.name || ''}`
+        },
+        {
+          role: 'user',
+          content: `Tool response for ${toolUseBlock.name}: ${JSON.stringify(toolResult)}`
+        }
+      ];
+
+      return await this.generateAnthropic({
+        ...options,
+        messages: nextMessages
+      });
+    }
+
+    const text = data.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') || '';
     if (options.onChunk && text) options.onChunk(text);
     return text;
   }
@@ -455,17 +569,24 @@ export class ModelClient {
 
     const model = options.model || defaultModel;
 
+    const payload: any = {
+      model,
+      messages: options.messages,
+      temperature: options.temperature ?? 0.3
+    };
+
+    // Tool registration for tool-capable providers (excluding Ollama which runs pre-activated)
+    if (options.tools && options.tools.length > 0 && provider !== 'ollama') {
+      payload.tools = this.formatProviderTools(provider, options.tools);
+    }
+
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model,
-        messages: options.messages,
-        temperature: options.temperature ?? 0.3
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!res.ok) {
@@ -474,7 +595,41 @@ export class ModelClient {
     }
 
     const data = await res.json() as any;
-    const text = data.choices?.[0]?.message?.content || '';
+    const choice = data.choices?.[0];
+    const toolCalls = choice?.message?.tool_calls;
+    if (toolCalls && toolCalls.length > 0 && options.toolHandler) {
+      const firstCall = toolCalls[0];
+      let parsedArgs: Record<string, any> = {};
+      try {
+        parsedArgs = JSON.parse(firstCall.function?.arguments || '{}');
+      } catch {
+        parsedArgs = {};
+      }
+
+      const toolResult = await options.toolHandler({
+        name: firstCall.function?.name,
+        arguments: parsedArgs
+      });
+
+      const nextMessages: ChatMessage[] = [
+        ...options.messages,
+        {
+          role: 'assistant',
+          content: `Activated skill: ${parsedArgs?.name || ''}`
+        },
+        {
+          role: 'user',
+          content: `Tool response for ${firstCall.function?.name}: ${JSON.stringify(toolResult)}`
+        }
+      ];
+
+      return await this.generateOpenAICompatible({
+        ...options,
+        messages: nextMessages
+      });
+    }
+
+    const text = choice?.message?.content || '';
     if (options.onChunk && text) options.onChunk(text);
     return text;
   }

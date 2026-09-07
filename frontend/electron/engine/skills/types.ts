@@ -68,3 +68,24 @@ export class SkillError extends Error {
     Object.setPrototypeOf(this, SkillError.prototype);
   }
 }
+
+export type SkillActivationMethod = 'pre_activated' | 'dynamic_tool';
+
+export interface ActivatedSkill {
+  name: string;
+  scope: SkillScope;
+  shieldedContent: string;
+  activationMethod: SkillActivationMethod;
+  mappedTools: string[];
+  unmappedTools: string[];
+  notices: string[];
+  activatedAt: number;
+}
+
+export interface HostToolMappingResult {
+  mappedTools: string[];
+  unmappedTools: string[];
+  notices: string[];
+  hasCapability: (capability: string) => boolean;
+}
+

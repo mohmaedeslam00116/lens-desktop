@@ -63,6 +63,11 @@
     - Lenient YAML frontmatter parser recovering unquoted colons in descriptions without throwing syntax errors, validating lowercase alphanumeric names (`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`) and description length bounds ($\le 1024$ chars).
     - Strict filesystem path boundary sandbox (`SkillPathBoundary`) enforcing normalized directory containment (`path.resolve()`), blocking relative traversal (`../../`), null-byte injection, and out-of-root symlinks with `SECURITY_ACCESS_DENIED`.
 
+13. **Dual-Path Skill Activation, Model Routing & Compaction Shield:**
+    - Dual-path activation: Controller-assisted pre-activation injecting approved plan skills into session context for 100% activation reliability on local LLMs (Ollama / Llama 3.1), plus dynamic tool-calling `activate_skill(name)` for cloud providers (Gemini, OpenAI, Claude).
+    - `HostToolMapper` mapping declared `allowed-tools` to native capabilities (`web_search`, `read_url`, `read_resource`, `record_evidence`) with zero privilege escalation.
+    - `CompactionShield` wrapping active skill instructions in `<skill_content name="...">` blocks, strictly exempting them from context compaction and multi-hop summarization passes.
+
 ---
 
 ## 🏗️ Repository Structure

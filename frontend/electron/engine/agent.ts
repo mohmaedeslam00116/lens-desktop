@@ -1,18 +1,25 @@
 import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem, WideResearchRequest, PlanMilestone } from './types';
 import { MultiSearchProvider } from './search';
 import { PageScraper, ScrapedPage } from './scraper';
-import { ModelClient, LLMRequestOptions } from './models';
+import { ModelClient, LLMRequestOptions, ToolCallHandler } from './models';
 import { createEmbeddingModel, rankSourcePassages, fallbackEvidence, EmbeddingProvider } from './embeddings';
 import { auditEvidenceCoverage, generateAdaptiveHopPlan, formatAuditReflections } from './evidenceCoverage';
+import { SkillActivationManager, CompactionShield } from './skills';
 
 export class DeepResearchAgent {
   private sessionId: string;
   private emitEvent: (event: LiveEvent) => void;
+  private activationManager?: SkillActivationManager;
   private nodeIndex = 0;
 
-  constructor(sessionId: string, emitEvent: (event: LiveEvent) => void) {
+  constructor(
+    sessionId: string,
+    emitEvent: (event: LiveEvent) => void,
+    activationManager?: SkillActivationManager
+  ) {
     this.sessionId = sessionId;
     this.emitEvent = emitEvent;
+    this.activationManager = activationManager;
   }
 
   private nextNodeId(prefix = 'node'): string {
@@ -88,11 +95,30 @@ export class DeepResearchAgent {
     const embeddingApiKey = request.embedding_api_key || apiKeys[embeddingProvider] || (embeddingProvider === 'gemini' ? apiKeys['google'] : undefined);
     const embeddingEndpoint = request.embedding_endpoint || ollamaEndpoint;
 
+    const toolHandler: ToolCallHandler = async (call) => {
+      if (call.name === 'activate_skill' && this.activationManager) {
+        return await this.activationManager.handleActivateSkillToolCall(
+          call.arguments as { name: string },
+          this.emitEvent,
+          { language }
+        );
+      }
+      return { success: false, error: `Unsupported tool: ${call.name}` };
+    };
+
     const llmBaseOpts: Omit<LLMRequestOptions, 'messages'> = {
       provider: llmProvider,
       model: modelName,
       apiKey: apiKeys[llmProvider] || apiKeys[llmProvider === 'gemini' ? 'google' : ''],
-      endpoint: ollamaEndpoint
+      endpoint: ollamaEndpoint,
+      tools:
+        llmProvider !== 'ollama' && this.activationManager
+          ? [this.activationManager.getToolDefinition()]
+          : undefined,
+      toolHandler:
+        llmProvider !== 'ollama' && this.activationManager
+          ? toolHandler
+          : undefined
     };
 
     // 1. Emit Initial Root Node
@@ -135,6 +161,19 @@ export class DeepResearchAgent {
 
     // Check if an approved research plan was provided (Tracer 4 trajectory freeze)
     const wideRequest = request as WideResearchRequest;
+
+    // Pre-activate approved plan skills or requested skills (Tracer 6 Dual-Path Controller-Assisted Pre-activation)
+    if (this.activationManager) {
+      const requestedSkills = [
+        ...(wideRequest.plan?.suggestedSkills || []),
+        ...((wideRequest as any).approvedSkills || []),
+        ...((wideRequest as any).skills || [])
+      ];
+      if (requestedSkills.length > 0) {
+        await this.activationManager.preActivateSkills(requestedSkills, this.emitEvent, { language });
+      }
+    }
+
     let subqueries: string[] = [];
 
     if (wideRequest.plan?.milestones && wideRequest.plan.milestones.length > 0) {
@@ -154,10 +193,11 @@ export class DeepResearchAgent {
           thought: `تحليل السؤال البحثي '${query}' وتوليد محاور استكشافية دقيقة توافق منظور ${perspectiveLabel}...`
         });
 
+        const activeSkillsCtx = this.activationManager?.getPromptContext() || '';
         const subqueryPrompt = `You are a Principal Research Architect.
 Topic: "${query}"
 Perspective: "${perspectiveLabel}"
-Language: ${language === 'ar' ? 'Arabic' : 'English'}
+Language: ${language === 'ar' ? 'Arabic' : 'English'}${activeSkillsCtx ? `\n\nDomain Guidance & Active Skills:\n${activeSkillsCtx}` : ''}
 
 Generate 3 to 4 distinct, high-impact search queries to investigate this topic thoroughly.
 Return ONLY a valid JSON array of strings, for example:
@@ -396,6 +436,18 @@ Return ONLY a valid JSON array of strings, for example:
       evidenceText = fallbackEvidence(scrapedSources);
     }
 
+    // Tracer 6 Context Compaction Shielding:
+    // If evidence context grows large during multi-hop rounds, compact while strictly exempting shielded skill blocks.
+    if (evidenceText && this.activationManager && this.activationManager.getActiveSkills().length > 0) {
+      const activePromptContext = this.activationManager.getPromptContext();
+      if (CompactionShield.isShielded(activePromptContext) && evidenceText.length > 25000) {
+        evidenceText = await this.compactContextWithShield(
+          evidenceText,
+          (unshielded) => unshielded.slice(0, 20000)
+        );
+      }
+    }
+
     const userQueryLower = query.toLowerCase();
     const userExplicitlyWantsTables = /جدول|مقارن|table|compar|matrix|benchmark/i.test(query);
     const userExplicitlyWantsDiagrams = /مخطط|رسم|diagram|flowchart|architect|flow/i.test(query);
@@ -446,7 +498,7 @@ CRITICAL FORMATTING & STRUCTURE RULES:
 
 4. TONE & CRAFT:
    - Analytical, substantive, zero fluff. Write naturally — not every report needs the same rigid template.
-   - Adapt the depth and structure to the topic's complexity. A simple question deserves a focused answer, not a 7-section dossier.`;
+   - Adapt the depth and structure to the topic's complexity. A simple question deserves a focused answer, not a 7-section dossier.${this.activationManager?.getPromptContext() ? `\n\n${this.activationManager.getPromptContext()}` : ''}`;
 
     const userPrompt = `Topic: "${query}"
 Perspective: ${perspectiveLabel}
@@ -533,5 +585,16 @@ Cite relevant sections or sources where applicable.`;
     } catch (err: any) {
       return `تعذر توليد الإجابة عن سؤال المتابعة: ${err.message}`;
     }
+  }
+
+  /**
+   * Compacts context during long multi-hop research sessions while strictly exempting
+   * shielded skill blocks (`<skill_content>`) from summarization or pruning.
+   */
+  async compactContextWithShield(
+    fullContext: string,
+    compactor: (unshielded: string) => Promise<string> | string
+  ): Promise<string> {
+    return await CompactionShield.protectCompaction(fullContext, compactor);
   }
 }
