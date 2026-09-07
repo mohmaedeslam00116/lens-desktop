@@ -84,3 +84,9 @@ An evidence architecture decoupling massive raw corpus capacity from the LLM gen
 - **Tier 1 (Raw Session Corpus)**: In-memory/temp storage of all retrieved web pages for complete source inspection.
 - **Tier 2 (Admitted Passages Index)**: Top 40–80 contextual chunks selected via RRF (Dense + BM25) and MMR diversification spanning all plan facets.
 - **Tier 3 (Synthesis Prompt Context)**: Clean admitted excerpts supplied to the LLM with stable citation identifiers `[x]`, supporting hierarchical section synthesis.
+
+### SessionLifecycle
+The state machine governing research sessions: `planning` -> `awaiting_approval` -> `running` -> terminal states (`completed`, `cancelled`, `budget_exhausted`, `failed`). Supports immediate `<1s` cancellation via `AbortController` while safely retaining gathered evidence as an inspectable partial draft.
+
+### EventRingBuffer
+A bounded circular memory buffer maintained by the engine on port 8000 storing the last 200–300 sequential events (`eventId: 1, 2, 3...`) per active session, enabling deterministic delta replay to the React frontend on WebSocket reconnects.
