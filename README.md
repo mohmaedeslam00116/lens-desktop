@@ -43,6 +43,11 @@
    - Sub-second `<100ms` `AbortController` cancellation preserving partial gathered evidence and draft reports.
    - Formal session state machine (`planning` -> `awaiting_approval` -> `running` -> `completed` / `cancelled` / `budget_exhausted` / `failed`).
 
+9. **Bounded Parallel Ingestion & 3-Level Deduplication Engine:**
+   - Asynchronous worker pool (`BoundedScraperPool`) with global ($C_{\text{global}} = 10$) and per-host ($C_{\text{host}} = 2$) concurrency throttles, internal 10s request timeouts, and non-blocking exponential backoff on HTTP 429 rate limits.
+   - 3-level deduplication (`DeduplicationEngine`): Level 1 canonical URL normalization, Level 2 exact SHA-256 content hashing invariant to whitespace, casing, and punctuation, and Level 3 64-bit SimHash near-duplicate detection with Hamming distance threshold $\le 3$.
+   - Memory-bounded ingestion pipeline keeping 200 ingested sources strictly under 10 MB RAM.
+
 ---
 
 ## 🏗️ Repository Structure

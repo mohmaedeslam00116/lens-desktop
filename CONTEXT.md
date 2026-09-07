@@ -98,7 +98,19 @@ A structured research blueprint generated in Phase 1 containing the strategic `o
 The versioned human-in-the-loop checkpoint (`plan_proposed` -> `plan_approved`) where the user edits subqueries, toggles skills, and explicitly authorizes execution, binding the engine's retrieval trajectory and budget limits to the approved plan version.
 
 ### BoundedScraperPool
-An asynchronous scraping worker queue (`frontend/electron/engine/scraperPool.ts`) that enforces global concurrency limits ($C_{\text{global}} = 10$) and per-host limits ($C_{\text{host}} = 2$) with request timeouts and exponential backoff, enabling parallel ingestion of 100–200 sources in ~22 seconds without triggering HTTP 429 bans or socket saturation.
+An asynchronous scraping worker queue (`frontend/electron/engine/scraperPool.ts`) that enforces global concurrency limits ($C_{\text{global}} = 10$) and per-host limits ($C_{\text{host}} = 2$) with request timeouts and non-blocking exponential backoff, enabling parallel ingestion of 100–200 sources in ~22 seconds without triggering HTTP 429 bans or socket saturation.
+
+### ThreeLevelDeduplication
+A hierarchical filtering pipeline operating across 3 distinct tiers to eliminate redundant evidence at ingestion time:
+- **Level 1 (Canonical URL Normalization)**: Strips tracking query parameters (`utm_*`, `fbclid`, `ref`), removes URL fragments and default ports, lowercases protocol and hostname, sorts query parameters deterministically, and normalizes trailing slashes.
+- **Level 2 (Exact Content Hashing)**: SHA-256 cryptographic hashing over whitespace-normalized text to catch identical syndicated pages across distinct URLs.
+- **Level 3 (SimHash Near-Duplicate Detection)**: 64-bit locality-sensitive SimHash fingerprinting with term-frequency token weighting and Hamming distance threshold $\le 3$ to detect near-identical documents with minor ad banners, author lines, or timestamp variations.
+
+### DeduplicationEngine
+The central deduplication coordinator (`frontend/electron/engine/dedup.ts`) maintaining in-memory indexes of seen canonical URLs, exact SHA-256 hashes, and 64-bit SimHash signatures to filter duplicates before and after network fetches, exposing real-time telemetry stats.
+
+### SimHashFingerprint
+A 64-bit locality-sensitive integer projection computed from token frequency distributions, where the bitwise Hamming distance between two fingerprints is mathematically proportional to the cosine distance between their underlying text vectors.
 
 ### StratifiedEvidenceAdmission
 A facet-aware passage selection strategy that guarantees a minimum quota of admitted chunks per approved milestone ($K_{\text{min}} = 8$), preventing early subqueries from monopolizing the synthesis evidence buffer and ensuring comprehensive representation across all plan facets.

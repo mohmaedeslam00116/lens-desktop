@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bounded Parallel Ingestion & 3-Level Deduplication Engine ([#29](https://github.com/mohmaedeslam00116/lens-desktop/issues/29))**:
+  - Implemented 3-level deduplication engine (`frontend/electron/engine/dedup.ts`):
+    - Level 1: Canonical URL normalization (stripping tracking query parameters such as `utm_*`, `fbclid`, `ref`, stripping default ports and URL fragments, lowercasing hostname/protocol, sorting query parameters deterministically, and stripping trailing slashes).
+    - Level 2: Exact SHA-256 content hashing invariant to whitespace, capitalization, and punctuation, preserving multilingual Unicode alphanumeric tokens across Arabic and English.
+    - Level 3: 64-bit SimHash fingerprinting with term-frequency token weighting and Hamming distance threshold $\le 3$ for fast near-duplicate and syndicated content detection across Arabic and English.
+  - Implemented `BoundedScraperPool` (`frontend/electron/engine/scraperPool.ts`):
+    - Strict global concurrency ceiling ($C_{\text{global}} = 10$) and per-hostname concurrency ceiling ($C_{\text{host}} = 2$).
+    - Configurable timeouts (10s default) with exponential backoff on HTTP 429/503 rate-limit responses.
+    - Strict resident memory bounding, keeping 200 ingested sources under 10 MB RAM via per-page content length caps and streaming deduplication.
+    - Sub-second cancellation via `AbortSignal`.
+    - Integrated with `DeduplicationEngine` for pre-scraping URL checks and post-scraping content admission.
+  - Comprehensive 18-test test suite (`frontend/test/bounded_scraper_dedup.test.mjs`) verifying all 3 deduplication tiers, concurrency throttles, rate limit backoff, sub-second cancellation, and a 200-source scale and memory footprint benchmark.
 - **Domain Types, EventRingBuffer & Session Lifecycle ([#28](https://github.com/mohmaedeslam00116/lens-desktop/issues/28))**:
   - Declared core domain types in `frontend/electron/engine/types.ts`: `ResearchMode`, `SessionState`, `PlanMilestone`, `ResearchPlan`, `PartialEvidenceDraft`, `WideResearchRequest`, and `WideResearchResult`.
   - Implemented `EventRingBuffer` (`eventBuffer.ts`) with configurable capacity (default 300), strictly monotonic sequence numbering (`eventId: 1, 2, 3...`), circular FIFO eviction, and delta replay via `getEventsSince(lastEventId)` to guarantee seamless WebSocket reconnect recovery.
