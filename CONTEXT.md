@@ -90,3 +90,9 @@ The state machine governing research sessions: `planning` -> `awaiting_approval`
 
 ### EventRingBuffer
 A bounded circular memory buffer maintained by the engine on port 8000 storing the last 200–300 sequential events (`eventId: 1, 2, 3...`) per active session, enabling deterministic delta replay to the React frontend on WebSocket reconnects.
+
+### ResearchPlan
+A structured research blueprint generated in Phase 1 containing the strategic `objective`, investigation `milestones` (subqueries), `proposedSkills` (`SKILL.md`), and realistic `estimatedScope`. It is presented in the UI for user inspection and modification before retrieval begins.
+
+### CollaborativeApproval
+The versioned human-in-the-loop checkpoint (`plan_proposed` -> `plan_approved`) where the user edits subqueries, toggles skills, and explicitly authorizes execution, binding the engine's retrieval trajectory and budget limits to the approved plan version.

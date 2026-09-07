@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Quality, Budget & Evaluation Contract Decision ([#18](https://github.com/mohmaedeslam00116/lens-desktop/issues/18))**: Defined 5-tier observable source metrics, flexible 50–200 source budget with smart early exit (>=80–85% coverage), honest budget exhaustion warnings with `[Extend Research]` action, and 200/500-source offline scale scenarios with zero-hallucinated citation integrity.
 - **Multi-Phase Pipeline Architecture Decision ([#12](https://github.com/mohmaedeslam00116/lens-desktop/issues/12))**: Established dedicated `WideResearchAgent` orchestrator, defined 5-phase lifecycle with WebSocket plan approval checkpoint, and adopted 3-tier evidence architecture decoupling massive raw corpus storage from LLM generation context.
 - **Session Lifecycle & Recovery Decision ([#20](https://github.com/mohmaedeslam00116/lens-desktop/issues/20))**: Formally specified 4-state session lifecycle, sub-second `AbortController` cancellation preserving partial evidence drafts, and bounded event ring buffer for reconnect delta replays.
+- **Collaborative Research Plan UX Decision ([#14](https://github.com/mohmaedeslam00116/lens-desktop/issues/14))**: Designed 4-part plan schema, interactive UI controls (axis editing, skill toggles, Approve/Regenerate/Discard), and versioned WebSocket binding (`plan_approved`).
 
 ---
 
