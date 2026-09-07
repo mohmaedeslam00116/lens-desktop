@@ -4,6 +4,12 @@
  * for Electron + React TypeScript architecture.
  */
 
+import { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord } from './bm25';
+import { fuseRankings } from './rrf';
+
+export { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord };
+export { fuseRankings };
+
 export type EmbeddingProvider = 'gemini' | 'openai' | 'ollama' | 'none';
 
 export interface EmbeddingConfig {
@@ -25,6 +31,8 @@ export interface ChunkRecord {
   content: string;
   chunkIndex: number;
   score?: number;
+  denseScore?: number;
+  bm25Score?: number;
 }
 
 export interface ModelOption {
@@ -627,10 +635,52 @@ export function getDefaultEmbeddingModels(provider: string): ModelOption[] {
 
 /**
  * Standard excerpt fallback preserving exact original LENS behavior.
+ * When queries are provided, uses BM25 to rank passages across sources
+ * instead of raw slice(0, 2000), while strictly preserving citation ID format.
  */
 export function fallbackEvidence(
-  sources: Array<{ url: string; title: string; domain: string; content: string }>
+  sources: Array<{ url: string; title: string; domain: string; content: string }>,
+  queries?: string[]
 ): string {
+  if (queries && Array.isArray(queries) && queries.length > 0) {
+    try {
+      const cleanQueries = queries.filter(q => q && q.trim());
+      if (cleanQueries.length > 0) {
+        const bm25 = new BM25Index<{ title: string; domain: string; url: string; citationId: number; content: string }>();
+        const allChunks: Array<{ id: string; citationId: number; title: string; domain: string; url: string; content: string }> = [];
+
+        sources.forEach((s, srcIdx) => {
+          const citationId = srcIdx + 1;
+          const textChunks = chunkText(s.content, { maxChunkSize: 650, chunkOverlap: 80 });
+          textChunks.forEach((text, chunkIdx) => {
+            const chunkId = `fallback_${citationId}_${chunkIdx}`;
+            const chunkObj = { id: chunkId, citationId, title: s.title, domain: s.domain, url: s.url, content: text };
+            allChunks.push(chunkObj);
+            bm25.addDocument(chunkId, `${s.title} ${text}`, chunkObj);
+          });
+        });
+
+        const searchResults = bm25.search(cleanQueries.join(' '));
+        if (searchResults.length > 0) {
+          const bySource = new Map<number, string>();
+          for (const res of searchResults) {
+            if (res.metadata && !bySource.has(res.metadata.citationId)) {
+              bySource.set(res.metadata.citationId, res.metadata.content);
+            }
+          }
+
+          return sources.map((s, idx) => {
+            const citationId = idx + 1;
+            const excerpt = bySource.get(citationId) || s.content.slice(0, 2000);
+            return `[${citationId}] SOURCE: ${s.title} (${s.domain}) - URL: ${s.url}\nEXCERPT:\n${excerpt}\n---`;
+          }).join('\n\n');
+        }
+      }
+    } catch {
+      // Fall through to standard slice(0, 2000)
+    }
+  }
+
   return sources.map((s, idx) => {
     const citationId = idx + 1;
     return `[${citationId}] SOURCE: ${s.title} (${s.domain}) - URL: ${s.url}\nEXCERPT:\n${s.content.slice(0, 2000)}\n---`;
@@ -649,6 +699,10 @@ export async function rankSourcePassages(
     maxPerSource?: number;
     maxContextChars?: number;
     signal?: AbortSignal;
+    denseWeight?: number;
+    bm25Weight?: number;
+    rrfK?: number;
+    disableBM25?: boolean;
   } = {}
 ): Promise<{
   evidenceText: string;
@@ -658,6 +712,7 @@ export async function rankSourcePassages(
     vectorDimensions: number;
     sourcesCovered: number;
     averageScore: number;
+    hybridMode?: boolean;
   };
 }> {
   if (!sources || sources.length === 0) {
@@ -744,8 +799,55 @@ export async function rankSourcePassages(
       }
     }
 
+    chunk.denseScore = maxSim;
     chunk.score = maxSim;
   });
+
+  // 5. Hybrid Search: BM25 Lexical Indexing & Reciprocal Rank Fusion (RRF)
+  let isHybrid = false;
+  if (!options.disableBM25) {
+    try {
+      const bm25 = new BM25Index<ChunkRecord>();
+      cappedChunks.forEach(c => {
+        bm25.addDocument(c.id, `${c.title} ${c.content}`, c);
+      });
+
+      const bm25Query = cleanQueries.join(' ');
+      const bm25Results = bm25.search(bm25Query);
+      const bm25ScoreMap = new Map(bm25Results.map(r => [r.id, r.score]));
+
+      cappedChunks.forEach(c => {
+        c.bm25Score = bm25ScoreMap.get(c.id) || 0;
+      });
+
+      const denseRanked = [...cappedChunks]
+        .map(c => ({ id: c.id, score: c.denseScore ?? 0, metadata: c }))
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+      const bm25Ranked = bm25Results.map(r => ({ id: r.id, score: r.score, metadata: r.metadata }));
+
+      const fused = fuseRankings<ChunkRecord>([
+        {
+          name: 'dense',
+          weight: typeof options.denseWeight === 'number' ? options.denseWeight : 1.0,
+          items: denseRanked
+        },
+        {
+          name: 'bm25',
+          weight: typeof options.bm25Weight === 'number' ? options.bm25Weight : 0.8,
+          items: bm25Ranked
+        }
+      ], { k: options.rrfK || 60 });
+
+      const fusedMap = new Map(fused.map(f => [f.id, f.score]));
+      cappedChunks.forEach(chunk => {
+        chunk.score = fusedMap.get(chunk.id) ?? chunk.denseScore ?? 0;
+      });
+      isHybrid = true;
+    } catch (bm25Err) {
+      console.warn('[HybridSearch] BM25 fusion skipped, falling back to dense similarity:', bm25Err);
+    }
+  }
 
   // 5. Source Diversity & Passage Selection
   const chunksBySource = new Map<number, ChunkRecord[]>();
@@ -820,7 +922,10 @@ export async function rankSourcePassages(
 
   for (const [citId, chunkList] of selectedBySource.entries()) {
     const first = chunkList[0];
-    const excerptsText = chunkList.map((c, i) => `[Passage ${i + 1} | Relevance: ${((c.score ?? 0) * 100).toFixed(0)}%]:\n${c.content}`).join('\n\n');
+    const excerptsText = chunkList.map((c, i) => {
+      const displayScore = typeof c.denseScore === 'number' ? c.denseScore : (c.score ?? 0);
+      return `[Passage ${i + 1} | Relevance: ${(displayScore * 100).toFixed(0)}%]:\n${c.content}`;
+    }).join('\n\n');
     evidenceBlocks.push(`[${citId}] SOURCE: ${first.title} (${first.domain}) - URL: ${first.url}\nEXCERPTS:\n${excerptsText}\n---`);
   }
 
@@ -833,7 +938,7 @@ export async function rankSourcePassages(
   });
 
   const avgScore = selectedChunks.length > 0
-    ? selectedChunks.reduce((sum, c) => sum + (c.score ?? 0), 0) / selectedChunks.length
+    ? selectedChunks.reduce((sum, c) => sum + (c.denseScore ?? c.score ?? 0), 0) / selectedChunks.length
     : 0;
 
   return {
@@ -843,7 +948,8 @@ export async function rankSourcePassages(
       totalChunks: cappedChunks.length,
       vectorDimensions: qValidation.dimensions,
       sourcesCovered: selectedBySource.size,
-      averageScore: Number(avgScore.toFixed(3))
+      averageScore: Number(avgScore.toFixed(3)),
+      hybridMode: isHybrid
     }
   };
 }
