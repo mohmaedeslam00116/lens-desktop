@@ -1,20 +1,22 @@
 import * as http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as crypto from 'crypto';
-import { LiveEvent, ResearchRequest } from './types';
+import { LiveEvent, ResearchPlan, ResearchRequest, WideResearchRequest } from './types';
 import { ModelClient } from './models';
 import { DeepResearchAgent } from './agent';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
+import { SessionLifecycleManager, ResearchSession } from './sessionLifecycle';
 
 interface ActiveSession {
   id: string;
-  request: ResearchRequest;
+  request: ResearchRequest | WideResearchRequest;
   sockets: Set<WebSocket>;
-  eventQueue: LiveEvent[];
+  researchSession: ResearchSession;
   isCompleted: boolean;
 }
 
+const sessionManager = new SessionLifecycleManager();
 const sessions = new Map<string, ActiveSession>();
 let httpServer: http.Server | null = null;
 let wss: WebSocketServer | null = null;
@@ -148,51 +150,94 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
 
         // Start Deep Research Task
         if (pathname === '/api/research/start' && req.method === 'POST') {
-          const body = await parseJsonBody<ResearchRequest>(req);
-          const sessionId = crypto.randomUUID();
+          const body = await parseJsonBody<WideResearchRequest>(req);
+          const researchSession = sessionManager.createSession(body);
+          const sessionId = researchSession.id;
 
           const session: ActiveSession = {
             id: sessionId,
             request: body,
             sockets: new Set(),
-            eventQueue: [],
+            researchSession,
             isCompleted: false
           };
           sessions.set(sessionId, session);
 
+          // Listen to session events and broadcast to active sockets
+          researchSession.subscribe((event: LiveEvent) => {
+            const messageStr = JSON.stringify(event);
+            for (const socket of session.sockets) {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(messageStr);
+              }
+            }
+            if (event.type === 'finished' || event.type === 'error' || event.type === 'cancelled') {
+              session.isCompleted = true;
+            }
+          });
+
           // Launch Agent Execution Asynchronously in background
           setImmediate(async () => {
             const agent = new DeepResearchAgent(sessionId, (event: LiveEvent) => {
-              session.eventQueue.push(event);
-              const messageStr = JSON.stringify(event);
-              for (const socket of session.sockets) {
-                if (socket.readyState === WebSocket.OPEN) {
-                  socket.send(messageStr);
-                }
-              }
-              if (event.type === 'finished' || event.type === 'error') {
-                session.isCompleted = true;
-              }
+              researchSession.emitEvent(event);
             });
 
             try {
-              await agent.run(body);
+              researchSession.transitionTo('running');
+              await agent.run(body, researchSession.signal);
+              researchSession.complete();
             } catch (err: any) {
-              const errorEvent: LiveEvent = {
-                type: 'error',
-                message: `حدث خطأ أثناء تنفيذ البحث: ${err.message}`
-              };
-              session.eventQueue.push(errorEvent);
-              for (const socket of session.sockets) {
-                if (socket.readyState === WebSocket.OPEN) {
-                  socket.send(JSON.stringify(errorEvent));
-                }
+              if (researchSession.signal.aborted) {
+                return;
               }
+              researchSession.fail(err);
             }
           });
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ session_id: sessionId }));
+          return;
+        }
+
+        // Cancel Active Research Session
+        if (pathname === '/api/research/cancel' && req.method === 'POST') {
+          const body = await parseJsonBody<{ session_id: string; reason?: string }>(req);
+          if (!body.session_id) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing session_id parameter' }));
+            return;
+          }
+
+          const draft = await sessionManager.cancelSession(body.session_id, body.reason);
+          if (!draft) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Session not found' }));
+            return;
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, session_id: body.session_id, partialDraft: draft }));
+          return;
+        }
+
+        // Approve Research Plan Endpoint
+        if (pathname === '/api/research/plan/approve' && req.method === 'POST') {
+          const body = await parseJsonBody<{ session_id: string; plan?: ResearchPlan }>(req);
+          if (!body.session_id) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing session_id parameter' }));
+            return;
+          }
+
+          const plan = sessionManager.approveSessionPlan(body.session_id, body.plan);
+          if (!plan) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Session not found or cannot approve plan' }));
+            return;
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, session_id: body.session_id, plan }));
           return;
         }
 
@@ -240,16 +285,37 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
       const session = sessions.get(sessionId)!;
       session.sockets.add(ws);
 
-      // Replay any buffered events in case client connected slightly after start
-      for (const event of session.eventQueue) {
+      // Replay buffered events with delta support via query parameter: ?since=<lastEventId>
+      const sinceParam = parsedUrl.searchParams.get('since');
+      const lastEventId = sinceParam ? parseInt(sinceParam, 10) : 0;
+      const replayEvents = session.researchSession.getEventsSince(isNaN(lastEventId) ? 0 : lastEventId);
+
+      for (const event of replayEvents) {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(event));
         }
       }
 
       ws.on('message', (data: any) => {
-        if (data.toString() === 'ping') {
+        const text = data.toString();
+        if (text === 'ping') {
           ws.send('pong');
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed.type === 'get_events_since') {
+            const sinceId = typeof parsed.lastEventId === 'number' ? parsed.lastEventId : 0;
+            const deltaEvents = session.researchSession.getEventsSince(sinceId);
+            for (const ev of deltaEvents) {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(ev));
+              }
+            }
+          }
+        } catch {
+          // Ignore non-JSON control messages
         }
       });
 

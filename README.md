@@ -38,6 +38,11 @@
    - Instant export to **PDF**, **Microsoft Word (.docx)**, **Markdown (.md)**, and **CSV** for extracted tables.
    - Built-in text-to-speech reading for auditory review.
 
+8. **Resilient Session Lifecycle & Reconnect Recovery:**
+   - Monotonic `EventRingBuffer` storing the latest 300 sequential telemetry events for deterministic WebSocket delta replays on reconnect (`?since=<lastEventId>`).
+   - Sub-second `<100ms` `AbortController` cancellation preserving partial gathered evidence and draft reports.
+   - Formal session state machine (`planning` -> `awaiting_approval` -> `running` -> `completed` / `cancelled` / `budget_exhausted` / `failed`).
+
 ---
 
 ## 🏗️ Repository Structure

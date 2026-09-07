@@ -25,9 +25,11 @@ export class DeepResearchAgent {
     discoveredUrls: Set<string>,
     scrapedSources: ScrapedPage[],
     parentId: string,
-    maxAllowed: number
+    maxAllowed: number,
+    signal?: AbortSignal
   ): Promise<void> {
     for (const hit of hits) {
+      if (signal?.aborted) return;
       if (discoveredUrls.has(hit.url)) continue;
       discoveredUrls.add(hit.url);
 
@@ -67,7 +69,8 @@ export class DeepResearchAgent {
     }
   }
 
-  async run(request: ResearchRequest): Promise<void> {
+  async run(request: ResearchRequest, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return;
     const query = request.query.trim();
     const depth = request.report_type || 'deep';
     const perspective = request.perspective || 'balanced';
@@ -197,6 +200,7 @@ Return ONLY a valid JSON array of strings, for example:
     const initialSourceCap = depth === 'quick' ? 4 : depth === 'storm' ? 12 : 8;
 
     for (let i = 0; i < activeSubqueries.length; i++) {
+      if (signal?.aborted) return;
       const subq = activeSubqueries[i];
       this.emitEvent({
         type: 'status',
@@ -212,7 +216,7 @@ Return ONLY a valid JSON array of strings, for example:
       });
 
       const searchHits = await MultiSearchProvider.search(subq, searchProvider, apiKeys, 6);
-      await this.ingestHits(searchHits, discoveredUrls, scrapedSources, 'persp_1', initialSourceCap);
+      await this.ingestHits(searchHits, discoveredUrls, scrapedSources, 'persp_1', initialSourceCap, signal);
 
       if (scrapedSources.length >= initialSourceCap) {
         break;
@@ -225,6 +229,7 @@ Return ONLY a valid JSON array of strings, for example:
     const maxHopSourcesCap = depth === 'quick' ? 4 : depth === 'storm' ? 16 : 12;
 
     for (let hop = 0; hop < maxAdaptiveHops; hop++) {
+      if (signal?.aborted) return;
       const audit = auditEvidenceCoverage(query, activeSubqueries, scrapedSources, {
         language: isAr ? 'ar' : 'en'
       });
@@ -288,7 +293,7 @@ Return ONLY a valid JSON array of strings, for example:
         });
 
         const hopHits = await MultiSearchProvider.search(targetQ, searchProvider, apiKeys, 3);
-        await this.ingestHits(hopHits, discoveredUrls, scrapedSources, `reflect_${hop + 1}`, maxHopSourcesCap);
+        await this.ingestHits(hopHits, discoveredUrls, scrapedSources, `reflect_${hop + 1}`, maxHopSourcesCap, signal);
 
         if (scrapedSources.length >= maxHopSourcesCap) {
           break;
@@ -300,7 +305,7 @@ Return ONLY a valid JSON array of strings, for example:
       }
     }
 
-
+    if (signal?.aborted) return;
 
     // 6. Final Report Synthesis & Semantic Evidence Retrieval
     this.emitEvent({
