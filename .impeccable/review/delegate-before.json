@@ -1,0 +1,222 @@
+[
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\build\\lens.ico",
+    "Hash": "08285097FBD949F1B9833001F537203397A36D0CE319C6419FCD1474ED377D7D"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\public\\lens.svg",
+    "Hash": "68772FDEE4AB944FD956076ED4C8D454E10DB7DE349D07390648E738F62D5264"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\public\\lens.provenance.json",
+    "Hash": "7AAA9C08C9D4FF37A7B60F66D33C8A3489EEB5CAC3886286C361CF5DC93710F8"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\public\\lens.png",
+    "Hash": "7578F292C54EFF9B907536BA8790ECED341F72138A8466E7BA8FF6F7C281D0EA"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\preload.ts",
+    "Hash": "84DB051EE221283BE7A3D0135BCB1B3A280A3816AEEEECD727B29F7CB8ED640D"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\main.ts",
+    "Hash": "C90647533E16483B8D11A1010664D13A553A8FCDF6ECCA63678CEBD67DA8FEA9"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\tsconfig.json",
+    "Hash": "03A0261B9A202A42A7DC3427037667325BA9EA671117000B1388B6AAC0A8A6C4"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\index.css",
+    "Hash": "5FB714D532313BD6387A16521D40E2317C9EE9C609FFDA374EB9BEBA016F3880"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\hooks\\useDialogFocus.ts",
+    "Hash": "FFF303A540A1455D77A478D363889DA113117C868E6861D794AFC5384FA0655F"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\utils\\markdownArtifacts.ts",
+    "Hash": "1D479E3996A36B8B21F9EDB8DD1008A3557D1BAC68CE14CAB6FDE755C8190A5A"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\i18n\\translations.ts",
+    "Hash": "14EC6D90D7D7DFAB5269127319B55B504AD2F40ABFB0D4C1E399B926EA244809"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\main.tsx",
+    "Hash": "97345759F0BCB019C42EC5D3E0741A3298FB25053B75E6BF3A0EA5E0A30D620F"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\App.tsx",
+    "Hash": "1A4F0A2107FD3585495018F716A830C2353D4F334AB209F9AD1B90F70B6681AB"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\engine\\types.ts",
+    "Hash": "D231AE1FCEB15CF64F394E0D28E9F07C79C8382D84FA6AD8655FB04E3493AD86"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\engine\\server.ts",
+    "Hash": "88A0965D6D34EED1F61B7EA84E22EC968E61C7F85ACE2C01C7DDF234249032D3"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\engine\\search.ts",
+    "Hash": "904106F8A35B69E65243B18AF788D39178F4757AB3D924BF5E76C1AEA5F80421"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\engine\\scraper.ts",
+    "Hash": "EDFC8594C50E8DF25FE99D33BBFF902A504683C2AD30B0442D540D4D2FD8D76B"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\engine\\models.ts",
+    "Hash": "CB9AE3136016974D3E8BCDE43897F265B29FBCD7F6101B999C00E9B85F19C92B"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\engine\\discover.ts",
+    "Hash": "42516D57BE04D6A85464BB3DE10792DD2BC26DFEE6B002054B7052E659E8E002"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\electron\\engine\\agent.ts",
+    "Hash": "4FAC97AA505C4A0AB21DB33FEBB7203686B98113930BE660BB2C42C765E4FADA"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\types\\index.ts",
+    "Hash": "3AA52D531611FB98FD478244FEA49F779273CE007CAE68F469E2C36A064CBD75"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\ide\\TitleBar.tsx",
+    "Hash": "A90FF3C631E1C13FBA2D7FD3D6B7F5E298FD44FB06AEE015B534521549D58C80"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\ide\\StatusBar.tsx",
+    "Hash": "BFCE84AD3DC0E6E312D3DC8406F5A92369CD28BF9C1480AD93FAA2F67CA47346"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\ide\\ExplorerSidebar.tsx",
+    "Hash": "912E1D3CC82277D94EFB960ED0F4596E71EFE9F86E92A6417573616F5B9AA0DC"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\ide\\EditorCanvas.tsx",
+    "Hash": "1BF3EB8D3853967927C6145A3BF04696D76E90ECD484977C5537B6CDB6CEEE61"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\ide\\CursorComposer.tsx",
+    "Hash": "90F98608B5C7CD6192119D773CABB810748FBDB517FD3A885EA8F25F9AF5468E"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\ide\\ActivityBar.tsx",
+    "Hash": "95AB1928CDB8E07E1749DF4694A6F95884B3A551E485135D552F05E33E35C1B9"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\CommandPalette.tsx",
+    "Hash": "93B3080CC70E93CB43DE2209BDC3AC45DD16EFDF3502161357C38AEC579B8153"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\SettingsModal.tsx",
+    "Hash": "1774DC3E64FA6DCBD84E5C7000DDF1F5D3CAA9E2C47EEA31B04F056CD85C4E5F"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\ResearchCanvas.tsx",
+    "Hash": "B8D37F20ADC267EADE2349DBE35E4AA376CF14ED6EFBFAB29906EA84B2F33EE3"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\Sidebar.tsx",
+    "Hash": "E08AD1FCB5EF2D5D5E17B443B664013DDCB140253B60E6ACD27EBD3A6742DAB9"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\AgentInspector.tsx",
+    "Hash": "7321F133EEA508507A272EFEBD2C6A229E874E6A919EEB7602EFC8C726B99BE2"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\Sidebar.tsx",
+    "Hash": "E459C0B25CC5B57D93C5A213C12CC7477E68CD5C7016FFC88A1F903AB3CD4DF7"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\ReportRenderer.tsx",
+    "Hash": "22E110F3829EF6B865A6B7A80178ED6761725CA0DACA1EB1B261F079208FB6C9"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\PerplexityRadar.tsx",
+    "Hash": "689B2A5E17B599C0179C9A29A2E16A611BE6B4D5FCF17CD81262A91E3164C72C"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\MessageSources.tsx",
+    "Hash": "E950EFE0533C2C4E6635C47685484695DEF110CAEC75240835D68F459D2C225C"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\MessageInput.tsx",
+    "Hash": "E045E88847EBE6E56593CBADD46232E946BB8AA196ADA8233E218C25F230B84F"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\MessageBox.tsx",
+    "Hash": "382E58257CB03E9096A24F78C26621CD276DA70D3B5356FC96A9EBED03F24C3A"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\MermaidDiagram.tsx",
+    "Hash": "A424D994A9C67E244792306D4244E744CAE879099A37428F992BF0A95A9BAF6B"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\LiveRadar.tsx",
+    "Hash": "C83E2A74F0068A688BAC3E0B74F86FDB75774B7303208C85BD94056AE2F8F2D8"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\LibraryView.tsx",
+    "Hash": "D7F5BC01A112C3999322E86103DDBB275344B293043DA7E95AE3737D2FF96BCE"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\GraphView.tsx",
+    "Hash": "341D11206AA536B4E8BF607BBFA2707412455E9EDF9C7EE756F7BBAD08E53997"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\EmptyChatMessageInput.tsx",
+    "Hash": "28845F514F0CCF638B572F3763C32B02ED713DDB39E28AC11E6704D778CA4090"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\EmptyChat.tsx",
+    "Hash": "939F46ADA79FC79CCFD89DAF0BF839B744F4B23C5693D08E1BF731341683C92E"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\DiscoverView.tsx",
+    "Hash": "5903CBD26E2863C3917EB8E6297C3A455DF02C0A756AAFF97CE8A317973DAAB9"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\CustomTable.tsx",
+    "Hash": "180BCB2FD358B112862752CAEFA852A7B9E70715BC722CE203D095C2631B0E89"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\CitationBadge.tsx",
+    "Hash": "EA7F8A3C61D4AA509C1969BD78150EF3ACCA490DD651C31C752FE36E370BCA9F"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\CalloutAlert.tsx",
+    "Hash": "92BAA24EE210FC9B9B1392964EBE43F8EA2DC678AF7E1117F0A9556C66953425"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\AssistantSteps.tsx",
+    "Hash": "24171D7593F899F4B44724D8C816FA499B608DC0E1444FD9502800768F867859"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\vane\\AgentWorkspace.tsx",
+    "Hash": "089E73ECD2E9AF053639637A73D01E185BC1751A8796CC2A81D00049282E0982"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\src\\components\\brand\\BrandLogo.tsx",
+    "Hash": "A369A40A9EF85710E268C6228758A52600A2262771A3FEAA180585175ED42840"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\package.json",
+    "Hash": "0611397C239F0601F350202BD60856FB33BA03705E36372FB7DF49046F9772B0"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\frontend\\tailwind.config.js",
+    "Hash": "1152C80D688DB47E27B20389661CF475AD8398ACAB1129F6F43B52ABFF5A1699"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\BRAND.md",
+    "Hash": "83FE0B26307AFD017618AF86B83079E9F31B9A53BC4664CC02D5A97BF6618E57"
+  },
+  {
+    "Path": "D:\\ai\\New folder (2)\\DESIGN.md",
+    "Hash": "7112A33891C4C8754C1F820B8BA8CAF5D6865F9F79ACEE3DC24949BBBF4EAA10"
+  }
+]

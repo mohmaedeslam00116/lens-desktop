@@ -1,0 +1,15 @@
+<task>
+Give a bounded read-only second opinion on the LENS rebrand in D:/ai/New folder (2). The user chose LENS, neutral Vercel/Cursor-inspired styling, component redesign while preserving the approximate existing layout, Arabic/English and dark/light modes. This implementation is complete. Inspect only the active App.tsx, components/vane, components/brand, SettingsModal, CommandPalette, hooks/useDialogFocus.ts, index.css and tailwind.config.js plus BRAND.md and DESIGN.md as needed. Focus on keyboard focus/dialog lifecycle, RTL, truthful empty states, and theme token compatibility. Existing review artifacts are under .impeccable/review. Do not audit backend, export engine, inactive ide UI, or propose a redesign. Maximum 3 concrete user-visible regressions with evidence; no speculative preferences. If none, say so. Finish in one bounded pass.
+</task>
+<grounding_rules>
+Cite exact file and line plus a concrete trigger for each issue. This is not a Git repository. Read source directly. Do not infer that a color or behavior is wrong without tracing the current code. No browsing or provider calls. Do not read credentials, environment files, or unrelated user files. Do not invoke other agents or skills.
+</grounding_rules>
+<verification_loop>
+This read-only pass must not run builds that write files. The orchestrator previously ran TypeScript noEmit, npm run build:react and npm run build:electron successfully and will independently verify any findings. You may run node_modules/.bin/tsc --noEmit from frontend if useful. Prefer focused source inspection over repeated gates.
+</verification_loop>
+<action_safety>
+Read-only. No edits, deletes, installing, git initialization, staging or commits. Do not start services or browser sessions. Return findings in your final message only.
+</action_safety>
+<structured_output_contract>
+Return: 1. Findings (severity, file:line, trigger, minimal remedy) or none. 2. Files reviewed. 3. Checks actually performed and limitations. Keep the report under 600 words.
+</structured_output_contract>

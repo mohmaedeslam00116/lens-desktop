@@ -1,0 +1,29 @@
+<!doctype html><html lang="en" class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LENS visual verification — synthetic report</title><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet"></head><body><div id="root"></div><script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {MessageBox} from '/src/components/vane/MessageBox.tsx';
+import '/src/index.css';
+const ar = new URLSearchParams(location.search).get('lang') === 'ar';
+document.documentElement.lang = ar ? 'ar' : 'en';
+document.documentElement.dir = ar ? 'rtl' : 'ltr';
+const text = `## Research overview
+This is synthetic content for visual verification. A useful research report separates what its sources establish from what still needs investigation. It offers enough context to compare alternatives and records uncertainty alongside the conclusion.
+
+## Compare the evidence
+| Approach | Strength | Limitation |
+| --- | --- | --- |
+| Primary documents | Direct evidence | Narrow scope |
+| Independent reviews | Broader context | Varying methods |
+
+## Questions to investigate
+- Which assumptions change the recommendation?
+- Where do the sources disagree?
+- What evidence would resolve the uncertainty?
+
+> Treat this page as a layout fixture, not a factual research result.
+
+## Next steps
+Return to the original sources, compare their methods, and document the limits of the available evidence.
+`;
+createRoot(document.getElementById('root')).render(React.createElement('main',{style:{height:'100dvh',overflow:'auto'}},React.createElement(MessageBox,{query: ar ? 'تقرير تجريبي لفحص تصميم الواجهة' : 'From scattered sources to a clearer picture',report:text,sources:[],steps:[],loading:false,language:ar ? 'ar' : 'en',onExport:()=>{},onFollowUp:()=>{}})));
+</script></body></html>

@@ -1,0 +1,13 @@
+1. Findings
+
+None reportable. The review could not be completed because the workspace policy rejected every read-only process before execution, including `Get-Content`, `rg --files`, `dir`, and `Get-Location`. Therefore, I cannot responsibly claim either regressions or a clean pass.
+
+2. Files reviewed
+
+None—the source files were inaccessible through the available read interface.
+
+3. Checks and limitations
+
+- Attempted focused source listing and direct reading only.
+- Did not edit files, run builds, start services, browse, invoke providers, agents, or skills.
+- No findings are asserted because exact file/line evidence and trigger tracing were impossible.

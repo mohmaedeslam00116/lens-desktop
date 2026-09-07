@@ -1,0 +1,14 @@
+{
+  "name": "deep-research-desktop-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "dev:react": "cd frontend && npm run dev:react",
+    "dev:electron": "cd frontend && npm run dev:electron",
+    "build:react": "cd frontend && npm run build:react",
+    "build:electron": "cd frontend && npm run build:electron",
+    "build:installer": "cd frontend && npm run build:installer",
+    "build": "cd frontend && npm run build"
+  }
+}

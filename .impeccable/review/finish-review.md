@@ -1,0 +1,31 @@
+# LENS finish review
+
+## 1. Disposition
+
+**Fix, then ship.** The committed direction is present: the narrow rail and central workspace remain familiar, while the new question composer, compact template controls, topic rows, neutral surfaces, and original LENS mark establish a coherent product. This is a component refinement, not only a palette swap. The supplied desktop, Arabic, mobile, and light-mode captures do not warrant rebuilding the composition. Finish the four bounded issues below and recapture the affected surfaces.
+
+## 2. Findings
+
+- **P1 — Unsupported security claim in setup.** `frontend/src/components/SettingsModal.tsx:400` promises encrypted storage and no intermediary servers in both languages. `frontend/src/App.tsx:121–123` instead persists the complete settings object directly through `localStorage.setItem(...JSON.stringify(newSettings))`. The claim is visible in `settings-en.png`. This conflicts with BRAND.md's instruction against unverified security promises and affects the user's decision to enter a key. The storage behavior and claim are pre-existing according to the implementation handoff; this review requires accurate copy, not a storage redesign.
+- **P2 — Light-mode placeholder contrast misses the craft floor.** `frontend/src/components/SettingsModal.tsx:384–385` has no placeholder-color class. Tailwind preflight (`frontend/node_modules/tailwindcss/src/css/preflight.css:333–336`) therefore supplies gray-400, #9CA3AF, against the #FAFAF9 canvas. Calculated contrast is approximately 2.43:1, below the required 4.5:1. `settings-en.png` visibly shows the faint API-key prompt. This is a remaining integration defect in the light theme; the inherited input class need not have been newly introduced for the refreshed surface to need correction.
+- **P2 — English reports retain Arabic interface labels.** `frontend/src/components/vane/CustomTable.tsx:71`, `:84–87`, `:95–106` hardcode the table label, copy/export text, and tooltips in Arabic. `ReportRenderer.tsx:104` supplies no language to this component. `report.png` shows the Arabic toolbar within an English report. Export tooltips in `MessageBox.tsx:230`, `:241`, `:251`, and `:261` have the same issue. These appear to be inherited report controls, but they are within the direction contract's Arabic/English verification scope.
+- **P2 — Report controls still use decorative category colors.** `frontend/src/components/vane/MessageBox.tsx:174–177`, `:229`, `:243`, and `:263` use green for workspace/CSV, rose for PDF, and amber for Markdown. `CustomTable.tsx:94` uses green for CSV; `ReportRenderer.tsx:237` and `:244` color table/diagram counts. `report.png` confirms these visible accents. File formats and content types are not research or connection states, so these retained styles contradict the explicit monochrome direction. Success, failure, loading, and connection status may keep semantic color.
+
+The Inter detector warnings are accepted in Operate mode: the user pinned a familiar Vercel/Cursor-like direction, and the contract explicitly retains Inter/Cairo. Do not replace the typography solely to silence the detector. The SVG mark is precise geometry and is appropriate for the brief; there is no need for invented photographic assets.
+
+## 3. Concrete fix list
+
+1. Replace the unsupported key-storage promise with factual setup copy in Arabic and English; state that keys are saved in this app's local settings. Do not change the backend or persistence architecture as part of this finish pass.
+2. Give input and textarea placeholders a shared theme-aware muted token, retaining the composer treatment. Check the settings key prompt and command search in light mode.
+3. Pass the existing language into CustomTable; translate its labels and report export tooltips. Remove the internal “GFM Table” badge or replace it with useful user-facing copy. Keep table actions compact and allow their header to wrap at narrow widths.
+4. Apply the existing neutral control tokens to report exports, workspace tab decoration, and content-type counters. Keep semantic state feedback distinct.
+
+## 4. Verification assessment
+
+Independently inspected the direction contract, craft floor, BRAND.md, App.tsx, index.css, Tailwind theme mapping, LENS logo component, home component, report/table controls, settings, command palette, and dialog-focus hook. Viewed all nine supplied captures: desktop-ar, desktop-en, light-en, mobile-ar, settings-mobile, settings-en, library, graph, and report. The screenshots establish clear hierarchy, legible primary content, appropriate RTL mirroring, intact mobile rail/scrolling, reachable settings footer, and useful empty-state copy. The theme mapping accounts for inherited slate/white utility names, so those names alone are not evidence of incorrect colors.
+
+The parent reports passing TypeScript noEmit, Vite build, and Electron build, plus browser checks for templates, depth/source selectors, missing-key recovery preserving the question, language/theme switching, and empty library/graph navigation. Those results were not rerun by this reviewer. Code supplies focus trapping, Escape dismissal, accessible labels, and reduced-motion handling; screenshots cannot prove keyboard operation or motion quality. After the fixes, rerun type/build checks and capture light settings plus English/Arabic report tables, including a compact width. No paid research run is needed to verify these presentation changes.
+
+## 5. Scope and limitations
+
+This is an independent source-and-screenshot finish review, without browser interaction. No approved image comp exists: fidelity is judged against the written code-led direction and explicit user preferences. The report image uses clearly identified synthetic content, not live research; its zero-source state does not establish source retrieval behavior. Source modals, populated graph/library states, exports, live model calls, installer execution, and every animation were not exercised. No Git baseline was available at the workspace root; inherited issues are identified from the handoff rather than asserted as new regressions. Raster provenance and final DESIGN.md completion should be checked in the delivery record; this review does not independently certify the native icon pipeline. No implementation files were changed during this review.

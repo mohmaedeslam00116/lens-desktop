@@ -1,0 +1,32 @@
+{
+  "schema": "delegate-relay.result.v1",
+  "lane": null,
+  "laneSource": null,
+  "tool": "agy",
+  "workdir": "D:\\ai\\New folder (2)",
+  "model": null,
+  "effort": null,
+  "project": null,
+  "sandbox": false,
+  "readOnly": true,
+  "readOnlyViolation": null,
+  "dangerouslySkipPermissions": false,
+  "resumed": false,
+  "agyVersion": "1.1.26",
+  "projectId": "a42bf34b-23c8-4471-a594-c912f1eaf27a",
+  "conversationId": "3246b65f-21a0-412e-a344-1215d748f45c",
+  "startedAt": "2026-09-07T10:59:54.682Z",
+  "finishedAt": "2026-09-07T11:05:04.687Z",
+  "briefPath": "D:\\ai\\New folder (2)\\.impeccable\\review\\agy-run\\brief.txt",
+  "finalPath": null,
+  "logPath": "D:\\ai\\New folder (2)\\.impeccable\\review\\agy-run\\agy.log",
+  "stderrPath": "D:\\ai\\New folder (2)\\.impeccable\\review\\agy-run\\stderr.txt",
+  "status": "failed",
+  "exitCode": 1,
+  "signal": null,
+  "finalMessage": "",
+  "touchedFiles": null,
+  "stderrTail": [
+    "Error: timeout waiting for response"
+  ]
+}

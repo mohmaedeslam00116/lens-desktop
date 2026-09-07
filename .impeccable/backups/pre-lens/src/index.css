@@ -1,0 +1,173 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #121212;
+    color: #cccccc;
+    font-family: 'Segoe UI', 'Cairo', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Prevent image and link ghost dragging */
+  a, img, svg {
+    -webkit-user-drag: none;
+    user-drag: none;
+  }
+
+  /* Text selection allowed only inside content zones */
+  input, textarea, [contenteditable], .document-prose, pre, code, .select-text {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Global selection color matching VS Code / Cursor */
+  ::selection {
+    background-color: #04395e;
+    color: #ffffff;
+  }
+}
+
+/* VS Code Slim Precision Scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 0px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3e3e3e;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Document prose measures and typography */
+.document-prose {
+  max-width: 72ch;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.document-prose h1 {
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #262626;
+}
+
+.document-prose h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+  padding-top: 0.5rem;
+}
+
+.document-prose h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.document-prose p {
+  color: #cccccc;
+  font-size: 0.9rem;
+  line-height: 1.75;
+  margin-bottom: 1rem;
+}
+
+.document-prose ul {
+  list-style-type: disc;
+  margin-inline-start: 1.5rem;
+  margin-bottom: 1.25rem;
+  color: #cccccc;
+}
+
+.document-prose ol {
+  list-style-type: decimal;
+  margin-inline-start: 1.5rem;
+  margin-bottom: 1.25rem;
+  color: #cccccc;
+}
+
+.document-prose li {
+  margin-bottom: 0.35rem;
+  line-height: 1.7;
+}
+
+.document-prose blockquote {
+  border-inline-start: 2px solid #007acc;
+  padding-inline-start: 1rem;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+  color: #858585;
+  background: rgba(255, 255, 255, 0.02);
+  margin: 1.25rem 0;
+}
+
+.document-prose code {
+  background: #1e1e1e;
+  color: #9cdcfe;
+  padding: 0.15rem 0.35rem;
+  border-radius: 2px;
+  font-size: 0.88em;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Courier New', monospace;
+  border: 1px solid #262626;
+}
+
+.document-prose pre {
+  background: #141414;
+  padding: 1rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  border: 1px solid #262626;
+  margin: 1.25rem 0;
+}
+
+.document-prose pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  color: #d4d4d4;
+}
+
+/* Animations */
+@keyframes pulseSubtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+.animate-pulse-subtle {
+  animation: pulseSubtle 3s ease-in-out infinite;
+}

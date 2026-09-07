@@ -1,0 +1,575 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-07T10:44:03.758Z",
+  "title": "Design System: LENS",
+  "extensions": {
+    "colorMeta": {
+      "dark-canvas": {
+        "role": "neutral",
+        "displayName": "Dark Canvas",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-rail": {
+        "role": "neutral",
+        "displayName": "Dark Rail",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-panel": {
+        "role": "neutral",
+        "displayName": "Dark Panel",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-surface": {
+        "role": "neutral",
+        "displayName": "Dark Surface",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-hover": {
+        "role": "neutral",
+        "displayName": "Dark Hover",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-line": {
+        "role": "neutral",
+        "displayName": "Dark Line",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-line-strong": {
+        "role": "neutral",
+        "displayName": "Dark Line Strong",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-ink": {
+        "role": "neutral",
+        "displayName": "Dark Ink",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-ink-secondary": {
+        "role": "neutral",
+        "displayName": "Dark Ink Secondary",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-ink-muted": {
+        "role": "neutral",
+        "displayName": "Dark Ink Muted",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-accent": {
+        "role": "primary",
+        "displayName": "Dark Accent",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-on-accent": {
+        "role": "neutral",
+        "displayName": "Dark On Accent",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "dark-focus": {
+        "role": "neutral",
+        "displayName": "Dark Focus",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-canvas": {
+        "role": "neutral",
+        "displayName": "Light Canvas",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-rail": {
+        "role": "neutral",
+        "displayName": "Light Rail",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-panel": {
+        "role": "neutral",
+        "displayName": "Light Panel",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-surface": {
+        "role": "neutral",
+        "displayName": "Light Surface",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-hover": {
+        "role": "neutral",
+        "displayName": "Light Hover",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-line": {
+        "role": "neutral",
+        "displayName": "Light Line",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-line-strong": {
+        "role": "neutral",
+        "displayName": "Light Line Strong",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-ink": {
+        "role": "neutral",
+        "displayName": "Light Ink",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-ink-secondary": {
+        "role": "neutral",
+        "displayName": "Light Ink Secondary",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-ink-muted": {
+        "role": "neutral",
+        "displayName": "Light Ink Muted",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-accent": {
+        "role": "primary",
+        "displayName": "Light Accent",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-on-accent": {
+        "role": "neutral",
+        "displayName": "Light On Accent",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "light-focus": {
+        "role": "neutral",
+        "displayName": "Light Focus",
+        "tonalRamp": [
+          "rgb(13 13 13)",
+          "rgb(25 25 25)",
+          "rgb(48 48 48)",
+          "rgb(70 70 70)",
+          "rgb(149 149 144)",
+          "rgb(185 185 181)",
+          "rgb(237 237 235)",
+          "rgb(250 250 249)"
+        ]
+      },
+      "status-success": {
+        "role": "neutral",
+        "displayName": "Status Success",
+        "tonalRamp": [
+          "#022c22",
+          "#064e3b",
+          "#065f46",
+          "#047857",
+          "#059669",
+          "#34d399",
+          "#a7f3d0",
+          "#ecfdf5"
+        ]
+      },
+      "status-warning": {
+        "role": "neutral",
+        "displayName": "Status Warning",
+        "tonalRamp": [
+          "#451a03",
+          "#78350f",
+          "#92400e",
+          "#b45309",
+          "#d97706",
+          "#fbbf24",
+          "#fde68a",
+          "#fffbeb"
+        ]
+      },
+      "status-error": {
+        "role": "neutral",
+        "displayName": "Status Error",
+        "tonalRamp": [
+          "#4c0519",
+          "#881337",
+          "#9f1239",
+          "#be123c",
+          "#e11d48",
+          "#fb7185",
+          "#fecdd3",
+          "#fff1f2"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Home heading",
+        "purpose": "English home heading; Cairo role overrides weight and tracking for Arabic."
+      },
+      "wordmark": {
+        "displayName": "LENS wordmark",
+        "purpose": "Inter identity remains left-to-right in both languages."
+      },
+      "body": {
+        "displayName": "Report body",
+        "purpose": "Comfortable report reading within a 72ch measure."
+      }
+    },
+    "shadows": [
+      {
+        "name": "settings-selected-low",
+        "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        "purpose": "Incumbent active settings navigation shadow only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-transition",
+        "value": ".18s ease-out",
+        "purpose": "Rail colors and action opacity."
+      },
+      {
+        "name": "composer-focus",
+        "value": ".2s ease-out",
+        "purpose": "Composer border-color transition."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "animation-duration: .01ms; animation-iteration-count: 1; transition-duration: .01ms; scroll-behavior: auto",
+        "purpose": "Global prefers-reduced-motion: reduce override."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact-layout-max",
+        "value": "700px"
+      },
+      {
+        "name": "narrow-layout-max",
+        "value": "450px"
+      },
+      {
+        "name": "tailwind-sm-min",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The research submit action; colors bind to the active theme.",
+      "html": "<button class=\"ds-primary\">Research<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m5 12 7-7 7 7M12 19V5\"/></svg></button>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:36px;padding:8px 13px;border:0;border-radius:7px;background:rgb(var(--accent,237 237 235));color:rgb(var(--on-accent,24 24 23));font:600 12px Inter,'Segoe UI',sans-serif;cursor:pointer;transition:opacity .18s ease-out}.ds-primary:hover{opacity:.85}.ds-primary:disabled{background:rgb(var(--surface,33 33 33));color:rgb(var(--ink-muted,149 149 144));cursor:not-allowed}.ds-primary:focus-visible,.ds-icon:focus-visible,.ds-nav:focus-visible,.ds-chip:focus-visible,.ds-search:focus-visible {outline:2px solid rgb(var(--focus,163 163 157));outline-offset:4px}@media(prefers-reduced-motion:reduce){button,input,textarea{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}"
+    },
+    {
+      "name": "Disabled action",
+      "kind": "button",
+      "refersTo": "button-disabled",
+      "description": "Empty-question or loading submit state.",
+      "html": "<button class=\"ds-primary\" disabled>Research</button>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:36px;padding:8px 13px;border:0;border-radius:7px;background:rgb(var(--accent,237 237 235));color:rgb(var(--on-accent,24 24 23));font:600 12px Inter,'Segoe UI',sans-serif;cursor:pointer;transition:opacity .18s ease-out}.ds-primary:hover{opacity:.85}.ds-primary:disabled{background:rgb(var(--surface,33 33 33));color:rgb(var(--ink-muted,149 149 144));cursor:not-allowed}.ds-primary:focus-visible,.ds-icon:focus-visible,.ds-nav:focus-visible,.ds-chip:focus-visible,.ds-search:focus-visible {outline:2px solid rgb(var(--focus,163 163 157));outline-offset:4px}@media(prefers-reduced-motion:reduce){button,input,textarea{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}"
+    },
+    {
+      "name": "Icon action",
+      "kind": "button",
+      "refersTo": "button-icon",
+      "description": "Neutral preference/utility control.",
+      "html": "<button class=\"ds-icon\" aria-label=\"Switch language\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M2 12h20M12 2a17 17 0 0 1 0 20 17 17 0 0 1 0-20\"/></svg></button>",
+      "css": ".ds-icon{display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:rgb(var(--ink-muted,149 149 144));cursor:pointer}.ds-icon:hover{color:rgb(var(--ink,237 237 235));background:rgb(var(--surface,33 33 33))}.ds-primary:focus-visible,.ds-icon:focus-visible,.ds-nav:focus-visible,.ds-chip:focus-visible,.ds-search:focus-visible {outline:2px solid rgb(var(--focus,163 163 157));outline-offset:4px}"
+    },
+    {
+      "name": "Library search",
+      "kind": "input",
+      "refersTo": "library-search",
+      "description": "Search report titles or contents; logical inset follows direction.",
+      "html": "<label class=\"ds-search-wrap\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input class=\"ds-search\" aria-label=\"Search library\" placeholder=\"Search titles or report contents…\"></label>",
+      "css": ".ds-search-wrap{display:block;position:relative}.ds-search-wrap svg{position:absolute;inset-inline-start:12px;top:12px;color:rgb(var(--ink-muted,149 149 144))}.ds-search{width:100%;box-sizing:border-box;padding:12px 16px;padding-inline-start:40px;font:14px Inter,'Segoe UI',sans-serif;background:rgb(var(--panel,25 25 25));color:rgb(var(--ink,237 237 235));border:1px solid rgb(var(--line,48 48 48));border-radius:8px}.ds-search::placeholder{color:rgb(var(--ink-muted,149 149 144));opacity:1}.ds-primary:focus-visible,.ds-icon:focus-visible,.ds-nav:focus-visible,.ds-chip:focus-visible,.ds-search:focus-visible {outline:2px solid rgb(var(--focus,163 163 157));outline-offset:4px}"
+    },
+    {
+      "name": "Rail navigation",
+      "kind": "nav",
+      "refersTo": "navigation-item",
+      "description": "Labelled current-page control in the compact rail.",
+      "html": "<nav aria-label=\"Main navigation\"><button class=\"ds-nav\" aria-current=\"page\"><svg width=\"19\" height=\"19\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-8H9v8H4a1 1 0 0 1-1-1Z\"/></svg><span>Home</span></button></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;align-items:center;gap:6px;width:62px;padding:11px 2px;border:0;border-radius:8px;background:transparent;color:rgb(var(--ink-muted,149 149 144));cursor:pointer;transition:background .18s ease-out,color .18s ease-out}.ds-nav span{font:500 10px Inter,'Segoe UI',sans-serif}.ds-nav:hover,.ds-nav[aria-current=page]{background:rgb(var(--surface,33 33 33));color:rgb(var(--ink,237 237 235))}.ds-primary:focus-visible,.ds-icon:focus-visible,.ds-nav:focus-visible,.ds-chip:focus-visible,.ds-search:focus-visible {outline:2px solid rgb(var(--focus,163 163 157));outline-offset:4px}@media(prefers-reduced-motion:reduce){button,input,textarea{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}"
+    },
+    {
+      "name": "Workflow template",
+      "kind": "chip",
+      "refersTo": "workflow-template",
+      "description": "Outlined question-template action; preview demonstrates visual states only.",
+      "html": "<button class=\"ds-chip\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/><path d=\"M3 9h18M9 3v18\"/></svg>Compare</button>",
+      "css": ".ds-chip{display:flex;align-items:center;gap:7px;min-height:33px;padding:6px 10px;border:1px solid rgb(var(--line,48 48 48));border-radius:7px;background:transparent;color:rgb(var(--ink-secondary,185 185 181));font:11px Inter,'Segoe UI',sans-serif;cursor:pointer;transition:border-color .18s ease-out,background .18s ease-out}.ds-chip:hover{background:rgb(var(--surface,33 33 33));border-color:rgb(var(--line-strong,70 70 70))}.ds-primary:focus-visible,.ds-icon:focus-visible,.ds-nav:focus-visible,.ds-chip:focus-visible,.ds-search:focus-visible {outline:2px solid rgb(var(--focus,163 163 157));outline-offset:4px}@media(prefers-reduced-motion:reduce){button,input,textarea{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}"
+    },
+    {
+      "name": "Settings group",
+      "kind": "card",
+      "refersTo": "settings-panel",
+      "description": "Tonal grouping for related configuration fields, flat at rest.",
+      "html": "<section class=\"ds-card\"><h3>Local storage</h3><p>The interface saves settings in local storage. Key encryption is not enabled in this storage path.</p></section>",
+      "css": ".ds-card{padding:16px;border:1px solid rgb(var(--ink,237 237 235)/.05);border-radius:12px;background:rgb(var(--surface,33 33 33));color:rgb(var(--ink,237 237 235));font:12px Inter,'Segoe UI',sans-serif}.ds-card h3{margin:0 0 12px;font-size:12px;font-weight:700}.ds-card p{margin:0;color:rgb(var(--ink-muted,149 149 144));font-size:11px;line-height:1.5}"
+    },
+    {
+      "name": "Question composer",
+      "kind": "custom",
+      "refersTo": "research-composer",
+      "description": "Signature framed question field; focus clarifies its border.",
+      "html": "<div class=\"ds-composer\"><textarea aria-label=\"Research question\" placeholder=\"What would you like to understand?\" rows=\"3\"></textarea></div>",
+      "css": ".ds-composer{padding:20px 20px 14px;border:1px solid rgb(var(--line-strong,70 70 70));border-radius:14px;background:rgb(var(--panel,25 25 25));transition:border-color .2s ease-out}.ds-composer:focus-within{border-color:rgb(var(--focus,163 163 157))}.ds-composer textarea{display:block;width:100%;min-height:100px;max-height:260px;resize:vertical;outline:none;border:0;background:transparent;color:rgb(var(--ink,237 237 235));font:16px/1.85 Inter,'Segoe UI',sans-serif}.ds-composer textarea::placeholder{color:rgb(var(--ink-muted,149 149 144));opacity:1}@media(prefers-reduced-motion:reduce){button,input,textarea{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Research, in focus.",
+    "overview": "LENS frames a question, keeps its evidence legible, and provides a familiar workspace for revisiting research. Its chosen language is precise and restrained: charcoal and off-white surfaces, compact controls, a concentric lens mark, and quiet typography. The user pinned Vercel/Cursor-like monochrome colors and preservation of the approximate rail and central research layout.\n\nThis is an Operate refresh of the implemented application. Inter and Cairo are intentional incumbent choices, including an exception to generic design detectors that discourage Inter. The system modernizes actual research, library, graph, settings, and command controls; it does not prescribe the obsolete three-pane studio proposal.",
+    "keyCharacteristics": [
+      "Monochrome surfaces with semantic status color.",
+      "A compact rail and a readable central research area.",
+      "English and Arabic typography with direction-aware spacing.",
+      "Flat structure, explicit controls, and visible keyboard focus."
+    ],
+    "rules": [
+      {
+        "name": "The Meaningful Color Rule",
+        "body": "Reserve chromatic color for a meaningful status; keep brand, navigation, and routine report controls monochrome.",
+        "section": "colors"
+      },
+      {
+        "name": "The Bilingual Identity Rule",
+        "body": "Change reading direction and UI family with language; keep the LENS wordmark upright and left-to-right.",
+        "section": "typography"
+      },
+      {
+        "name": "The Quiet Depth Rule",
+        "body": "Establish hierarchy through tone, spacing, and a fine boundary before adding elevation.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** use semantic theme channels for surfaces, ink, focus, and routine controls.",
+      "**Do** keep the question and readable report central while retaining the compact navigation rail.",
+      "**Do** preserve Inter/Cairo, logical spacing, and the left-to-right LENS wordmark.",
+      "**Do** pair status color with text or an icon and describe empty/error recovery clearly.",
+      "**Do** preserve visible keyboard focus, draft text through setup, and reduced-motion behavior.",
+      "**Do** preserve application and storage identifiers during visible rebranding."
+    ],
+    "donts": [
+      "**Don't** add decorative glow, gradient wordmarks, or an unsupported Pro tier.",
+      "**Don't** restore the obsolete three-pane proposal as current layout documentation.",
+      "**Don't** use brand accent color to distinguish routine report or navigation actions.",
+      "**Don't** claim verified encryption, offline web research, guaranteed accuracy, or completed graph activity without supporting implementation and evidence.",
+      ""
+    ]
+  }
+}

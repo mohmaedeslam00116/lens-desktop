@@ -1,0 +1,6 @@
+{
+  "assets": ["lens.svg", "lens.png", "../build/lens.ico"],
+  "origin": "Original LENS mark authored for this project on 2026-09-07. Two concentric circles and four focus ticks; no stock or AI-generated raster artwork.",
+  "source": "src/components/brand/BrandLogo.tsx and public/lens.svg",
+  "rasterization": "Windows System.Drawing, antialiased vector geometry, 256px PNG; PNG-backed ICO."
+}
