@@ -49,6 +49,14 @@ export interface LiveEvent {
   followups?: string[];
   node?: ResearchGraphNode;
   reflections?: string[];
+  coverage?: {
+    overallScore: number;
+    subqueryScore: number;
+    aspectScore: number;
+    metricScore: number;
+    diversityScore: number;
+    uncoveredSubqueries: string[];
+  };
 }
 
 export interface ResearchRequest {

@@ -3,6 +3,7 @@ import { MultiSearchProvider } from './search';
 import { PageScraper, ScrapedPage } from './scraper';
 import { ModelClient, LLMRequestOptions } from './models';
 import { createEmbeddingModel, rankSourcePassages, fallbackEvidence, EmbeddingProvider } from './embeddings';
+import { auditEvidenceCoverage, generateAdaptiveHopPlan, formatAuditReflections } from './evidenceCoverage';
 
 export class DeepResearchAgent {
   private sessionId: string;
@@ -17,6 +18,53 @@ export class DeepResearchAgent {
   private nextNodeId(prefix = 'node'): string {
     this.nodeIndex++;
     return `${prefix}_${this.nodeIndex}`;
+  }
+
+  private async ingestHits(
+    hits: Array<{ url: string }>,
+    discoveredUrls: Set<string>,
+    scrapedSources: ScrapedPage[],
+    parentId: string,
+    maxAllowed: number
+  ): Promise<void> {
+    for (const hit of hits) {
+      if (discoveredUrls.has(hit.url)) continue;
+      discoveredUrls.add(hit.url);
+
+      this.emitEvent({
+        type: 'thought',
+        thought: `تصفح واستخراج المحتوى الأكاديمي من: ${hit.url}`
+      });
+
+      const scraped = await PageScraper.scrape(hit.url, 7000);
+      scrapedSources.push(scraped);
+
+      this.emitEvent({
+        type: 'source',
+        url: scraped.url,
+        title: scraped.title,
+        domain: scraped.domain,
+        snippet: scraped.content.slice(0, 160),
+        credibility: scraped.credibilityScore
+      });
+
+      this.emitEvent({
+        type: 'graph_node',
+        node: {
+          id: this.nextNodeId('src'),
+          label: scraped.domain,
+          type: 'source',
+          status: 'completed',
+          details: scraped.url,
+          credibility: scraped.credibilityScore,
+          parentId
+        }
+      });
+
+      if (scrapedSources.length >= maxAllowed) {
+        break;
+      }
+    }
   }
 
   async run(request: ResearchRequest): Promise<void> {
@@ -145,98 +193,114 @@ Return ONLY a valid JSON array of strings, for example:
 
     const discoveredUrls = new Set<string>();
     const scrapedSources: ScrapedPage[] = [];
+    const isAr = language === 'ar';
+    const initialSourceCap = depth === 'quick' ? 4 : depth === 'storm' ? 12 : 8;
 
     for (let i = 0; i < activeSubqueries.length; i++) {
       const subq = activeSubqueries[i];
       this.emitEvent({
         type: 'status',
-        message: `استكشاف المصادر لمحور: ${subq}...`,
+        message: isAr ? `استكشاف المصادر لمحور: ${subq}...` : `Discovering sources for: ${subq}...`,
         step: 'searching'
       });
 
       this.emitEvent({
         type: 'thought',
-        thought: `جاري البحث عبر الويب عن: "${subq}" عبر محرك ${searchProvider}...`
+        thought: isAr
+          ? `جاري البحث عبر الويب عن: "${subq}" عبر محرك ${searchProvider}...`
+          : `Searching web for "${subq}" via ${searchProvider}...`
       });
 
       const searchHits = await MultiSearchProvider.search(subq, searchProvider, apiKeys, 6);
+      await this.ingestHits(searchHits, discoveredUrls, scrapedSources, 'persp_1', initialSourceCap);
 
-      for (const hit of searchHits) {
-        if (discoveredUrls.has(hit.url)) continue;
-        discoveredUrls.add(hit.url);
-
-        // Scrape page content
-        this.emitEvent({
-          type: 'thought',
-          thought: `تصفح واستخراج المحتوى الأكاديمي من: ${hit.url}`
-        });
-
-        const scraped = await PageScraper.scrape(hit.url, 7000);
-        scrapedSources.push(scraped);
-
-        const sourceItem: SourceItem = {
-          url: scraped.url,
-          title: scraped.title,
-          domain: scraped.domain,
-          snippet: scraped.content.slice(0, 160),
-          credibilityScore: scraped.credibilityScore
-        };
-
-        this.emitEvent({
-          type: 'source',
-          ...sourceItem,
-          credibility: scraped.credibilityScore
-        });
-
-        this.emitEvent({
-          type: 'graph_node',
-          node: {
-            id: this.nextNodeId('src'),
-            label: scraped.domain,
-            type: 'source',
-            status: 'completed',
-            details: scraped.url,
-            credibility: scraped.credibilityScore,
-            parentId: 'persp_1'
-          }
-        });
-
-        if (scrapedSources.length >= (depth === 'quick' ? 4 : depth === 'deep' ? 8 : 12)) {
-          break;
-        }
-      }
-
-      if (scrapedSources.length >= (depth === 'quick' ? 4 : depth === 'deep' ? 8 : 12)) {
+      if (scrapedSources.length >= initialSourceCap) {
         break;
       }
     }
 
-    // 5. Multi-Hop Self-Reflection Step
+    // 5. Evidence Coverage Audit & Adaptive Multi-Hop Retrieval
     const reflectionsList: string[] = [];
-    if (depth !== 'quick') {
-      const reflectionMsg = `تدقيق شمولية الأدلة المستخلصة لموضوع '${query.slice(0, 45)}' والتأكد من توافق الرؤى مع إحصائيات 2025/2026.`;
-      reflectionsList.push(reflectionMsg);
+    const maxAdaptiveHops = depth === 'quick' ? 0 : depth === 'storm' ? 2 : 1;
+    const maxHopSourcesCap = depth === 'quick' ? 4 : depth === 'storm' ? 16 : 12;
+
+    for (let hop = 0; hop < maxAdaptiveHops; hop++) {
+      const audit = auditEvidenceCoverage(query, activeSubqueries, scrapedSources, {
+        language: isAr ? 'ar' : 'en'
+      });
+
+      const { reflection, reflections } = formatAuditReflections(audit, isAr ? 'ar' : 'en');
+      reflectionsList.push(reflection);
 
       this.emitEvent({
         type: 'reflection',
-        reflection: reflectionMsg,
-        reflections: [
-          'التحقق من حداثة البيانات والأرقام لعام 2025/2026',
-          'استبعاد التناقضات بين المصادر التقنية والتقارير الميدانية'
-        ]
+        reflection,
+        reflections,
+        coverage: {
+          overallScore: audit.overallScore,
+          subqueryScore: audit.subqueryScore,
+          aspectScore: audit.aspectScore,
+          metricScore: audit.metricScore,
+          diversityScore: audit.diversityScore,
+          uncoveredSubqueries: audit.uncoveredSubqueries
+        }
       });
 
       this.emitEvent({
         type: 'graph_node',
         node: {
-          id: 'reflect_1',
-          label: 'التدقيق الذاتي وسد الفجوات (Self-Reflection)',
+          id: `reflect_${hop + 1}`,
+          label: isAr
+            ? `التدقيق الذاتي وسد الفجوات (${(audit.overallScore * 100).toFixed(0)}%)`
+            : `Evidence Coverage Audit (${(audit.overallScore * 100).toFixed(0)}%)`,
           type: 'reflection',
           status: 'completed',
           parentId: 'persp_1'
         }
       });
+
+      const hopPlan = generateAdaptiveHopPlan(audit, query, {
+        depth,
+        currentHop: hop,
+        currentSourcesCount: scrapedSources.length,
+        maxSources: maxHopSourcesCap,
+        language: isAr ? 'ar' : 'en'
+      });
+
+      if (!hopPlan.shouldHop || hopPlan.targetQueries.length === 0) {
+        break;
+      }
+
+      this.emitEvent({
+        type: 'status',
+        message: isAr
+          ? `تفعيل قفزة استرجاع تكيفية لسد الفجوات: ${hopPlan.targetGaps.join('، ')}...`
+          : `Triggering adaptive retrieval hop for: ${hopPlan.targetGaps.join(', ')}...`,
+        step: 'searching'
+      });
+
+      for (const targetQ of hopPlan.targetQueries) {
+        this.emitEvent({
+          type: 'thought',
+          thought: isAr
+            ? `قفزة تكيفية مستهدفة (${hop + 1}/${maxAdaptiveHops}): استكشاف الويب عن "${targetQ}"...`
+            : `Executing adaptive hop query (${hop + 1}/${maxAdaptiveHops}): "${targetQ}"...`
+        });
+
+        const hopHits = await MultiSearchProvider.search(targetQ, searchProvider, apiKeys, 3);
+        await this.ingestHits(hopHits, discoveredUrls, scrapedSources, `reflect_${hop + 1}`, maxHopSourcesCap);
+
+        if (scrapedSources.length >= maxHopSourcesCap) {
+          break;
+        }
+      }
+
+      if (scrapedSources.length >= maxHopSourcesCap) {
+        break;
+      }
     }
+
+
 
     // 6. Final Report Synthesis & Semantic Evidence Retrieval
     this.emitEvent({
@@ -313,7 +377,6 @@ Return ONLY a valid JSON array of strings, for example:
       evidenceText = fallbackEvidence(scrapedSources);
     }
 
-    const isAr = language === 'ar';
     const userQueryLower = query.toLowerCase();
     const userExplicitlyWantsTables = /جدول|مقارن|table|compar|matrix|benchmark/i.test(query);
     const userExplicitlyWantsDiagrams = /مخطط|رسم|diagram|flowchart|architect|flow/i.test(query);
