@@ -6,9 +6,11 @@
 
 import { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord } from './bm25';
 import { fuseRankings } from './rrf';
+import { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections, ContextualChunk } from './chunker';
 
 export { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord };
 export { fuseRankings };
+export { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections };
 
 export type EmbeddingProvider = 'gemini' | 'openai' | 'ollama' | 'none';
 
@@ -33,6 +35,9 @@ export interface ChunkRecord {
   score?: number;
   denseScore?: number;
   bm25Score?: number;
+  enrichedContent?: string;
+  sectionPath?: string[];
+  contextHeader?: string;
 }
 
 export interface ModelOption {
@@ -651,12 +656,17 @@ export function fallbackEvidence(
 
         sources.forEach((s, srcIdx) => {
           const citationId = srcIdx + 1;
-          const textChunks = chunkText(s.content, { maxChunkSize: 650, chunkOverlap: 80 });
-          textChunks.forEach((text, chunkIdx) => {
-            const chunkId = `fallback_${citationId}_${chunkIdx}`;
-            const chunkObj = { id: chunkId, citationId, title: s.title, domain: s.domain, url: s.url, content: text };
+          const structuredChunks = chunkStructuredDocument(s.content, {
+            defaultTitle: s.title,
+            sourceIndex: srcIdx,
+            citationId,
+            maxChunkSize: 650,
+            chunkOverlap: 80
+          });
+          structuredChunks.forEach((sc) => {
+            const chunkObj = { id: sc.id, citationId, title: s.title, domain: s.domain, url: s.url, content: sc.content };
             allChunks.push(chunkObj);
-            bm25.addDocument(chunkId, `${s.title} ${text}`, chunkObj);
+            bm25.addDocument(sc.id, sc.enrichedContent, chunkObj);
           });
         });
 
@@ -727,25 +737,51 @@ export async function rankSourcePassages(
   const maxPerSource = Math.max(1, Math.min(4, options.maxPerSource || 2));
   const maxContextChars = Math.max(4000, Math.min(20000, options.maxContextChars || 11000));
 
-  // 1. Chunk all sources and record source identity
+  // 1. Chunk all sources with structure awareness and contextual enrichment
   const allChunks: ChunkRecord[] = [];
 
   sources.forEach((s, srcIdx) => {
     const citationId = srcIdx + 1;
-    const textChunks = chunkText(s.content, { maxChunkSize: 650, chunkOverlap: 80 });
-
-    textChunks.forEach((text, chunkIdx) => {
-      allChunks.push({
-        id: `chunk_${citationId}_${chunkIdx}`,
-        sourceIndex: srcIdx,
-        citationId,
-        url: s.url,
-        title: s.title,
-        domain: s.domain,
-        content: text,
-        chunkIndex: chunkIdx
-      });
+    const structuredChunks = chunkStructuredDocument(s.content, {
+      defaultTitle: s.title,
+      sourceIndex: srcIdx,
+      citationId,
+      maxChunkSize: 650,
+      chunkOverlap: 80
     });
+
+    if (structuredChunks.length > 0) {
+      structuredChunks.forEach((sc) => {
+        allChunks.push({
+          id: sc.id,
+          sourceIndex: srcIdx,
+          citationId,
+          url: s.url,
+          title: s.title,
+          domain: s.domain,
+          content: sc.content,
+          chunkIndex: sc.chunkIndex,
+          enrichedContent: sc.enrichedContent,
+          sectionPath: sc.sectionPath,
+          contextHeader: sc.contextHeader
+        });
+      });
+    } else {
+      const textChunks = chunkText(s.content, { maxChunkSize: 650, chunkOverlap: 80 });
+      textChunks.forEach((text, chunkIdx) => {
+        allChunks.push({
+          id: `chunk_${citationId}_${chunkIdx}`,
+          sourceIndex: srcIdx,
+          citationId,
+          url: s.url,
+          title: s.title,
+          domain: s.domain,
+          content: text,
+          chunkIndex: chunkIdx,
+          enrichedContent: `[${s.title}]\n${text}`
+        });
+      });
+    }
   });
 
   if (allChunks.length === 0) {
@@ -771,8 +807,8 @@ export async function rankSourcePassages(
     throw new Error(`Query embedding validation failed: ${qValidation.error}`);
   }
 
-  // 3. Embed chunk passages
-  const chunkTexts = cappedChunks.map(c => c.content);
+  // 3. Embed chunk passages using enrichedContent for maximum semantic context
+  const chunkTexts = cappedChunks.map(c => c.enrichedContent || `${c.title}\n${c.content}`);
   const chunkVectors = await embeddingModel.embedText(chunkTexts, options.signal);
   const cValidation = validateVectors(chunkVectors, chunkTexts.length);
   if (!cValidation.valid) {
@@ -809,7 +845,7 @@ export async function rankSourcePassages(
     try {
       const bm25 = new BM25Index<ChunkRecord>();
       cappedChunks.forEach(c => {
-        bm25.addDocument(c.id, `${c.title} ${c.content}`, c);
+        bm25.addDocument(c.id, c.enrichedContent || `${c.title} ${c.content}`, c);
       });
 
       const bm25Query = cleanQueries.join(' ');
