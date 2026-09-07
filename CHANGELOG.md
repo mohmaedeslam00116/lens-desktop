@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Dual-Path Skill Activation, Model Routing & Compaction Shield ([#33](https://github.com/mohmaedeslam00116/lens-desktop/issues/33))**:
+  - Implemented `CompactionShield` (`frontend/electron/engine/skills/compactionShield.ts`):
+    - Tags active skill instructions with `<skill_content name="..."> ... </skill_content>`.
+    - Enforces strict exemption contracts: preserves active skill instructions untouched across recursive context summarization, multi-hop compaction, and context pruning passes.
+    - Automatic placeholder extraction, restoration, and failsafe re-append guarantee zero skill context loss.
+  - Implemented `HostToolMapper` (`frontend/electron/engine/skills/hostToolMapper.ts`):
+    - Maps declared `allowed-tools` to native LENS runtime capabilities (`web_search`, `read_url`, `read_resource`, `record_evidence`).
+    - Enforces zero privilege escalation: unmapped or unknown tools produce diagnostic notices rather than throwing errors or executing arbitrary commands.
+  - Implemented `SkillActivationManager` (`frontend/electron/engine/skills/activation.ts`):
+    - Path 1 (Controller-Assisted Pre-activation): Injects approved `ResearchPlan.suggestedSkills` directly into session prompt context, ensuring 100% activation reliability on models without tool-calling (e.g. Ollama / Llama 3.1).
+    - Path 2 (Dynamic Tool Calling `activate_skill`): Registers standardized tool schema for tool-capable providers (Gemini, OpenAI, Claude), dynamically loading and returning shielded skill instructions at runtime.
+    - Emits live telemetry event `skill_activated` with method, scope, and tool mappings.
+  - Integrated with `DeepResearchAgent` (`frontend/electron/engine/agent.ts`):
+    - Automatically pre-activates plan skills upon session execution and binds active skill rules into LLM synthesis prompts.
+  - 17 comprehensive unit tests (`frontend/test/skill_activation_compaction_shield.test.mjs`) verifying compaction protection, tool mapping, dual-path activation, and agent integration.
 - **Native Agent Skills Discovery, Validation & Path Sandboxing ([#32](https://github.com/mohmaedeslam00116/lens-desktop/issues/32))**:
   - Implemented 3-Tier `SkillRegistry` (`frontend/electron/engine/skills/registry.ts`):
     - Priority-based deterministic discovery hierarchy: Workspace (`<workspace>/.agents/skills/`, priority 1) > User Global (`%APPDATA%/LENS/skills/`, `~/.agents/skills/`, priority 2) > Built-in Bundle (`<resources>/skills/`, priority 3).

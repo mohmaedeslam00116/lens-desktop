@@ -148,6 +148,9 @@ A security enforcement mechanism ensuring all secondary file lookups (`reference
 ### DualActivationStrategy
 A hybrid activation model providing deterministic controller pre-activation during collaborative plan approval for all models (including local Ollama models), combined with dynamic tool-driven activation (`activate_skill`) for tool-capable cloud providers (Gemini, OpenAI, Claude).
 
+### SkillActivationManager
+The session-scoped activation coordinator (`frontend/electron/engine/skills/activation.ts`) that orchestrates both controller pre-activation (injecting approved plan skills into session context for 100% reliability on local models) and dynamic tool dispatch (`activate_skill`) for tool-capable models (Gemini, OpenAI, Claude), generating `<skill_content>` shielded blocks and surfacing unmapped tool notices without privilege escalation.
+
 ### HostToolMapper
 The integration seam that bridges standard skill `allowed-tools` declarations to native LENS engine primitives (`MultiSearchProvider`, `PageScraper`, `read_resource`), providing transparent advisory notices for unmapped tools while strictly preventing unauthorized privilege escalation.
 

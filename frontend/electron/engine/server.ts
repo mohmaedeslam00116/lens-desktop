@@ -8,6 +8,7 @@ import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
 import { SessionLifecycleManager, ResearchSession } from './sessionLifecycle';
 import { generateResearchPlan, regenerateResearchPlan } from './scoping';
+import { SkillRegistry, SkillActivationManager } from './skills';
 
 interface ActiveSession {
   id: string;
@@ -19,6 +20,11 @@ interface ActiveSession {
 
 const sessionManager = new SessionLifecycleManager();
 const sessions = new Map<string, ActiveSession>();
+const globalSkillRegistry = new SkillRegistry();
+globalSkillRegistry.discoverAll().catch(err => {
+  console.warn('[Server] Error discovering agent skills:', err);
+});
+
 let httpServer: http.Server | null = null;
 let wss: WebSocketServer | null = null;
 
@@ -60,9 +66,14 @@ function startAuthorizedExecution(session: ActiveSession, approvedPlan?: Researc
   }
 
   setImmediate(async () => {
-    const agent = new DeepResearchAgent(session.id, (event: LiveEvent) => {
-      session.researchSession.emitEvent(event);
-    });
+    const activationManager = new SkillActivationManager(globalSkillRegistry);
+    const agent = new DeepResearchAgent(
+      session.id,
+      (event: LiveEvent) => {
+        session.researchSession.emitEvent(event);
+      },
+      activationManager
+    );
 
     try {
       await agent.run(session.request, session.researchSession.signal);
