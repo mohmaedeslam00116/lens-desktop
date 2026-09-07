@@ -108,3 +108,9 @@ A multi-stage synthesis strategy where each approved research milestone is first
 
 ### CitationGroundingContract
 An evidence provenance mechanism where candidate excerpts are pre-allocated immutable citation indices (`[1]`, `[2]`...) prior to synthesis, paired with an automated post-generation verifier that validates every bracketed anchor against the source catalog, guaranteeing zero hallucinated citations.
+
+### EvidenceInspectionDrawer
+An interactive slide-over inspector component that surfaces the verbatim source passage, source metadata, URL, and side-by-side bilingual original excerpts whenever a user clicks any citation badge `[x]` in the report view, without breaking the reading flow.
+
+### FacetGroupedShelf
+A structured source explorer view that organizes the 100–200 ingested research sources into distinct tabs/sections corresponding to approved research plan milestones, providing instant filtering between cited-only and all ingested pages.
