@@ -102,3 +102,9 @@ An asynchronous scraping worker queue (`frontend/electron/engine/scraperPool.ts`
 
 ### StratifiedEvidenceAdmission
 A facet-aware passage selection strategy that guarantees a minimum quota of admitted chunks per approved milestone ($K_{\text{min}} = 8$), preventing early subqueries from monopolizing the synthesis evidence buffer and ensuring comprehensive representation across all plan facets.
+
+### HierarchicalSynthesis
+A multi-stage synthesis strategy where each approved research milestone is first synthesized into a detailed analytical section from its admitted evidence, followed by a meta-synthesis pass generating executive summaries, cross-cutting comparison matrices, and conclusions, preventing context degradation.
+
+### CitationGroundingContract
+An evidence provenance mechanism where candidate excerpts are pre-allocated immutable citation indices (`[1]`, `[2]`...) prior to synthesis, paired with an automated post-generation verifier that validates every bracketed anchor against the source catalog, guaranteeing zero hallucinated citations.

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session Lifecycle & Recovery Decision ([#20](https://github.com/mohmaedeslam00116/lens-desktop/issues/20))**: Formally specified 4-state session lifecycle, sub-second `AbortController` cancellation preserving partial evidence drafts, and bounded event ring buffer for reconnect delta replays.
 - **Collaborative Research Plan UX Decision ([#14](https://github.com/mohmaedeslam00116/lens-desktop/issues/14))**: Designed 4-part plan schema, interactive UI controls (axis editing, skill toggles, Approve/Regenerate/Discard), and versioned WebSocket binding (`plan_approved`).
 - **Massive Source Ingestion Architecture Decision ([#16](https://github.com/mohmaedeslam00116/lens-desktop/issues/16))**: Designed `BoundedScraperPool` (10 global / 2 per-host concurrency), 3-level deduplication (canonical URL, SHA-256 exact, 64-bit SimHash near-duplicate), stratified facet-aware evidence admission, and under 10 MB RAM footprint for 200 sources.
+- **Evidence Provenance & Citation Grounding Decision ([#21](https://github.com/mohmaedeslam00116/lens-desktop/issues/21))**: Established hierarchical per-facet synthesis eliminating context degradation, pre-allocated deterministic citation catalogs with automated post-generation verifiers ensuring zero hallucinated citations, explicit contradiction callouts, and bilingual excerpt traceability.
 
 ---
 
