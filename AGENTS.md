@@ -13,16 +13,21 @@ Operational guidelines, conventions, and context for AI agents working in this r
 
 ## Agent skills
 
-### Issue tracker
+### Skill Router
+- **Flow Routing**: Consult `/ask-matt` (`.agents/skills/ask-matt/SKILL.md`) to route work along the standard flow: `idea` → `/grill-with-docs` → `/to-spec` → `/to-tickets` → `/implement` (TDD) → `/code-review` → PR.
 
+### Documentation & Domain Skills
+- **Writing for Agents (`/writing-for-agents`)**: Use when creating, editing, or auditing agent guidelines, skills, `AGENTS.md`, or architecture documents. Enforce strict information hierarchy, demand-driven completion criteria, and context pointer hygiene.
+- **Domain Modeling (`/domain-modeling`)**: Use to continuously evolve `CONTEXT.md` with ubiquitous domain terminology and record significant, hard-to-reverse architectural choices in Architecture Decision Records (`docs/adr/`).
+- **Research (`/research`)**: Delegate primary-source investigation and technical literature gathering to background research agents, saving findings as Markdown under `docs/research/`.
+
+### Issue tracker
 Issues and specs live as GitHub issues (using the `gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
-
 Canonical 5-role triage label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 
 ### Domain docs
-
 Single-context repository layout (`CONTEXT.md` at root). See `docs/agents/domain.md`.
 
 ## Key Directories
@@ -37,6 +42,21 @@ Single-context repository layout (`CONTEXT.md` at root). See `docs/agents/domain
 - Use domain terminology defined in `CONTEXT.md`.
 - Strictly adhere to `BRAND.md` and `DESIGN.md`: monochrome neutral palette (#111111 / #191919), Inter and Cairo typography, concentric lens mark, no decorative gradients or unsupported "Pro" badge.
 - Before committing UI changes, verify via `impeccable detect`.
+
+### Continuous Documentation Updates
+- **Lockstep Synchronization**: Documentation (`docs/`, `CONTEXT.md`, `README.md`, `PRODUCT.md`, `BRAND.md`, `DESIGN.md`) must be kept in continuous lockstep with codebase evolution.
+- **No Orphaned Changes**: Whenever a new feature, architecture seam, or domain concept is introduced or modified, the corresponding documentation must be updated in the same PR. Stale documentation is considered a test failure.
+- **Use Specialized Doc Skills**: Leverage `/writing-for-agents` for agent-facing guidelines and `/domain-modeling` for domain glossary terms and ADRs.
+
+### Changelog & SemVer Release Management
+- **Periodic Changelog Updates**: Maintain `CHANGELOG.md` following [Keep a Changelog](https://keepachangelog.com/) standards. Every PR that introduces user-visible changes, engine enhancements, bug fixes, or architecture adjustments must update `CHANGELOG.md` under the appropriate version section (or `[Unreleased]`).
+- **Quantify Changes via SemVer**: Measure and classify all changes according to standard Semantic Versioning (`MAJOR.MINOR.PATCH`):
+  - **`MAJOR`**: Breaking public API changes, major engine pipeline overhauls, or breaking runtime contracts.
+  - **`MINOR`**: Backwards-compatible feature additions, new retrieval algorithms, API expansions, or new engine capabilities (even if code/engine-only).
+  - **`PATCH`**: Backwards-compatible bug fixes, performance optimizations, internal refactoring, or documentation maintenance.
+- **Continuous Releases for Every Changelog Version**: A GitHub Release (`gh release create`) must be published for every version bump in `CHANGELOG.md`.
+  - **Code-Only Releases**: Releases are required even when changes are **code-only** (e.g. embedded engine, retrieval algorithms, core logic, or backend pipelines) without packaging a full desktop installer (`.exe`). Tag the git commit and publish the release with comprehensive release notes.
+  - **Packaged Releases**: When milestone desktop client builds are ready, attach the Windows installer executable (`LENS Setup x.x.x.exe`) to the GitHub Release.
 
 ### Pull Request & Review Workflow
 - **Pull Request Requirement**: After any specification (`/to-spec`) or issue implementation is completed and verified against the test suite, a Pull Request (PR) must be created (using `gh pr create`) instead of pushing directly to `main`.

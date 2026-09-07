@@ -1,4 +1,4 @@
-# Domain Model: Deep Research Agent Studio
+# Domain Model: LENS
 
 <!-- matt-skills:domain-model 1 -->
 
@@ -43,3 +43,27 @@ A deep backend module responsible for maintaining the catalog of known models ac
 
 ### ConnectionTest
 A real-time diagnostic ping validating whether the user's API key or local Ollama endpoint is functional before committing to an expensive research run, returning latency in milliseconds and detailed error diagnostics if rejected.
+
+### BM25Index
+A pure TypeScript, zero-native-compilation lexical search engine based on the Robertson-Spärck Jones Okapi BM25 formulation. It features bilingual tokenization, Arabic diacritic stripping, letter normalization, and prefix clitic morphological stemming (`ال`, `وال`, `فال`, `بال`, `لل`), with tuned saturation $k_1 = 1.2$ and document length penalization $b = 0.75$.
+
+### ReciprocalRankFusion (RRF)
+A non-parametric rank fusion algorithm combining dense neural vector rankings and sparse BM25 lexical rankings into a unified score using standard rank smoothing ($k=60$):
+$$\text{RRF}(d) = \sum_{r \in \mathcal{R}} \frac{1}{k + r(d)}$$
+
+### ContextualChunk
+A structure-aware document segment enriched with hierarchical ATX Markdown or HTML DOM heading paths (`[Document Title > Section Path] + Clean Content`). The contextual header ensures dense embeddings and BM25 indices capture topical provenance, while the clean content is supplied to LLM synthesis.
+
+### MaximalMarginalRelevance (MMR)
+A greedy selection algorithm balancing relevance against novelty ($\lambda = 0.7$) to eliminate passage redundancy from the same website or section, incorporating quadratic domain clustering decay penalties ($0.75^c$).
+
+### EvidenceCoverageAudit
+A multi-facet mathematical heuristic assessing research completeness before synthesis:
+$$\text{CoverageScore} = 0.45 \cdot S_{\text{subq}} + 0.25 \cdot S_{\text{aspect}} + 0.15 \cdot S_{\text{metric}} + 0.15 \cdot S_{\text{div}}$$
+It governs early exit transitions to synthesis and triggers adaptive multi-hop hops with strict depth tier guardrails and anchored gap queries.
+
+### EmbeddingCache
+A persistent, sharded local filesystem LRU cache stored under `userData/embedding-cache/`. Vector embeddings are indexed by `SHA-256(provider:model:embeddingSpaceVersion:text)` and automatically validate dimension lengths to prevent stale vectors across model migrations.
+
+### CrossLingualQueryExpansion
+A bidirectional technical taxonomy and acronym mapper that bridges Arabic and English lexical queries in BM25 without requiring neural cross-encoders, applying morphological definite article stripping and multi-token expansion weight scaling.

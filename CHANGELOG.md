@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.1] - 2026-09-07
+
+### Added
+- **Ask-Matt Flow Routing & Guidelines in `AGENTS.md`**: Codified explicit skill routing (`/ask-matt`), specialized documentation skills (`/writing-for-agents`, `/domain-modeling`, `/research`), and enforced continuous documentation synchronization.
+- **Continuous SemVer Release Policy in `AGENTS.md`**: Mandated periodic changelog maintenance and continuous releases for all codebase changes (including code/engine-only updates) alongside packaged desktop milestones.
+- **LENS Domain Glossary Expansion in `CONTEXT.md`**: Added formal domain definitions for `BM25Index`, `ReciprocalRankFusion`, `ContextualChunk`, `MaximalMarginalRelevance`, `EvidenceCoverageAudit`, `EmbeddingCache`, and `CrossLingualQueryExpansion`.
+
+---
+
 ## [1.0.0] - 2026-09-07
 
 ### Added
@@ -71,4 +80,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[1.0.1]: https://github.com/mohmaedeslam00116/lens-desktop/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/mohmaedeslam00116/lens-desktop/releases/tag/v1.0.0
