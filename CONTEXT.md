@@ -141,3 +141,9 @@ The canonical 5-state representation of an Agent Skill in LENS (`Installed`, `En
 
 ### SkillCollisionResolver
 The non-destructive conflict handling mechanism invoked when an imported package shares the name of an existing skill, prompting the user with explicit choices (`Keep Existing`, `Overwrite with Backup`, `Rename on Import`) while isolating running sessions from disk modifications.
+
+### AcademicPaperSkill
+An official launch skill (`skills/academic-paper-analysis/`) standardizing the deep extraction of scientific methodologies, ablation studies, quantitative benchmark matrices, and bilingual terminology alignment from peer-reviewed literature.
+
+### MarketIntelligenceSkill
+An official launch skill (`skills/competitive-market-intelligence/`) guiding the strategic synthesis of competitive landscape reports, feature matrices, pricing models, and SWOT assessments from corporate filings and industry evidence.
