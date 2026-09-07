@@ -147,3 +147,9 @@ An official launch skill (`skills/academic-paper-analysis/`) standardizing the d
 
 ### MarketIntelligenceSkill
 An official launch skill (`skills/competitive-market-intelligence/`) guiding the strategic synthesis of competitive landscape reports, feature matrices, pricing models, and SWOT assessments from corporate filings and industry evidence.
+
+### CrossClientRoundTrip
+An interoperability verification standard requiring imported Agent Skills packages to be parsed, validated, and re-exported as byte-identical packages without injecting proprietary metadata or vendor locks.
+
+### FourPillarAcceptanceGate
+The comprehensive release qualification standard enforcing 100% compliance across four critical dimensions: Format Compliance (`agentskills.io`), Security & Path Boundary Defense, Triggering Precision (0% false positives), and Grounded Citation Fidelity (0% hallucinated citations).
