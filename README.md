@@ -53,6 +53,11 @@
     - Mathematical coverage auditing (`evidenceCoverage.ts`) quantifying subquery coverage, quantitative metric density, analytical perspective breadth, and domain diversity.
     - Smart early exit when coverage meets target quality threshold ($\ge 80\%$), with honest budget exhaustion telemetry and interactive `[Extend Research]` action payloads when retrieval limits are reached.
 
+11. **Collaborative Research Plan Scoping & Approval UX:**
+    - Phase 1 collaborative scoping generating versioned 4-element `ResearchPlan` blueprints (`objective`, `milestones`, `suggestedSkills`, `estimatedScope`) for wide and storm research investigations.
+    - Interactive bilingual React `PlanApprovalModal` with inline subquery editing, milestone creation and removal, and contextual skill toggles.
+    - Strict human-in-the-loop trajectory authorization freezing retrieval bounds, paired with iterative regeneration guidance (`v1` -> `v2`) and sub-second cancellation resilience.
+
 ---
 
 ## 🏗️ Repository Structure

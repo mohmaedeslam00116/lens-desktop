@@ -154,16 +154,51 @@ export class ResearchSession {
   }
 
   /**
-   * Submits a newly drafted research plan for user inspection and collaborative approval.
+   * Submits a newly scoped research plan for user review and approval (Phase 1).
+   * Transitions session state to 'awaiting_approval' and emits 'plan_proposed'.
    */
-  public submitPlanForApproval(plan: ResearchPlan): void {
+  public submitPlanProposed(plan: ResearchPlan): void {
     this.plan = plan;
     this.transitionTo('awaiting_approval', 'Research plan drafted and awaiting user approval');
+    this.emitEvent({
+      type: 'plan_proposed',
+      sessionId: this.id,
+      plan: this.plan,
+      message: `Research plan v${plan.version} proposed for user scoping and approval`
+    });
+  }
+
+  /**
+   * Submits a newly drafted research plan for user inspection and collaborative approval.
+   * Emits both plan_proposed and plan_created for backwards compatibility.
+   */
+  public submitPlanForApproval(plan: ResearchPlan): void {
+    this.submitPlanProposed(plan);
     this.emitEvent({
       type: 'plan_created',
       sessionId: this.id,
       plan: this.plan,
       message: `Plan version ${plan.version} submitted with ${plan.milestones.length} milestones`
+    });
+  }
+
+  /**
+   * Allows live edits to milestones or skills during 'awaiting_approval' state before approval.
+   */
+  public updatePlan(updatedPlan: ResearchPlan): void {
+    if (this.isTerminal()) {
+      return;
+    }
+    this.plan = {
+      ...updatedPlan,
+      status: this.plan?.status || 'draft',
+      updatedAt: Date.now()
+    };
+    this.emitEvent({
+      type: 'plan_updated',
+      sessionId: this.id,
+      plan: this.plan,
+      message: `Plan version ${this.plan.version} updated`
     });
   }
 
@@ -183,7 +218,7 @@ export class ResearchSession {
 
   /**
    * Approves the proposed research plan (optionally with user modifications) and transitions
-   * the session to 'running' to begin parallel retrieval.
+   * the session to 'running' to begin parallel retrieval. Freezes the retrieval trajectory.
    */
   public approvePlan(approvedPlan?: ResearchPlan): void {
     const target = approvedPlan || this.plan;
@@ -202,6 +237,36 @@ export class ResearchSession {
       plan: this.plan,
       message: 'Research plan approved'
     });
+  }
+
+  /**
+   * Rejects the proposed research plan, transitions session to 'cancelled', and emits 'plan_rejected'.
+   */
+  public rejectPlan(reason: string = 'Research plan rejected by user'): void {
+    if (this.isTerminal()) {
+      return;
+    }
+    if (this.plan) {
+      this.plan = {
+        ...this.plan,
+        status: 'rejected',
+        updatedAt: Date.now()
+      };
+    }
+    this.transitionTo('cancelled', reason);
+    this.emitEvent({
+      type: 'plan_rejected',
+      sessionId: this.id,
+      plan: this.plan,
+      message: reason
+    });
+  }
+
+  /**
+   * Strictly verifies whether the plan is authorized before retrieval execution begins.
+   */
+  public isPlanAuthorized(): boolean {
+    return Boolean(this.plan && this.plan.status === 'approved');
   }
 
   /**
@@ -399,6 +464,18 @@ export class SessionLifecycleManager {
   }
 
   /**
+   * Submits a scoped research plan for approval on a session.
+   */
+  public submitPlanProposed(sessionId: string, plan: ResearchPlan): ResearchPlan | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return null;
+    }
+    session.submitPlanProposed(plan);
+    return session.plan ?? null;
+  }
+
+  /**
    * Approves a research plan for a session in 'awaiting_approval' state.
    */
   public approveSessionPlan(sessionId: string, approvedPlan?: ResearchPlan): ResearchPlan | null {
@@ -408,6 +485,26 @@ export class SessionLifecycleManager {
     }
     session.approvePlan(approvedPlan);
     return session.plan ?? null;
+  }
+
+  /**
+   * Rejects a research plan for a session.
+   */
+  public rejectSessionPlan(sessionId: string, reason?: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+    session.rejectPlan(reason);
+    return true;
+  }
+
+  /**
+   * Checks whether the session plan has been authorized by user.
+   */
+  public isSessionPlanAuthorized(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return Boolean(session?.isPlanAuthorized());
   }
 
   /**

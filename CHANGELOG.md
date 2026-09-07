@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Collaborative Research Plan Scoping & Approval UX ([#31](https://github.com/mohmaedeslam00116/lens-desktop/issues/31))**:
+  - Implemented Phase 1 Plan Scoping Generator (`frontend/electron/engine/scoping.ts`):
+    - Generates versioned 4-element structured `ResearchPlan` (`objective`, `milestones`, `suggestedSkills`, `estimatedScope`) for wide and storm research modes.
+    - Native bilingual milestone decomposition: generates coherent Arabic subqueries and rationales for Arabic RTL queries and English technical milestones for English queries.
+    - Contextual skill suggestion heuristic: recommends domain-specific agent skills (`academic-paper-analysis`, `empirical-data-extraction`, `comparative-synthesis`, `bilingual-cross-lingual-bridge`, `web-retrieval-curator`).
+    - Plan regeneration engine (`regenerateResearchPlan`) supporting iterative user guidance and monotonic version incrementing (`v1` -> `v2`).
+    - Robust plan schema validation (`validateResearchPlan`).
+  - Enhanced Session Lifecycle Protocol (`frontend/electron/engine/sessionLifecycle.ts`):
+    - Added `submitPlanProposed(plan)`: transitions session state to `awaiting_approval` and emits stamped `plan_proposed` event.
+    - Live milestone and skill editing via `updatePlan(updatedPlan)` emitting `plan_updated`.
+    - Plan trajectory authorization and freeze via `approvePlan(approvedPlan)` transitioning state to `running` and emitting `plan_approved`.
+    - Graceful plan rejection via `rejectPlan(reason)` transitioning state to `cancelled` and emitting `plan_rejected`.
+    - Retrieval authorization gatekeeper: `isPlanAuthorized()` strictly prevents unauthorized wide retrieval execution.
+    - Architecture Decision Record (`docs/adr/0001-collaborative-plan-authorization-gate.md`): Documents the Phase 1 collaborative scoping gate and trajectory freezing rationale.
+  - Retrieval Trajectory Freezing (`frontend/electron/engine/agent.ts`):
+    - When an approved research plan is provided on `WideResearchRequest`, `DeepResearchAgent` skips independent LLM subquery decomposition and strictly binds initial subqueries to the approved milestone queries.
+  - Interactive React Plan Approval Modal (`frontend/src/components/research/PlanApprovalModal.tsx`):
+    - Full bilingual support (Arabic RTL and English LTR) conforming to `BRAND.md` monochrome neutral aesthetics (#111111 / #191919 / #FAFAF9, Inter and Cairo typography).
+    - Milestone management: inline editing for subquery and rationale, milestone removal with minimum boundary guards, and dynamic "Add Milestone" form.
+    - Suggested skill toggle pills with primary color inversion when active.
+    - Scope summary indicators for target sources and maximum hops.
+    - Action controls: `[Discard]` (`إلغاء`), `[Regenerate]` (`إعادة صياغة الخطة`), and `[Approve & Start]` (`اعتماد وبدء البحث`).
+    - Full accessible keyboard navigation and focus trapping via `useDialogFocus`.
+  - Embedded Server Protocol & WebSocket Actions (`frontend/electron/engine/server.ts`, `frontend/src/App.tsx`):
+    - Standardized WebSocket bidirectional action handlers: `plan_approved`, `plan_rejected`, `plan_regenerate`.
+    - Added fallback REST endpoints: `POST /api/research/plan/approve`, `POST /api/research/plan/reject`, `POST /api/research/plan/regenerate`.
+    - Refactored frontend action dispatcher `sendPlanAction` eliminating duplicate communication logic.
+  - Comprehensive 12-test unit suite (`frontend/test/plan_scoping_lifecycle.test.mjs`) covering 4-element schema generation, Arabic/English bilingual generation, schema validation, lifecycle state transitions, milestone editing, approval freezing, graceful rejection, DeepResearchAgent trajectory binding, and manager delegation.
 - **Stratified Evidence Admission & Multi-Hop Coverage Audit ([#30](https://github.com/mohmaedeslam00116/lens-desktop/issues/30))**:
   - Implemented `StratifiedEvidenceAdmission` (`frontend/electron/engine/admission.ts`):
     - Guarantees minimum quota allocation $K_{\text{min}} = 8$ admitted candidate chunks per approved research plan milestone before allocating residual capacity by global hybrid relevance score.

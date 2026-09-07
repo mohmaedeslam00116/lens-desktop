@@ -87,6 +87,16 @@ export interface ResearchExtensionPayload {
   };
 }
 
+export type PlanApprovalAction = 'approve_plan' | 'reject_plan' | 'regenerate_plan';
+
+export interface PlanScopingOptions {
+  language?: 'ar' | 'en' | string;
+  targetSources?: number;
+  maxHops?: number;
+  reportType?: string;
+  mode?: ResearchMode;
+}
+
 export interface LiveEvent {
   type:
     | 'status'
@@ -99,10 +109,13 @@ export interface LiveEvent {
     | 'reflection'
     | 'graph_node'
     | 'plan_created'
+    | 'plan_proposed'
     | 'plan_updated'
     | 'plan_approved'
+    | 'plan_rejected'
     | 'session_state'
-    | 'cancelled';
+    | 'cancelled'
+    | 'budget_exhausted';
   eventId?: number;
   sessionId?: string;
   state?: SessionState;

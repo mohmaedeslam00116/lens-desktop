@@ -9,6 +9,7 @@ import { LibraryView } from './components/vane/LibraryView';
 import { GraphView } from './components/vane/GraphView';
 import { SettingsModal } from './components/SettingsModal';
 import { CommandPalette } from './components/CommandPalette';
+import { PlanApprovalModal } from './components/research/PlanApprovalModal';
 import { 
   Language, 
   ResearchDepth, 
@@ -17,7 +18,8 @@ import {
   ReportData, 
   ApiSettings, 
   SourceItem,
-  ResearchStep
+  ResearchStep,
+  ResearchPlan
 } from './types';
 
 const API_BASE = 'http://127.0.0.1:8000';
@@ -73,6 +75,12 @@ export function App() {
   const [visitedSources, setVisitedSources] = useState<SourceItem[]>([]);
   const [reflections, setReflections] = useState<string[]>([]);
   const [graphNodes, setGraphNodes] = useState<ResearchGraphNode[]>([]);
+  
+  // Collaborative Plan Scoping (Tracer 4)
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [proposedPlan, setProposedPlan] = useState<ResearchPlan | null>(null);
+  const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
+  const [isRegeneratingPlan, setIsRegeneratingPlan] = useState(false);
 
   // Local storage & Settings
   const [history, setHistory] = useState<ReportData[]>([]);
@@ -155,6 +163,10 @@ export function App() {
     setVisitedSources([]);
     setReflections([]);
     setGraphNodes([]);
+    setProposedPlan(null);
+    setIsPlanModalOpen(false);
+    setIsRegeneratingPlan(false);
+    setActiveSessionId(null);
     setActiveTab('home');
   };
 
@@ -170,6 +182,10 @@ export function App() {
     const trimmed = searchQuery.trim();
     setResearchError('');
     setCurrentQuery(trimmed);
+    setProposedPlan(null);
+    setIsPlanModalOpen(false);
+    setIsRegeneratingPlan(false);
+    setActiveSessionId(null);
     setIsSearching(true);
     setActiveTab('home');
     setActiveReport(null);
@@ -226,6 +242,7 @@ export function App() {
       if (!response.ok) throw new Error(`Server returned ${response.status}`);
       const data = await response.json();
       const sessionId = data.session_id;
+      setActiveSessionId(sessionId);
 
       const ws = new WebSocket(`${WS_BASE}/ws/research/${sessionId}`);
       wsRef.current = ws;
@@ -236,7 +253,21 @@ export function App() {
         try {
           const payload = JSON.parse(event.data);
 
-          if (payload.type === 'status') {
+          if (payload.type === 'plan_proposed' || payload.type === 'plan_created') {
+            if (payload.plan) {
+              setProposedPlan(payload.plan);
+              setIsPlanModalOpen(true);
+              setIsRegeneratingPlan(false);
+              setCurrentStatus(language === 'ar' ? 'تمت صياغة مسار البحث. بانتظار الاعتماد...' : 'Research plan drafted. Awaiting approval...');
+            }
+          } else if (payload.type === 'plan_approved') {
+            setIsPlanModalOpen(false);
+            setCurrentStatus(language === 'ar' ? 'تم اعتماد الخطة. جاري استرجاع المصادر...' : 'Plan approved. Starting retrieval...');
+          } else if (payload.type === 'plan_rejected') {
+            setIsPlanModalOpen(false);
+            setIsSearching(false);
+            setCurrentStatus(language === 'ar' ? 'تم إلغاء خطة البحث.' : 'Research plan discarded.');
+          } else if (payload.type === 'status') {
             setCurrentStatus(payload.message || '');
           } else if (payload.type === 'thought') {
             setThoughts((prev) => [...prev, payload.thought]);
@@ -311,6 +342,50 @@ export function App() {
       console.error('Failed to start research:', err);
       setResearchError(language === 'ar' ? 'تعذر بدء البحث. تأكد من تشغيل تطبيق سطح المكتب وإعداد النموذج ثم أعد المحاولة. سؤالك محفوظ أدناه.' : 'Could not start research. Check the desktop app and model setup, then try again. Your question is preserved below.');
       setIsSearching(false);
+    }
+  };
+
+  const sendPlanAction = async (
+    action: 'plan_approved' | 'plan_rejected' | 'plan_regenerate',
+    payload: Record<string, any>,
+    restEndpoint: string
+  ) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action, ...payload }));
+    } else if (activeSessionId) {
+      try {
+        await fetch(`${API_BASE}${restEndpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: activeSessionId, ...payload })
+        });
+      } catch (err) {
+        console.error(`Failed to send ${action} via REST:`, err);
+        if (action === 'plan_regenerate') {
+          setIsRegeneratingPlan(false);
+        }
+      }
+    }
+  };
+
+  const handleApprovePlan = async (approvedPlan: ResearchPlan) => {
+    setIsPlanModalOpen(false);
+    setCurrentStatus(language === 'ar' ? 'تم اعتماد الخطة. جاري استرجاع المصادر...' : 'Plan authorized. Beginning wide retrieval...');
+    await sendPlanAction('plan_approved', { plan: approvedPlan }, '/api/research/plan/approve');
+  };
+
+  const handleRegeneratePlan = async (modifier?: string) => {
+    setIsRegeneratingPlan(true);
+    await sendPlanAction('plan_regenerate', { modifier }, '/api/research/plan/regenerate');
+  };
+
+  const handleDiscardPlan = async (reason?: string) => {
+    setIsPlanModalOpen(false);
+    setIsSearching(false);
+    setCurrentStatus(language === 'ar' ? 'تم إلغاء خطة البحث.' : 'Research plan discarded.');
+    await sendPlanAction('plan_rejected', { reason: reason || 'User discarded plan' }, '/api/research/plan/reject');
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.close();
     }
   };
 
@@ -505,6 +580,18 @@ export function App() {
         settings={settings}
         onUpdateSettings={saveSettings}
       />
+
+      {proposedPlan && (
+        <PlanApprovalModal
+          isOpen={isPlanModalOpen}
+          language={language}
+          plan={proposedPlan}
+          onApprove={handleApprovePlan}
+          onRegenerate={handleRegeneratePlan}
+          onDiscard={handleDiscardPlan}
+          isRegenerating={isRegeneratingPlan}
+        />
+      )}
     </div>
   );
 }
