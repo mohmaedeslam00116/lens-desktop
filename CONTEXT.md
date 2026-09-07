@@ -120,3 +120,12 @@ The standard 3-tier loading mechanism for Agent Skills (`agentskills.io`): Tier 
 
 ### CompactionShield
 A context management protection policy that tags activated skill instructions with `<skill_content>` delimiters and exempts them from pruning or summarization during multi-hop research passes, ensuring domain instructions remain intact across the research lifecycle.
+
+### SkillRegistry
+The discovery and catalog management subsystem (`frontend/electron/engine/skills/registry.ts`) that scans project `.agents/skills/`, user AppData, and bundled locations, parses YAML frontmatter with lenient error recovery, and maintains in-memory metadata catalogs for prompt injection.
+
+### SkillPrecedencePolicy
+The deterministic shadowing hierarchy governing duplicate skill names across scopes: workspace skills (`<workspace>/.agents/skills/`) override user-level skills (`%APPDATA%/LENS/skills/`), which in turn override application-bundled skills.
+
+### SkillPathBoundary
+A security enforcement mechanism ensuring all secondary file lookups (`references/*`, `assets/*`) resolve strictly within the parent skill root directory via normalized path validation, preventing directory traversal escapes and unauthorized filesystem access.
