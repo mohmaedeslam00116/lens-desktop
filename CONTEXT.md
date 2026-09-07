@@ -75,3 +75,12 @@ The operational workflow mode of a research session:
 
 ### WideResearch
 An advanced autonomous investigation workflow in LENS (Arabic: **بحث استقصائي موسع**) designed to explore complex topics across dozens to hundreds of sources with explicit scoping, verifiable evidence provenance, and open-standard skill integration.
+
+### WideResearchAgent
+A dedicated autonomous orchestrator class (`frontend/electron/engine/wideAgent.ts`) that executes the 5-phase Wide Research lifecycle: (1) Collaborative scoping and research plan approval, (2) Parallel wide retrieval, (3) Iterative audit and adaptive hops, (4) Hybrid evidence ranking and skill injection, and (5) Verifiable citation-grounded synthesis. It operates independently from `DeepResearchAgent` while reusing core retrieval and scraping modules.
+
+### ThreeTierEvidence
+An evidence architecture decoupling massive raw corpus capacity from the LLM generation context budget:
+- **Tier 1 (Raw Session Corpus)**: In-memory/temp storage of all retrieved web pages for complete source inspection.
+- **Tier 2 (Admitted Passages Index)**: Top 40–80 contextual chunks selected via RRF (Dense + BM25) and MMR diversification spanning all plan facets.
+- **Tier 3 (Synthesis Prompt Context)**: Clean admitted excerpts supplied to the LLM with stable citation identifiers `[x]`, supporting hierarchical section synthesis.
