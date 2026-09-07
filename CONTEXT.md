@@ -67,3 +67,11 @@ A persistent, sharded local filesystem LRU cache stored under `userData/embeddin
 
 ### CrossLingualQueryExpansion
 A bidirectional technical taxonomy and acronym mapper that bridges Arabic and English lexical queries in BM25 without requiring neural cross-encoders, applying morphological definite article stripping and multi-token expansion weight scaling.
+
+### ResearchMode
+The operational workflow mode of a research session:
+- **`standard`**: Direct, single-turn research execution across configured depth tiers (`quick`, `deep`, `storm`).
+- **`wide`**: Multi-phase autonomous investigation featuring collaborative scoping, user-approved research plans, massive source retrieval across hundreds of websites, Agent Skills standard integration, and verifiable citation-grounded synthesis.
+
+### WideResearch
+An advanced autonomous investigation workflow in LENS (Arabic: **بحث استقصائي موسع**) designed to explore complex topics across dozens to hundreds of sources with explicit scoping, verifiable evidence provenance, and open-standard skill integration.
