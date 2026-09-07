@@ -7,10 +7,11 @@ import { DeepResearchAgent } from './agent';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
 import { SessionLifecycleManager, ResearchSession } from './sessionLifecycle';
+import { generateResearchPlan, regenerateResearchPlan } from './scoping';
 
 interface ActiveSession {
   id: string;
-  request: ResearchRequest | WideResearchRequest;
+  request: WideResearchRequest;
   sockets: Set<WebSocket>;
   researchSession: ResearchSession;
   isCompleted: boolean;
@@ -39,6 +40,39 @@ function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
       }
     });
     req.on('error', reject);
+  });
+}
+
+function startAuthorizedExecution(session: ActiveSession, approvedPlan?: ResearchPlan) {
+  if (session.researchSession.state === 'awaiting_approval' || session.researchSession.state === 'planning') {
+    session.researchSession.approvePlan(approvedPlan);
+  }
+
+  // Strict authorization gatekeeper check
+  if (!session.researchSession.isPlanAuthorized()) {
+    console.warn(`[Server] Session ${session.id} plan is not authorized. Aborting retrieval execution.`);
+    return;
+  }
+
+  // Bind approved plan to the request to freeze retrieval trajectory
+  if (approvedPlan) {
+    session.request.plan = approvedPlan;
+  }
+
+  setImmediate(async () => {
+    const agent = new DeepResearchAgent(session.id, (event: LiveEvent) => {
+      session.researchSession.emitEvent(event);
+    });
+
+    try {
+      await agent.run(session.request, session.researchSession.signal);
+      session.researchSession.complete();
+    } catch (err: any) {
+      if (session.researchSession.signal.aborted) {
+        return;
+      }
+      session.researchSession.fail(err);
+    }
   });
 }
 
@@ -176,23 +210,28 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
             }
           });
 
-          // Launch Agent Execution Asynchronously in background
-          setImmediate(async () => {
-            const agent = new DeepResearchAgent(sessionId, (event: LiveEvent) => {
-              researchSession.emitEvent(event);
-            });
+          const isWideMode = body.mode === 'wide' || body.report_type === 'storm';
 
-            try {
-              researchSession.transitionTo('running');
-              await agent.run(body, researchSession.signal);
-              researchSession.complete();
-            } catch (err: any) {
-              if (researchSession.signal.aborted) {
-                return;
+          if (isWideMode) {
+            // Phase 1: Collaborative Plan Scoping Protocol
+            setImmediate(async () => {
+              try {
+                const plan = await generateResearchPlan(body.query, {
+                  language: body.language,
+                  mode: body.mode,
+                  reportType: body.report_type,
+                  targetSources: body.maxSources || 100,
+                  maxHops: body.maxHops !== undefined ? body.maxHops : 2
+                });
+                researchSession.submitPlanProposed(plan);
+              } catch (err: any) {
+                researchSession.fail(err);
               }
-              researchSession.fail(err);
-            }
-          });
+            });
+          } else {
+            // Standard Mode: Run immediately
+            startAuthorizedExecution(session);
+          }
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ session_id: sessionId }));
@@ -229,15 +268,78 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
             return;
           }
 
-          const plan = sessionManager.approveSessionPlan(body.session_id, body.plan);
-          if (!plan) {
+          const session = sessions.get(body.session_id);
+          if (!session) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Session not found or cannot approve plan' }));
+            res.end(JSON.stringify({ error: 'Session not found' }));
             return;
           }
 
+          const plan = sessionManager.approveSessionPlan(body.session_id, body.plan);
+          if (!plan) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Cannot approve plan in current session state' }));
+            return;
+          }
+
+          startAuthorizedExecution(session, plan);
+
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: true, session_id: body.session_id, plan }));
+          return;
+        }
+
+        // Reject Research Plan Endpoint
+        if (pathname === '/api/research/plan/reject' && req.method === 'POST') {
+          const body = await parseJsonBody<{ session_id: string; reason?: string }>(req);
+          if (!body.session_id) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing session_id parameter' }));
+            return;
+          }
+
+          const session = sessions.get(body.session_id);
+          if (!session) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Session not found' }));
+            return;
+          }
+
+          sessionManager.rejectSessionPlan(body.session_id, body.reason);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, session_id: body.session_id }));
+          return;
+        }
+
+        // Regenerate Research Plan Endpoint
+        if (pathname === '/api/research/plan/regenerate' && req.method === 'POST') {
+          const body = await parseJsonBody<{ session_id: string; modifier?: string }>(req);
+          if (!body.session_id) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing session_id parameter' }));
+            return;
+          }
+
+          const session = sessions.get(body.session_id);
+          if (!session || !session.researchSession.plan) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Session or plan not found' }));
+            return;
+          }
+
+          const newPlan = await regenerateResearchPlan(
+            session.researchSession.plan,
+            body.modifier,
+            {
+              language: session.request.language,
+              mode: session.request.mode,
+              reportType: session.request.report_type
+            }
+          );
+          session.researchSession.submitPlanProposed(newPlan);
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, session_id: body.session_id, plan: newPlan }));
           return;
         }
 
@@ -311,6 +413,31 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
             for (const ev of deltaEvents) {
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(ev));
+              }
+            }
+          } else {
+            const action = parsed.action || parsed.type;
+            if (action === 'plan_approved' || action === 'approve_plan') {
+              const approvedPlan = parsed.plan || session.researchSession.plan;
+              sessionManager.approveSessionPlan(session.id, approvedPlan);
+              startAuthorizedExecution(session, approvedPlan);
+            } else if (action === 'plan_rejected' || action === 'reject_plan') {
+              sessionManager.rejectSessionPlan(session.id, parsed.reason);
+            } else if (action === 'plan_regenerate' || action === 'regenerate_plan') {
+              if (session.researchSession.plan) {
+                regenerateResearchPlan(
+                  session.researchSession.plan,
+                  parsed.modifier,
+                  {
+                    language: session.request.language,
+                    mode: session.request.mode,
+                    reportType: session.request.report_type
+                  }
+                ).then((newPlan) => {
+                  session.researchSession.submitPlanProposed(newPlan);
+                }).catch((err) => {
+                  session.researchSession.fail(err);
+                });
               }
             }
           }

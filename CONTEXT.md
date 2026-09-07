@@ -92,10 +92,10 @@ The state machine governing research sessions: `planning` -> `awaiting_approval`
 A bounded circular memory buffer maintained by the engine on port 8000 storing the last 200–300 sequential events (`eventId: 1, 2, 3...`) per active session, enabling deterministic delta replay to the React frontend on WebSocket reconnects.
 
 ### ResearchPlan
-A structured research blueprint generated in Phase 1 containing the strategic `objective`, investigation `milestones` (subqueries), `proposedSkills` (`SKILL.md`), and realistic `estimatedScope`. It is presented in the UI for user inspection and modification before retrieval begins.
+A versioned, 4-element structured research blueprint generated in Phase 1 (`frontend/electron/engine/scoping.ts`) containing the strategic `objective`, investigation `milestones` (subqueries and rationales), `suggestedSkills` (`SKILL.md`), and realistic `estimatedScope` (`targetSources`, `maxHops`). It is presented in the UI for user inspection and modification before retrieval begins.
 
 ### CollaborativeApproval
-The versioned human-in-the-loop checkpoint (`plan_proposed` -> `plan_approved`) where the user edits subqueries, toggles skills, and explicitly authorizes execution, binding the engine's retrieval trajectory and budget limits to the approved plan version.
+The versioned human-in-the-loop checkpoint (`plan_proposed` -> `plan_approved`) facilitated by `PlanApprovalModal` (`frontend/src/components/research/PlanApprovalModal.tsx`) and `sessionLifecycle.ts` where the user edits subqueries, toggles skills, and explicitly authorizes execution, binding the engine's retrieval trajectory and budget limits to the approved plan version. Retrieval is strictly gated until `isPlanAuthorized()` is satisfied.
 
 ### BoundedScraperPool
 An asynchronous scraping worker queue (`frontend/electron/engine/scraperPool.ts`) that enforces global concurrency limits ($C_{\text{global}} = 10$) and per-host limits ($C_{\text{host}} = 2$) with request timeouts and non-blocking exponential backoff, enabling parallel ingestion of 100–200 sources in ~22 seconds without triggering HTTP 429 bans or socket saturation.

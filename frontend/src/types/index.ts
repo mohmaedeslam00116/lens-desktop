@@ -45,8 +45,50 @@ export interface ResearchHistoryItem {
   sources?: SourceItem[];
 }
 
+export interface PlanMilestone {
+  id: string;
+  query: string;
+  rationale: string;
+  status?: 'pending' | 'in_progress' | 'completed';
+}
+
+export interface ResearchPlan {
+  id: string;
+  version: number;
+  objective: string;
+  milestones: PlanMilestone[];
+  suggestedSkills: string[];
+  estimatedScope: {
+    targetSources: number;
+    maxHops: number;
+  };
+  status?: 'draft' | 'approved' | 'rejected';
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export interface LiveEvent {
-  type: 'status' | 'thought' | 'subqueries' | 'source' | 'report_chunk' | 'finished' | 'error' | 'reflection' | 'graph_node';
+  type:
+    | 'status'
+    | 'thought'
+    | 'subqueries'
+    | 'source'
+    | 'report_chunk'
+    | 'finished'
+    | 'error'
+    | 'reflection'
+    | 'graph_node'
+    | 'plan_created'
+    | 'plan_proposed'
+    | 'plan_updated'
+    | 'plan_approved'
+    | 'plan_rejected'
+    | 'session_state'
+    | 'cancelled'
+    | 'budget_exhausted';
+  sessionId?: string;
+  state?: string;
+  plan?: ResearchPlan;
   message?: string;
   step?: string;
   thought?: string;

@@ -1,4 +1,4 @@
-import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem } from './types';
+import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem, WideResearchRequest, PlanMilestone } from './types';
 import { MultiSearchProvider } from './search';
 import { PageScraper, ScrapedPage } from './scraper';
 import { ModelClient, LLMRequestOptions } from './models';
@@ -88,6 +88,13 @@ export class DeepResearchAgent {
     const embeddingApiKey = request.embedding_api_key || apiKeys[embeddingProvider] || (embeddingProvider === 'gemini' ? apiKeys['google'] : undefined);
     const embeddingEndpoint = request.embedding_endpoint || ollamaEndpoint;
 
+    const llmBaseOpts: Omit<LLMRequestOptions, 'messages'> = {
+      provider: llmProvider,
+      model: modelName,
+      apiKey: apiKeys[llmProvider] || apiKeys[llmProvider === 'gemini' ? 'google' : ''],
+      endpoint: ollamaEndpoint
+    };
+
     // 1. Emit Initial Root Node
     this.emitEvent({
       type: 'graph_node',
@@ -126,22 +133,28 @@ export class DeepResearchAgent {
       step: 'planning'
     });
 
-    // 3. Generate Sub-Queries via LLM
-    const llmBaseOpts: Omit<LLMRequestOptions, 'messages'> = {
-      provider: llmProvider,
-      model: modelName,
-      apiKey: apiKeys[llmProvider] || apiKeys[llmProvider === 'gemini' ? 'google' : ''],
-      endpoint: ollamaEndpoint
-    };
-
+    // Check if an approved research plan was provided (Tracer 4 trajectory freeze)
+    const wideRequest = request as WideResearchRequest;
     let subqueries: string[] = [];
-    try {
+
+    if (wideRequest.plan?.milestones && wideRequest.plan.milestones.length > 0) {
+      subqueries = wideRequest.plan.milestones.map((m: PlanMilestone) => m.query);
       this.emitEvent({
         type: 'thought',
-        thought: `تحليل السؤال البحثي '${query}' وتوليد محاور استكشافية دقيقة توافق منظور ${perspectiveLabel}...`
+        thought: language === 'ar'
+          ? `تثبيت مسار البحث المعتمد وفق ${subqueries.length} محاور محددة في خطة البحث v${wideRequest.plan.version}...`
+          : `Executing frozen authorized research trajectory across ${subqueries.length} milestones from plan v${wideRequest.plan.version}...`
       });
+    } else {
+      // 3. Generate Sub-Queries via LLM
 
-      const subqueryPrompt = `You are a Principal Research Architect.
+      try {
+        this.emitEvent({
+          type: 'thought',
+          thought: `تحليل السؤال البحثي '${query}' وتوليد محاور استكشافية دقيقة توافق منظور ${perspectiveLabel}...`
+        });
+
+        const subqueryPrompt = `You are a Principal Research Architect.
 Topic: "${query}"
 Perspective: "${perspectiveLabel}"
 Language: ${language === 'ar' ? 'Arabic' : 'English'}
@@ -150,26 +163,27 @@ Generate 3 to 4 distinct, high-impact search queries to investigate this topic t
 Return ONLY a valid JSON array of strings, for example:
 ["query 1", "query 2", "query 3"]`;
 
-      const subqueryResponse = await ModelClient.generate({
-        ...llmBaseOpts,
-        messages: [{ role: 'user', content: subqueryPrompt }],
-        temperature: 0.2
-      });
+        const subqueryResponse = await ModelClient.generate({
+          ...llmBaseOpts,
+          messages: [{ role: 'user', content: subqueryPrompt }],
+          temperature: 0.2
+        });
 
-      const jsonMatch = subqueryResponse.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        subqueries = JSON.parse(jsonMatch[0]);
+        const jsonMatch = subqueryResponse.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          subqueries = JSON.parse(jsonMatch[0]);
+        }
+      } catch (err: any) {
+        console.warn('[DeepResearchAgent] Failed to generate subqueries via LLM, using fallbacks:', err);
       }
-    } catch (err: any) {
-      console.warn('[DeepResearchAgent] Failed to generate subqueries via LLM, using fallbacks:', err);
-    }
 
-    if (!subqueries || subqueries.length === 0) {
-      subqueries = [
-        `${query} technical overview and architecture`,
-        `${query} latest benchmarks performance analysis 2025 2026`,
-        `${query} limitations drawbacks and security`
-      ];
+      if (!subqueries || subqueries.length === 0) {
+        subqueries = [
+          `${query} technical overview and architecture`,
+          `${query} latest benchmarks performance analysis 2025 2026`,
+          `${query} limitations drawbacks and security`
+        ];
+      }
     }
 
     this.emitEvent({

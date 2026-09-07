@@ -15,7 +15,7 @@
     "build:installer": "vite build && npm run build:electron && electron-builder --win nsis",
     "build": "vite build && npm run build:electron && electron-builder",
     "preview": "vite preview",
-    "test": "node --test test/embeddings.test.mjs test/benchmark_and_fallback.test.mjs test/bm25_rrf.test.mjs test/chunker.test.mjs test/mmr.test.mjs test/embedding_cache.test.mjs test/query_expansion.test.mjs test/evidence_coverage.test.mjs test/session_lifecycle_event_buffer.test.mjs test/bounded_scraper_dedup.test.mjs test/stratified_admission.test.mjs"
+    "test": "node --test test/embeddings.test.mjs test/benchmark_and_fallback.test.mjs test/bm25_rrf.test.mjs test/chunker.test.mjs test/mmr.test.mjs test/embedding_cache.test.mjs test/query_expansion.test.mjs test/evidence_coverage.test.mjs test/session_lifecycle_event_buffer.test.mjs test/bounded_scraper_dedup.test.mjs test/stratified_admission.test.mjs test/plan_scoping_lifecycle.test.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.5.0",
