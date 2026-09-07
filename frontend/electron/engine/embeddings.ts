@@ -8,11 +8,25 @@ import { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord } from '.
 import { fuseRankings } from './rrf';
 import { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections, ContextualChunk } from './chunker';
 import { selectPassagesWithMMR, MMRCandidate, MMROptions, MMRResult } from './mmr';
+import {
+  EmbeddingCache,
+  getDefaultEmbeddingCache,
+  CachedVectorEntry,
+  CacheStats,
+  EmbeddingCacheOptions
+} from './embeddingCache';
 
 export { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord };
 export { fuseRankings };
 export { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections };
 export { selectPassagesWithMMR };
+export {
+  EmbeddingCache,
+  getDefaultEmbeddingCache,
+  CachedVectorEntry,
+  CacheStats,
+  EmbeddingCacheOptions
+};
 
 export type EmbeddingProvider = 'gemini' | 'openai' | 'ollama' | 'none';
 
@@ -23,6 +37,8 @@ export interface EmbeddingConfig {
   apiKey?: string;
   endpoint?: string;
   timeoutMs?: number;
+  disableCache?: boolean;
+  cache?: EmbeddingCache;
 }
 
 export interface ChunkRecord {
@@ -221,6 +237,8 @@ export function chunkText(
  * Base Embedding class adapted from vane-temp BaseEmbedding.
  */
 export abstract class BaseEmbedding<CONFIG = any> {
+  public provider = 'custom';
+  public model = 'default';
   constructor(protected config: CONFIG) {}
   abstract embedText(texts: string[], signal?: AbortSignal): Promise<number[][]>;
 }
@@ -235,6 +253,20 @@ export class OpenAIEmbedding extends BaseEmbedding<{
   timeoutMs?: number;
   batchSize?: number;
 }> {
+  public override provider = 'openai';
+  public override model = 'text-embedding-3-small';
+
+  constructor(config: {
+    apiKey: string;
+    model: string;
+    baseURL?: string;
+    timeoutMs?: number;
+    batchSize?: number;
+  }) {
+    super(config);
+    this.model = (config.model || 'text-embedding-3-small').trim();
+  }
+
   async embedText(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (texts.length === 0) return [];
 
@@ -305,6 +337,20 @@ export class GeminiEmbedding extends BaseEmbedding<{
   timeoutMs?: number;
   batchSize?: number;
 }> {
+  public override provider = 'gemini';
+  public override model = 'text-embedding-004';
+
+  constructor(config: {
+    apiKey: string;
+    model: string;
+    endpoint?: string;
+    timeoutMs?: number;
+    batchSize?: number;
+  }) {
+    super(config);
+    this.model = (config.model || 'text-embedding-004').trim().replace(/^models\//, '');
+  }
+
   async embedText(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (texts.length === 0) return [];
 
@@ -373,6 +419,19 @@ export class OllamaEmbedding extends BaseEmbedding<{
   timeoutMs?: number;
   batchSize?: number;
 }> {
+  public override provider = 'ollama';
+  public override model = 'nomic-embed-text';
+
+  constructor(config: {
+    model: string;
+    endpoint?: string;
+    timeoutMs?: number;
+    batchSize?: number;
+  }) {
+    super(config);
+    this.model = (config.model || 'nomic-embed-text').trim();
+  }
+
   async embedText(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (texts.length === 0) return [];
 
@@ -459,35 +518,97 @@ export class OllamaEmbedding extends BaseEmbedding<{
 }
 
 /**
+ * Transparent Caching Decorator for BaseEmbedding models.
+ * Checks persistent disk cache before issuing network calls, caching newly returned vectors.
+ */
+export class CachedEmbeddingWrapper extends BaseEmbedding {
+  public override provider: string;
+  public override model: string;
+
+  constructor(
+    public readonly innerModel: BaseEmbedding,
+    public readonly cache: EmbeddingCache = getDefaultEmbeddingCache()
+  ) {
+    super({});
+    this.provider = innerModel.provider || 'custom';
+    this.model = innerModel.model || 'default';
+  }
+
+  async embedText(texts: string[], signal?: AbortSignal): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
+    const { hits, misses } = await this.cache.getBatch(this.provider, this.model, texts);
+    if (misses.length > 0) {
+      const missingTexts = misses.map(m => m.text);
+      const fetched = await this.innerModel.embedText(missingTexts, signal);
+
+      const toStore: { text: string; vector: number[] }[] = [];
+      misses.forEach((m, idx) => {
+        const vec = fetched[idx];
+        hits.set(m.index, vec);
+        toStore.push({ text: m.text, vector: vec });
+      });
+
+      await this.cache.setBatch(this.provider, this.model, toStore);
+    }
+
+    return texts.map((_, i) => hits.get(i)!);
+  }
+}
+
+/**
+ * Wraps any BaseEmbedding instance with an EmbeddingCache if not already wrapped.
+ */
+export function wrapWithCache(
+  model: BaseEmbedding,
+  cache?: EmbeddingCache
+): BaseEmbedding {
+  if (model instanceof CachedEmbeddingWrapper) {
+    return model;
+  }
+  return new CachedEmbeddingWrapper(model, cache || getDefaultEmbeddingCache());
+}
+
+/**
  * Creates an embedding model instance according to provider configuration.
  */
 export function createEmbeddingModel(config: EmbeddingConfig): BaseEmbedding {
   const provider = (config.provider || 'none').toLowerCase().trim();
+  let modelInstance: BaseEmbedding;
 
   switch (provider) {
     case 'gemini':
-      return new GeminiEmbedding({
+      modelInstance = new GeminiEmbedding({
         apiKey: config.apiKey || '',
         model: config.model || 'text-embedding-004',
         endpoint: config.endpoint,
         timeoutMs: config.timeoutMs
       });
+      break;
     case 'openai':
-      return new OpenAIEmbedding({
+      modelInstance = new OpenAIEmbedding({
         apiKey: config.apiKey || '',
         model: config.model || 'text-embedding-3-small',
         baseURL: config.endpoint,
         timeoutMs: config.timeoutMs
       });
+      break;
     case 'ollama':
-      return new OllamaEmbedding({
+      modelInstance = new OllamaEmbedding({
         model: config.model || 'nomic-embed-text',
         endpoint: config.endpoint || 'http://localhost:11434',
         timeoutMs: config.timeoutMs
       });
+      break;
     default:
       throw new Error(`Unsupported or unconfigured embedding provider: ${provider}`);
   }
+
+  if (config.disableCache) {
+    return modelInstance;
+  }
+
+  return wrapWithCache(modelInstance, config.cache || getDefaultEmbeddingCache());
 }
 
 /**
@@ -721,6 +842,8 @@ export async function rankSourcePassages(
     domainDecay?: number;
     sourceDecay?: number;
     disableMMR?: boolean;
+    cache?: EmbeddingCache;
+    disableCache?: boolean;
   } = {}
 ): Promise<{
   evidenceText: string;
@@ -732,6 +855,8 @@ export async function rankSourcePassages(
     averageScore: number;
     hybridMode?: boolean;
     diversityScore?: number;
+    cacheHits?: number;
+    cacheMisses?: number;
   };
 }> {
   if (!sources || sources.length === 0) {
@@ -804,13 +929,33 @@ export async function rankSourcePassages(
   // Bound maximum chunks to embed in one research turn to protect API quotas/latency
   const cappedChunks = allChunks.slice(0, 96);
 
+  // Setup cache wrapper
+  let effectiveModel = embeddingModel;
+  let activeCache: EmbeddingCache | null = null;
+  let initialStats: CacheStats | null = null;
+
+  if (options.disableCache) {
+    if (embeddingModel instanceof CachedEmbeddingWrapper) {
+      effectiveModel = embeddingModel.innerModel;
+    } else {
+      effectiveModel = embeddingModel;
+    }
+  } else if (options.cache) {
+    activeCache = options.cache;
+    effectiveModel = wrapWithCache(embeddingModel, options.cache);
+    initialStats = activeCache.getStats();
+  } else if (embeddingModel instanceof CachedEmbeddingWrapper) {
+    activeCache = embeddingModel.cache;
+    initialStats = activeCache.getStats();
+  }
+
   // 2. Embed queries
   const cleanQueries = queries.filter(q => q && q.trim()).slice(0, 4);
   if (cleanQueries.length === 0) {
     cleanQueries.push('comprehensive overview');
   }
 
-  const queryVectors = await embeddingModel.embedText(cleanQueries, options.signal);
+  const queryVectors = await effectiveModel.embedText(cleanQueries, options.signal);
   const qValidation = validateVectors(queryVectors, cleanQueries.length);
   if (!qValidation.valid) {
     throw new Error(`Query embedding validation failed: ${qValidation.error}`);
@@ -818,7 +963,7 @@ export async function rankSourcePassages(
 
   // 3. Embed chunk passages using enrichedContent for maximum semantic context
   const chunkTexts = cappedChunks.map(c => c.enrichedContent || `${c.title}\n${c.content}`);
-  const chunkVectors = await embeddingModel.embedText(chunkTexts, options.signal);
+  const chunkVectors = await effectiveModel.embedText(chunkTexts, options.signal);
   const cValidation = validateVectors(chunkVectors, chunkTexts.length);
   if (!cValidation.valid) {
     throw new Error(`Document chunk embedding validation failed: ${cValidation.error}`);
@@ -1010,6 +1155,15 @@ export async function rankSourcePassages(
     ? selectedChunks.reduce((sum, c) => sum + (c.denseScore ?? c.score ?? 0), 0) / selectedChunks.length
     : 0;
 
+  let cacheHits: number | undefined = undefined;
+  let cacheMisses: number | undefined = undefined;
+
+  if (activeCache && initialStats) {
+    const finalStats = activeCache.getStats();
+    cacheHits = finalStats.hits - initialStats.hits;
+    cacheMisses = finalStats.misses - initialStats.misses;
+  }
+
   return {
     evidenceText: evidenceBlocks.join('\n\n'),
     selectedChunks,
@@ -1019,7 +1173,9 @@ export async function rankSourcePassages(
       sourcesCovered: selectedBySource.size,
       averageScore: Number(avgScore.toFixed(3)),
       hybridMode: isHybrid,
-      diversityScore
+      diversityScore,
+      cacheHits,
+      cacheMisses
     }
   };
 }
