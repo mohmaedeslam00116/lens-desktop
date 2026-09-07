@@ -15,6 +15,12 @@ export interface BM25SearchResult<T = any> {
   metadata?: T;
 }
 
+export interface WeightedTerm {
+  term: string;
+  weight?: number;
+}
+
+
 // Arabic normalization and light-stemming utilities
 const ARABIC_DIACRITICS_REGEX = /[\u064B-\u065F\u0670]/g;
 const ARABIC_TATWEEL_REGEX = /\u0640/g;
@@ -258,19 +264,20 @@ export class BM25Index<T = any> {
   }
 
   /**
-   * Scores all documents against a query string using Okapi BM25.
+   * Scores all documents against a weighted set of query terms using Okapi BM25.
+   * termScore = termIdf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (docLen / avgdl))) * weight
    */
-  public search(query: string, topK?: number): Array<BM25SearchResult<T>> {
-    if (!query || this.documents.size === 0) return [];
+  public searchWeighted(terms: WeightedTerm[], topK?: number): Array<BM25SearchResult<T>> {
+    if (!terms || terms.length === 0 || this.documents.size === 0) return [];
 
-    const queryTokens = tokenizeBilingual(query);
-    if (queryTokens.length === 0) return [];
-
-    const N = this.documents.size;
     const avgdl = this.avgDocLength;
     const scores = new Map<string, number>();
 
-    for (const term of queryTokens) {
+    for (const item of terms) {
+      const term = item.term;
+      const weight = typeof item.weight === 'number' ? Math.max(0, item.weight) : 1.0;
+      if (weight <= 0) continue;
+
       const posting = this.invertedIndex.get(term);
       if (!posting) continue;
 
@@ -279,10 +286,10 @@ export class BM25Index<T = any> {
 
       for (const [docId, tf] of posting.entries()) {
         const docLen = this.docLengths.get(docId) || avgdl;
-        // BM25 term weighting formula
+        // BM25 term weighting formula with term weight boost
         const numerator = tf * (this.k1 + 1);
         const denominator = tf + this.k1 * (1 - this.b + this.b * (docLen / avgdl));
-        const termScore = termIdf * (numerator / denominator);
+        const termScore = termIdf * (numerator / denominator) * weight;
 
         scores.set(docId, (scores.get(docId) || 0) + termScore);
       }
@@ -307,4 +314,22 @@ export class BM25Index<T = any> {
 
     return typeof topK === 'number' && topK > 0 ? results.slice(0, topK) : results;
   }
+
+  /**
+   * Scores all documents against a query string or weighted terms using Okapi BM25.
+   */
+  public search(query: string | WeightedTerm[], topK?: number): Array<BM25SearchResult<T>> {
+    if (!query || this.documents.size === 0) return [];
+
+    if (Array.isArray(query)) {
+      return this.searchWeighted(query, topK);
+    }
+
+    const queryTokens = tokenizeBilingual(query);
+    if (queryTokens.length === 0) return [];
+
+    const terms: WeightedTerm[] = queryTokens.map((term) => ({ term, weight: 1.0 }));
+    return this.searchWeighted(terms, topK);
+  }
 }
+

@@ -4,7 +4,7 @@
  * for Electron + React TypeScript architecture.
  */
 
-import { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord } from './bm25';
+import { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord, WeightedTerm } from './bm25';
 import { fuseRankings } from './rrf';
 import { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections, ContextualChunk } from './chunker';
 import { selectPassagesWithMMR, MMRCandidate, MMROptions, MMRResult } from './mmr';
@@ -15,9 +15,19 @@ import {
   CacheStats,
   EmbeddingCacheOptions
 } from './embeddingCache';
+import {
+  expandQueryBilingual,
+  ExpandedQuery,
+  ExpandedTerm,
+  ExpansionOptions,
+  QueryExpansionTelemetry
+} from './queryExpansion';
 
-export { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord };
+export { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord, WeightedTerm };
 export { fuseRankings };
+export { expandQueryBilingual, ExpandedQuery, ExpandedTerm, ExpansionOptions, QueryExpansionTelemetry };
+
+
 export { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections };
 export { selectPassagesWithMMR };
 export {
@@ -794,7 +804,9 @@ export function fallbackEvidence(
           });
         });
 
-        const searchResults = bm25.search(cleanQueries.join(' '));
+        const rawQuery = cleanQueries.join(' ');
+        const expanded = expandQueryBilingual(rawQuery);
+        const searchResults = bm25.searchWeighted(expanded.allTerms);
         if (searchResults.length > 0) {
           const bySource = new Map<number, string>();
           for (const res of searchResults) {
@@ -844,6 +856,7 @@ export async function rankSourcePassages(
     disableMMR?: boolean;
     cache?: EmbeddingCache;
     disableCache?: boolean;
+    disableQueryExpansion?: boolean;
   } = {}
 ): Promise<{
   evidenceText: string;
@@ -857,6 +870,7 @@ export async function rankSourcePassages(
     diversityScore?: number;
     cacheHits?: number;
     cacheMisses?: number;
+    queryExpansion?: QueryExpansionTelemetry;
   };
 }> {
   if (!sources || sources.length === 0) {
@@ -996,6 +1010,8 @@ export async function rankSourcePassages(
 
   // 5. Hybrid Search: BM25 Lexical Indexing & Reciprocal Rank Fusion (RRF)
   let isHybrid = false;
+  let queryExpansionStats: QueryExpansionTelemetry | undefined = undefined;
+
   if (!options.disableBM25) {
     try {
       const bm25 = new BM25Index<ChunkRecord>();
@@ -1004,7 +1020,14 @@ export async function rankSourcePassages(
       });
 
       const bm25Query = cleanQueries.join(' ');
-      const bm25Results = bm25.search(bm25Query);
+      let bm25Results;
+      if (!options.disableQueryExpansion) {
+        const expanded = expandQueryBilingual(bm25Query);
+        queryExpansionStats = expanded.telemetry;
+        bm25Results = bm25.searchWeighted(expanded.allTerms);
+      } else {
+        bm25Results = bm25.search(bm25Query);
+      }
       const bm25ScoreMap = new Map(bm25Results.map(r => [r.id, r.score]));
 
       cappedChunks.forEach(c => {
@@ -1175,7 +1198,8 @@ export async function rankSourcePassages(
       hybridMode: isHybrid,
       diversityScore,
       cacheHits,
-      cacheMisses
+      cacheMisses,
+      queryExpansion: queryExpansionStats
     }
   };
 }
