@@ -96,3 +96,9 @@ A structured research blueprint generated in Phase 1 containing the strategic `o
 
 ### CollaborativeApproval
 The versioned human-in-the-loop checkpoint (`plan_proposed` -> `plan_approved`) where the user edits subqueries, toggles skills, and explicitly authorizes execution, binding the engine's retrieval trajectory and budget limits to the approved plan version.
+
+### BoundedScraperPool
+An asynchronous scraping worker queue (`frontend/electron/engine/scraperPool.ts`) that enforces global concurrency limits ($C_{\text{global}} = 10$) and per-host limits ($C_{\text{host}} = 2$) with request timeouts and exponential backoff, enabling parallel ingestion of 100–200 sources in ~22 seconds without triggering HTTP 429 bans or socket saturation.
+
+### StratifiedEvidenceAdmission
+A facet-aware passage selection strategy that guarantees a minimum quota of admitted chunks per approved milestone ($K_{\text{min}} = 8$), preventing early subqueries from monopolizing the synthesis evidence buffer and ensuring comprehensive representation across all plan facets.
