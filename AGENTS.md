@@ -37,3 +37,7 @@ Single-context repository layout (`CONTEXT.md` at root). See `docs/agents/domain
 - Use domain terminology defined in `CONTEXT.md`.
 - Strictly adhere to `BRAND.md` and `DESIGN.md`: monochrome neutral palette (#111111 / #191919), Inter and Cairo typography, concentric lens mark, no decorative gradients or unsupported "Pro" badge.
 - Before committing UI changes, verify via `impeccable detect`.
+
+### Pull Request & Review Workflow
+- **Pull Request Requirement**: After any specification (`/to-spec`) or issue implementation is completed and verified against the test suite, a Pull Request (PR) must be created (using `gh pr create`) instead of pushing directly to `main`.
+- **Review Before Merge**: Every PR must undergo review (Standards Reviewer and Spec Reviewer) and have all tests pass green before it is merged into the project (`main`). Direct merges without PR review are prohibited.
