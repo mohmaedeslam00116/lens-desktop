@@ -114,3 +114,9 @@ An interactive slide-over inspector component that surfaces the verbatim source 
 
 ### FacetGroupedShelf
 A structured source explorer view that organizes the 100–200 ingested research sources into distinct tabs/sections corresponding to approved research plan milestones, providing instant filtering between cited-only and all ingested pages.
+
+### ProgressiveDisclosure
+The standard 3-tier loading mechanism for Agent Skills (`agentskills.io`): Tier 1 (Catalog, ~50–100 tokens per skill at session start), Tier 2 (Instructions, `<5000` tokens loaded on activation), and Tier 3 (Resources, referenced documentation and static assets loaded strictly on demand).
+
+### CompactionShield
+A context management protection policy that tags activated skill instructions with `<skill_content>` delimiters and exempts them from pruning or summarization during multi-hop research passes, ensuring domain instructions remain intact across the research lifecycle.
