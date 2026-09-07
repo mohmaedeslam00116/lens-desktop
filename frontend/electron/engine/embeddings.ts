@@ -7,10 +7,12 @@
 import { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord } from './bm25';
 import { fuseRankings } from './rrf';
 import { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections, ContextualChunk } from './chunker';
+import { selectPassagesWithMMR, MMRCandidate, MMROptions, MMRResult } from './mmr';
 
 export { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord };
 export { fuseRankings };
 export { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections };
+export { selectPassagesWithMMR };
 
 export type EmbeddingProvider = 'gemini' | 'openai' | 'ollama' | 'none';
 
@@ -38,6 +40,7 @@ export interface ChunkRecord {
   enrichedContent?: string;
   sectionPath?: string[];
   contextHeader?: string;
+  vector?: number[];
 }
 
 export interface ModelOption {
@@ -713,6 +716,11 @@ export async function rankSourcePassages(
     bm25Weight?: number;
     rrfK?: number;
     disableBM25?: boolean;
+    mmrLambda?: number;
+    maxPerDomain?: number;
+    domainDecay?: number;
+    sourceDecay?: number;
+    disableMMR?: boolean;
   } = {}
 ): Promise<{
   evidenceText: string;
@@ -723,6 +731,7 @@ export async function rankSourcePassages(
     sourcesCovered: number;
     averageScore: number;
     hybridMode?: boolean;
+    diversityScore?: number;
   };
 }> {
   if (!sources || sources.length === 0) {
@@ -733,7 +742,7 @@ export async function rankSourcePassages(
     };
   }
 
-  const maxTotalPassages = Math.max(4, Math.min(24, options.maxTotalPassages || 14));
+  const maxTotalPassages = Math.max(1, Math.min(32, options.maxTotalPassages || 14));
   const maxPerSource = Math.max(1, Math.min(4, options.maxPerSource || 2));
   const maxContextChars = Math.max(4000, Math.min(20000, options.maxContextChars || 11000));
 
@@ -824,6 +833,7 @@ export async function rankSourcePassages(
   // 4. Compute similarity scores
   cappedChunks.forEach((chunk, idx) => {
     const chunkVec = chunkVectors[idx];
+    chunk.vector = chunkVec;
     let maxSim = -1;
 
     for (let qIdx = 0; qIdx < queryVectors.length; qIdx++) {
@@ -885,60 +895,83 @@ export async function rankSourcePassages(
     }
   }
 
-  // 5. Source Diversity & Passage Selection
-  const chunksBySource = new Map<number, ChunkRecord[]>();
-  cappedChunks.forEach(chunk => {
-    if (!chunksBySource.has(chunk.citationId)) {
-      chunksBySource.set(chunk.citationId, []);
+  // 6. Source Diversity & Passage Selection (MMR)
+  let selectedChunks: ChunkRecord[] = [];
+  let diversityScore = 1.0;
+
+  if (options.disableMMR) {
+    const chunksBySource = new Map<number, ChunkRecord[]>();
+    cappedChunks.forEach(chunk => {
+      if (!chunksBySource.has(chunk.citationId)) {
+        chunksBySource.set(chunk.citationId, []);
+      }
+      chunksBySource.get(chunk.citationId)!.push(chunk);
+    });
+
+    for (const [, list] of chunksBySource.entries()) {
+      list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     }
-    chunksBySource.get(chunk.citationId)!.push(chunk);
-  });
 
-  for (const [, list] of chunksBySource.entries()) {
-    list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  }
+    let currentChars = 0;
+    const sourceCitationIds = Array.from(chunksBySource.keys()).sort((a, b) => {
+      const topA = chunksBySource.get(a)?.[0]?.score ?? 0;
+      const topB = chunksBySource.get(b)?.[0]?.score ?? 0;
+      return topB - topA;
+    });
 
-  const selectedChunks: ChunkRecord[] = [];
-  const coveredCitationIds = new Set<number>();
-  let currentChars = 0;
-
-  // Pass 1: Ensure diversity — pick the best chunk from each source
-  const sourceCitationIds = Array.from(chunksBySource.keys()).sort((a, b) => {
-    const topA = chunksBySource.get(a)?.[0]?.score ?? 0;
-    const topB = chunksBySource.get(b)?.[0]?.score ?? 0;
-    return topB - topA;
-  });
-
-  for (const citId of sourceCitationIds) {
-    if (selectedChunks.length >= maxTotalPassages) break;
-    const topChunk = chunksBySource.get(citId)?.[0];
-    if (topChunk) {
-      if (currentChars + topChunk.content.length <= maxContextChars) {
-        selectedChunks.push(topChunk);
-        coveredCitationIds.add(citId);
-        currentChars += topChunk.content.length;
+    for (const citId of sourceCitationIds) {
+      if (selectedChunks.length >= maxTotalPassages) break;
+      const topChunk = chunksBySource.get(citId)?.[0];
+      if (topChunk) {
+        if (currentChars + topChunk.content.length <= maxContextChars) {
+          selectedChunks.push(topChunk);
+          currentChars += topChunk.content.length;
+        }
       }
     }
+
+    const remainingChunks: ChunkRecord[] = [];
+    for (const [citId, list] of chunksBySource.entries()) {
+      const alreadyPicked = selectedChunks.filter(c => c.citationId === citId).length;
+      const eligible = list.slice(alreadyPicked, maxPerSource);
+      remainingChunks.push(...eligible);
+    }
+
+    remainingChunks.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+    for (const chunk of remainingChunks) {
+      if (selectedChunks.length >= maxTotalPassages) break;
+      if (currentChars + chunk.content.length > maxContextChars) continue;
+      selectedChunks.push(chunk);
+      currentChars += chunk.content.length;
+    }
+  } else {
+    const mmrCandidates: MMRCandidate<ChunkRecord>[] = cappedChunks.map((chunk, idx) => ({
+      id: chunk.id,
+      score: chunk.score ?? 0,
+      vector: chunk.vector || chunkVectors[idx],
+      content: chunk.content,
+      sourceId: chunk.citationId,
+      domain: chunk.domain,
+      credibilityScore: sources[chunk.sourceIndex]?.credibilityScore,
+      metadata: chunk
+    }));
+
+    const mmrResult = selectPassagesWithMMR<ChunkRecord>(mmrCandidates, {
+      lambda: typeof options.mmrLambda === 'number' ? options.mmrLambda : 0.7,
+      maxPassages: maxTotalPassages,
+      maxPerSource: maxPerSource,
+      maxPerDomain: options.maxPerDomain ?? 3,
+      domainDecay: options.domainDecay ?? 0.75,
+      sourceDecay: options.sourceDecay ?? 0.70,
+      maxContextChars: maxContextChars
+    });
+
+    selectedChunks = mmrResult.selected.map(s => s.metadata!);
+    diversityScore = mmrResult.metrics.diversityScore;
   }
 
-  // Pass 2: Fill remaining budget with highest scoring remaining chunks up to maxPerSource
-  const remainingChunks: ChunkRecord[] = [];
-  for (const [citId, list] of chunksBySource.entries()) {
-    const alreadyPicked = selectedChunks.filter(c => c.citationId === citId).length;
-    const eligible = list.slice(alreadyPicked, maxPerSource);
-    remainingChunks.push(...eligible);
-  }
-
-  remainingChunks.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-
-  for (const chunk of remainingChunks) {
-    if (selectedChunks.length >= maxTotalPassages) break;
-    if (currentChars + chunk.content.length > maxContextChars) continue;
-    selectedChunks.push(chunk);
-    currentChars += chunk.content.length;
-  }
-
-  // Sort selected chunks by citationId then chunkIndex
+  // Sort selected chunks by citationId then chunkIndex for sequential citation presentation
   selectedChunks.sort((a, b) => {
     if (a.citationId !== b.citationId) {
       return a.citationId - b.citationId;
@@ -946,7 +979,7 @@ export async function rankSourcePassages(
     return a.chunkIndex - b.chunkIndex;
   });
 
-  // 6. Build final evidence text formatted with citations
+  // 7. Build final evidence text formatted with citations
   const evidenceBlocks: string[] = [];
   const selectedBySource = new Map<number, ChunkRecord[]>();
   selectedChunks.forEach(c => {
@@ -985,7 +1018,8 @@ export async function rankSourcePassages(
       vectorDimensions: qValidation.dimensions,
       sourcesCovered: selectedBySource.size,
       averageScore: Number(avgScore.toFixed(3)),
-      hybridMode: isHybrid
+      hybridMode: isHybrid,
+      diversityScore
     }
   };
 }
