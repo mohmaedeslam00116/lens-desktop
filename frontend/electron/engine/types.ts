@@ -30,8 +30,70 @@ export interface SourceItem {
   credibilityScore: number;
 }
 
+export type ResearchMode = 'standard' | 'wide';
+
+export type SessionState =
+  | 'planning'
+  | 'awaiting_approval'
+  | 'running'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+  | 'budget_exhausted';
+
+export interface PlanMilestone {
+  id: string;
+  query: string;
+  rationale: string;
+  status?: 'pending' | 'in_progress' | 'completed';
+}
+
+export interface ResearchPlan {
+  id: string;
+  version: number;
+  objective: string;
+  milestones: PlanMilestone[];
+  suggestedSkills: string[];
+  estimatedScope: {
+    targetSources: number;
+    maxHops: number;
+  };
+  status?: 'draft' | 'approved' | 'rejected';
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface PartialEvidenceDraft {
+  report: string;
+  sources: SourceItem[];
+  subqueries: string[];
+  reflections: string[];
+  graphNodes?: ResearchGraphNode[];
+  interruptedAt?: number;
+  reason?: string;
+}
+
 export interface LiveEvent {
-  type: 'status' | 'thought' | 'subqueries' | 'source' | 'report_chunk' | 'finished' | 'error' | 'reflection' | 'graph_node';
+  type:
+    | 'status'
+    | 'thought'
+    | 'subqueries'
+    | 'source'
+    | 'report_chunk'
+    | 'finished'
+    | 'error'
+    | 'reflection'
+    | 'graph_node'
+    | 'plan_created'
+    | 'plan_updated'
+    | 'plan_approved'
+    | 'session_state'
+    | 'cancelled';
+  eventId?: number;
+  sessionId?: string;
+  state?: SessionState;
+  plan?: ResearchPlan;
+  partialDraft?: PartialEvidenceDraft;
   message?: string;
   step?: string;
   thought?: string;
@@ -83,3 +145,27 @@ export interface SearchResultItem {
   url: string;
   snippet: string;
 }
+
+export interface WideResearchRequest extends ResearchRequest {
+  mode?: ResearchMode;
+  plan?: ResearchPlan;
+  approvedSkills?: string[];
+  maxSources?: number;
+  maxHops?: number;
+}
+
+export interface WideResearchResult {
+  report: string;
+  plan: ResearchPlan;
+  sources: SourceItem[];
+  coverageAudit?: LiveEvent['coverage'];
+  metrics?: {
+    totalSources?: number;
+    durationMs?: number;
+    hopsExecuted?: number;
+    costs?: number;
+  };
+  state: SessionState;
+  partialDraft?: PartialEvidenceDraft;
+}
+

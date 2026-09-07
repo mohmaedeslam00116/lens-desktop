@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Domain Types, EventRingBuffer & Session Lifecycle ([#28](https://github.com/mohmaedeslam00116/lens-desktop/issues/28))**:
+  - Declared core domain types in `frontend/electron/engine/types.ts`: `ResearchMode`, `SessionState`, `PlanMilestone`, `ResearchPlan`, `PartialEvidenceDraft`, `WideResearchRequest`, and `WideResearchResult`.
+  - Implemented `EventRingBuffer` (`eventBuffer.ts`) with configurable capacity (default 300), strictly monotonic sequence numbering (`eventId: 1, 2, 3...`), circular FIFO eviction, and delta replay via `getEventsSince(lastEventId)` to guarantee seamless WebSocket reconnect recovery.
+  - Implemented `SessionLifecycleManager` and `ResearchSession` (`sessionLifecycle.ts`) managing the 4-state lifecycle (`planning` -> `awaiting_approval` -> `running` -> `completed`/`cancelled`/`failed`), state transition enforcement, plan approval, and sub-second `<100ms` `AbortController` cancellation preserving partial collected evidence drafts.
+  - Upgraded embedded engine server (`server.ts`) with `POST /api/research/cancel`, `POST /api/research/plan/approve`, and WebSocket delta event replays.
 - **LENS Wide Research Mode Decision ([#11](https://github.com/mohmaedeslam00116/lens-desktop/issues/11))**: Formally established `LENS Wide Research` (`بحث استقصائي موسع`) as a dedicated multi-phase research mode (`ResearchMode = 'standard' | 'wide'`), distinct from standard depth tiers, and updated the domain model in `CONTEXT.md`.
 - **Quality, Budget & Evaluation Contract Decision ([#18](https://github.com/mohmaedeslam00116/lens-desktop/issues/18))**: Defined 5-tier observable source metrics, flexible 50–200 source budget with smart early exit (>=80–85% coverage), honest budget exhaustion warnings with `[Extend Research]` action, and 200/500-source offline scale scenarios with zero-hallucinated citation integrity.
 - **Multi-Phase Pipeline Architecture Decision ([#12](https://github.com/mohmaedeslam00116/lens-desktop/issues/12))**: Established dedicated `WideResearchAgent` orchestrator, defined 5-phase lifecycle with WebSocket plan approval checkpoint, and adopted 3-tier evidence architecture decoupling massive raw corpus storage from LLM generation context.
