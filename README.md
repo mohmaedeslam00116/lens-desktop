@@ -48,6 +48,11 @@
    - 3-level deduplication (`DeduplicationEngine`): Level 1 canonical URL normalization, Level 2 exact SHA-256 content hashing invariant to whitespace, casing, and punctuation, and Level 3 64-bit SimHash near-duplicate detection with Hamming distance threshold $\le 3$.
    - Memory-bounded ingestion pipeline keeping 200 ingested sources strictly under 10 MB RAM.
 
+10. **Stratified Evidence Admission & Multi-Hop Coverage Audit:**
+    - Facet-aware passage selection (`StratifiedEvidenceAdmission`) guaranteeing representation across all approved milestones ($K_{\text{min}} = 8$) before allocating residual capacity by global hybrid relevance score.
+    - Mathematical coverage auditing (`evidenceCoverage.ts`) quantifying subquery coverage, quantitative metric density, analytical perspective breadth, and domain diversity.
+    - Smart early exit when coverage meets target quality threshold ($\ge 80\%$), with honest budget exhaustion telemetry and interactive `[Extend Research]` action payloads when retrieval limits are reached.
+
 ---
 
 ## 🏗️ Repository Structure

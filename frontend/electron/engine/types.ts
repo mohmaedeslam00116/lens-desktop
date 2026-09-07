@@ -73,6 +73,20 @@ export interface PartialEvidenceDraft {
   reason?: string;
 }
 
+export interface ResearchExtensionPayload {
+  budgetExhausted: boolean;
+  reason: string;
+  suggestedAdditionalSources: number;
+  suggestedAdditionalHops: number;
+  uncoveredMilestones: string[];
+  uncoveredSubqueries: string[];
+  missingAspects: string[];
+  actionText: {
+    ar: string;
+    en: string;
+  };
+}
+
 export interface LiveEvent {
   type:
     | 'status'
@@ -94,6 +108,7 @@ export interface LiveEvent {
   state?: SessionState;
   plan?: ResearchPlan;
   partialDraft?: PartialEvidenceDraft;
+  extensionPayload?: ResearchExtensionPayload;
   message?: string;
   step?: string;
   thought?: string;

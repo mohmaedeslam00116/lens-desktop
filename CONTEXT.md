@@ -113,7 +113,10 @@ The central deduplication coordinator (`frontend/electron/engine/dedup.ts`) main
 A 64-bit locality-sensitive integer projection computed from token frequency distributions, where the bitwise Hamming distance between two fingerprints is mathematically proportional to the cosine distance between their underlying text vectors.
 
 ### StratifiedEvidenceAdmission
-A facet-aware passage selection strategy that guarantees a minimum quota of admitted chunks per approved milestone ($K_{\text{min}} = 8$), preventing early subqueries from monopolizing the synthesis evidence buffer and ensuring comprehensive representation across all plan facets.
+A facet-aware passage selection strategy implemented in `frontend/electron/engine/admission.ts` that guarantees a minimum quota of admitted chunks per approved milestone ($K_{\text{min}} = 8$) before allocating residual capacity by global hybrid relevance score ($M_{\text{max}} = 60\text{--}80$). Automatically handles under-quota milestones by returning spare slots to the residual pool, dynamically enforces proportional fairness when milestone count times $K_{\text{min}}$ exceeds $M_{\text{max}}$, and interfaces with mathematical coverage auditing to trigger smart early exit ($\ge 80\%$) or honest budget exhaustion.
+
+### ResearchExtensionPayload
+A structured, interactive action payload emitted when retrieval limits (max hops or source budget) are reached while coverage remains below the quality threshold ($< 80\%$), containing suggestions for additional sources (+20) and hops (+1), identified coverage deficits, and bilingual action buttons (`[Extend Research]` / `[توسيع نطاق البحث]`) to give the user explicit steering authority over budget expansion.
 
 ### HierarchicalSynthesis
 A multi-stage synthesis strategy where each approved research milestone is first synthesized into a detailed analytical section from its admitted evidence, followed by a meta-synthesis pass generating executive summaries, cross-cutting comparison matrices, and conclusions, preventing context degradation.
