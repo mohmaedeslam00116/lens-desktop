@@ -135,3 +135,9 @@ A hybrid activation model providing deterministic controller pre-activation duri
 
 ### HostToolMapper
 The integration seam that bridges standard skill `allowed-tools` declarations to native LENS engine primitives (`MultiSearchProvider`, `PageScraper`, `read_resource`), providing transparent advisory notices for unmapped tools while strictly preventing unauthorized privilege escalation.
+
+### SkillLifecycleState
+The canonical 5-state representation of an Agent Skill in LENS (`Installed`, `Enabled`, `Selected`, `Active`, `Incompatible`), providing explicit visibility over catalog availability, plan inclusion, context injection, and dependency status.
+
+### SkillCollisionResolver
+The non-destructive conflict handling mechanism invoked when an imported package shares the name of an existing skill, prompting the user with explicit choices (`Keep Existing`, `Overwrite with Backup`, `Rename on Import`) while isolating running sessions from disk modifications.
