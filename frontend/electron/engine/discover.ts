@@ -163,7 +163,7 @@ export class DiscoverService {
           title: 'نماذج التفكير الاستدلالي (Reasoning Models) تتصدر المشهد التقني في 2026',
           link: 'https://news.google.com',
           source: 'LENS',
-          domain: 'kashif.ai',
+          domain: 'lens.internal',
           timeAgo: 'منذ ساعة',
           category,
           researchQuery: 'المعمارية الهندسية ونماذج التفكير الاستدلالي Reasoning Models وتطوراتها لعام 2026'
@@ -197,7 +197,7 @@ export class DiscoverService {
         title: 'Frontier AI Reasoning Models and Compute Scaling Laws in 2026',
         link: 'https://news.google.com',
         source: 'LENS',
-        domain: 'kashif.ai',
+        domain: 'lens.internal',
         timeAgo: '1h ago',
         category,
         researchQuery: 'Frontier AI reasoning models architecture and test-time compute scaling 2026'

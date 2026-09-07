@@ -1,99 +1,102 @@
-# كـاشِـف Pro | KASHIF — Autonomous Deep Research Assistant
+# LENS — Research, in focus.
+### نظرة أعمق. فهم أوضح.
 
-**كاشف (KASHIF Pro)** هو تطبيق سطح مكتب متقدم ومستقل مخصص لمهمة **البحث والاستقصاء المعرفي العميق (Autonomous Deep Research)** وتصفح الإنترنت وتوليد تقارير شاملة وموثقة أكاديمياً بالمصادر، مبني بالكامل بمعمارية مدمجة وسريعة باستخدام **Electron 29 + React 18 + TypeScript**.
-
----
-
-## 🌟 المميزات الرئيسية (Core Features)
-
-1. **محرك بحث واستقصاء مدمج (Native Embedded Engine):**
-   - محرك بحث متقدم مكتوب بالكامل بـ TypeScript ومدمج داخل Electron (بدون الحاجة لـ Python أو Docker).
-   - تفكيك الاستعلامات إلى محاور فرعية، واستخراج المحتوى، وتدقيق الفجوات المعرفية (Multi-hop Gap Reflection).
-
-2. **رادار التفكير الزمني بأسلوب Perplexity (Live Reasoning Radar):**
-   - واجهة هوائية وعصرية تعرض خطوات التفكير اللحظية، وتصفح المصادر، والنطاقات المستطلعة.
-   - كبسولات مصادر خفيفة مع أيقونات المواقع (Favicons) وروابط قابلة للنقر.
-
-3. **رادار الاستكشاف الإخباري الحي (Live Discover Feed):**
-   - استخلاص حي وفوري لأحدث الأخبار والمستجدات من كبرى وكالات الأنباء العالمية الموثوقة.
-   - تصنيفات متعددة: تقنية وذكاء اصطناعي، مال واقتصاد، علوم وابتكار، أحداث عالمية، رياضة، ثقافة.
-   - إمكانية بدء بحث وتقصي معمق فوري حول أي خبر بنقرة واحدة.
-
-4. **تقارير ومخرجات ذات طابع احترافي (Publication-Grade Reports):**
-   - صياغة تقارير تحليلية موثقة بمراجع مرقمة بدقة `[1] [2]`.
-   - توليد جداول مقارنة ومخططات تدفق معمارية (Mermaid diagrams) عند الحاجة.
-   - شريط بيانات القراءة التفاعلي وفهرس محتويات سريع (Table of Contents).
-
-5. **استكشاف النماذج الحية واختبار الاتصال (Dynamic Model Discovery):**
-   - بمجرد إدخال مفتاح الـ API، يقوم التطبيق بجلب كافة النماذج المتاحة من حسابك فورياً.
-   - بطاقات استكشاف النماذج مع اختبار الاتصال وقياس زمن الاستجابة (Latency Ping).
-   - دعم: **Google Gemini**, **OpenAI**, **Anthropic Claude**, **Groq**, **DeepSeek**, **OpenRouter**, **Mistral**, و **Ollama** المحلي.
-
-6. **تصدير متعدد الصيغ واستماع صوتي (Multi-Format Export & Audio):**
-   - تصدير فوري بنقرة واحدة إلى: **PDF**, **Microsoft Word (.docx)**, **Markdown (.md)**, و **CSV** للجداول.
-   - قارئ صوتي ذكي يستعرض التقرير نطقياً باللغتين العربية والإنجليزية.
-
-7. **دعم كامل للغة العربية والإنجليزية (Bilingual RTL/LTR):**
-   - واجهة متجاوبة بالكامل تدعم اتجاه اليمين لليسار (RTL) للعربية، واتجاه اليسار لليمين (LTR) للإنجليزية.
+**LENS** is an autonomous desktop research workspace that turns complex questions into clear, source-backed understanding. Designed with a focused, monochrome aesthetic inspired by Vercel and Cursor, LENS provides a familiar productivity environment with a native TypeScript embedded engine, live topical discovery, and multi-format report synthesis.
 
 ---
 
-## 🏗️ معمارية المشروع (Architecture)
+## 🌟 Key Capabilities
+
+1. **Focused Research Workspace:**
+   - Central framed question composer with quick, balanced, and deep research modes.
+   - Targeted search domain focus (All Web, Academic Papers, Community Discussions).
+   - Zero-dependency embedded TypeScript engine running locally on port 8000 inside Electron.
+
+2. **Streamed Reasoning & Evidence Progress:**
+   - Live research timeline displaying search sub-queries, visited web sources, and academic citations.
+   - Transparent gap reflection (STORM & Open Deep Research multi-hop methodology).
+
+3. **Live Intelligence & Discovery Feed:**
+   - Real-time global news and trending research topics across Technology & AI, Markets & Finance, Science, and World Affairs.
+   - One-click transition from any trending headline into a deep investigation.
+
+4. **Structured Report Dossiers:**
+   - Publication-grade markdown reports with inline citations (`[1]`, `[2]`).
+   - Contextual GitHub-flavored comparison tables and Mermaid workflow diagrams.
+   - Dedicated reading time metrics and dynamic table of contents.
+
+5. **Multi-Provider & Local Model Autonomy:**
+   - Dynamic model discovery upon API key configuration.
+   - Latency diagnostics and connection testing.
+   - Full support for **Google Gemini**, **OpenAI**, **Anthropic Claude**, **Groq**, **DeepSeek**, **OpenRouter**, **Mistral**, and local offline **Ollama**.
+
+6. **Bilingual Navigation (RTL / LTR):**
+   - Seamless Arabic and English interfaces with direction-aware layouts and native typography (Inter & Cairo).
+   - Upright, left-to-right LENS wordmark preserved across both languages.
+
+7. **Multi-Format Export & Speech:**
+   - Instant export to **PDF**, **Microsoft Word (.docx)**, **Markdown (.md)**, and **CSV** for extracted tables.
+   - Built-in text-to-speech reading for auditory review.
+
+---
+
+## 🏗️ Repository Structure
 
 ```
-kashif-desktop/
-├── AGENTS.md                  # إرشادات وقواعد وكلاء الذكاء الاصطناعي
-├── CONTEXT.md                 # معجم النطاق والمصطلحات (Domain Model)
-├── docs/                      # التوثيق والقرارات المعمارية
-│   └── agents/                # تهيئة تتبع المهام والتصنيفات (Issue Tracker & Triage)
-├── frontend/                  # تطبيق سطح المكتب الكامل
-│   ├── electron/              # معمارية الخادم المدمج وعملية Electron الأساسية
-│   │   ├── engine/            # محرك البحث والاستقصاء المدمج
-│   │   │   ├── agent.ts       # وكيل البحث العميق متعدد الخطوات
-│   │   │   ├── discover.ts    # محرك جلب الأخبار الحية
-│   │   │   ├── models.ts      # عميل مزودي الذكاء الاصطناعي واستكشاف النماذج
-│   │   │   ├── scraper.ts     # أداة قراءة وتجريد صفحات الويب
-│   │   │   ├── search.ts      # محركات البحث (DuckDuckGo, Tavily, Serper)
-│   │   │   └── server.ts      # خادم REST & WebSocket الداخلي
-│   │   ├── main.ts            # إدارة نافذة Electron ودورة الحياة
-│   │   └── preload.ts         # جسر الأمان والتخزين المشفر DPAPI
-│   ├── src/                   # واجهة React + Tailwind
-│   │   ├── components/        # مكونات الواجهة (PerplexityRadar, ReportRenderer, Workspace, etc.)
-│   │   └── App.tsx            # الحالة العامة والاتصال اللحظي
-│   └── package.json
-└── package.json               # سكربتات التشغيل الموحدة
+lens-desktop/
+├── BRAND.md                   # Brand identity, mark specifications, and voice guidelines
+├── CONTEXT.md                 # Project domain model and glossary
+├── DESIGN.md                  # Comprehensive design system tokens and component specs
+├── PRODUCT.md                 # Product definition, users, positioning, and commitments
+├── AGENTS.md                  # Operational guidelines for AI agents and engineering skills
+├── docs/                      # Architectural documents and issue tracker setup
+│   └── agents/                # GitHub issues, triage labels, and domain doc conventions
+├── frontend/                  # Electron desktop application
+│   ├── electron/              # Electron main process and embedded engine
+│   │   ├── engine/            # Native TypeScript research, search, scraper, and discovery
+│   │   ├── main.ts            # Electron window lifecycle
+│   │   └── preload.ts         # Secure IPC bridge
+│   ├── src/                   # React 18 UI components, state, and styles
+│   └── package.json           # Application manifest (Product Name: LENS)
+└── package.json               # Root workspace scripts
 ```
 
 ---
 
-## 🚀 التشغيل والتطوير (Development)
+## 🚀 Development & Setup
 
-### 1. تثبيت الاعتماديات:
+### Prerequisites
+- Node.js 18+
+- npm
+
+### 1. Install dependencies
 ```bash
 cd frontend
 npm install
 ```
 
-### 2. تشغيل بيئة التطوير (Hot Reloading):
+### 2. Start in development mode
 ```bash
 npm run dev
 ```
 
 ---
 
-## 📦 بناء مثبت الويندوز (.exe Installer)
+## 📦 Building the Windows Installer (.exe)
 
-لتجميع التطبيق كملف تثبيت قياسي لنظام Windows:
+To compile the native desktop executable and NSIS setup installer:
+
 ```bash
 cd frontend
 npm run build:installer
 ```
-سيتم إنشاء ملف المثبت التنفيذي المكتبي في:
+
+The installer will be generated at:
 ```
-frontend/dist-installer/Deep Research AI Setup 1.0.0.exe
+frontend/dist-installer/LENS Setup 1.0.0.exe
 ```
 
 ---
 
-## 📄 الترخيص (License)
-مشروع مفتوح المصدر ومخصص للأغراض البحثية والاستقصائية.
+## 📄 License
+Open source and crafted for research and investigative inquiry.
