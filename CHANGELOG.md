@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Native Agent Skills Discovery, Validation & Path Sandboxing ([#32](https://github.com/mohmaedeslam00116/lens-desktop/issues/32))**:
+  - Implemented 3-Tier `SkillRegistry` (`frontend/electron/engine/skills/registry.ts`):
+    - Priority-based deterministic discovery hierarchy: Workspace (`<workspace>/.agents/skills/`, priority 1) > User Global (`%APPDATA%/LENS/skills/`, `~/.agents/skills/`, priority 2) > Built-in Bundle (`<resources>/skills/`, priority 3).
+    - Deterministic precedence shadowing: Higher-priority scopes cleanly shadow duplicate skill names from lower scopes without collision or crash.
+    - Lightweight Tier 1 catalog disclosure via `listSummaries()`, providing token-efficient metadata (`name`, `description`, `scope`, `allowedTools`) at session initialization.
+    - Resilient discovery error handling: records diagnostic reports for invalid skill directories while continuing enumeration across valid skills.
+  - Lenient YAML Frontmatter Parser (`frontend/electron/engine/skills/parser.ts`):
+    - Recovers unquoted colons inside `description` fields without failing, ensuring full compatibility with community skills and URL references.
+    - Strict validation: enforces lowercase alphanumeric naming (`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`), non-empty description bounded to $\le 1024$ characters, and structured `allowed-tools` array normalization.
+  - Strict Security Path Sandboxing (`frontend/electron/engine/skills/pathBoundary.ts`):
+    - `SkillPathBoundary` enforcing normalized containment resolution (`path.resolve()`).
+    - Rejects path traversal (`../../`), root escapes, null-byte poisoning (`\0`), and out-of-root symlink dereferencing by throwing `SECURITY_ACCESS_DENIED`.
+    - Safe helper methods: `resolveSafePath()`, `readResource()`, `listFiles()`, and `existsSync()`.
+  - Native Skill Package Loader (`frontend/electron/engine/skills/loader.ts`):
+    - Validates `SKILL.md` / `skill.md` presence, extracts frontmatter, and provides safe secondary resource retrieval.
+  - Comprehensive 22-test unit suite (`frontend/test/skills_discovery_sandboxing.test.mjs`) verifying lenient parsing, frontmatter validation, path traversal defense, symlink sandboxing, 3-tier precedence shadowing, and fault-tolerant catalog discovery.
 - **Collaborative Research Plan Scoping & Approval UX ([#31](https://github.com/mohmaedeslam00116/lens-desktop/issues/31))**:
   - Implemented Phase 1 Plan Scoping Generator (`frontend/electron/engine/scoping.ts`):
     - Generates versioned 4-element structured `ResearchPlan` (`objective`, `milestones`, `suggestedSkills`, `estimatedScope`) for wide and storm research modes.

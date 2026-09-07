@@ -58,6 +58,11 @@
     - Interactive bilingual React `PlanApprovalModal` with inline subquery editing, milestone creation and removal, and contextual skill toggles.
     - Strict human-in-the-loop trajectory authorization freezing retrieval bounds, paired with iterative regeneration guidance (`v1` -> `v2`) and sub-second cancellation resilience.
 
+12. **Native Agent Skills Discovery, Validation & Path Sandboxing:**
+    - 3-Tier deterministic discovery registry (`SkillRegistry`) scanning Workspace (`.agents/skills/`), User Global (`%APPDATA%/LENS/skills/`, `~/.agents/skills/`), and Built-in bundles with strict precedence shadowing.
+    - Lenient YAML frontmatter parser recovering unquoted colons in descriptions without throwing syntax errors, validating lowercase alphanumeric names (`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`) and description length bounds ($\le 1024$ chars).
+    - Strict filesystem path boundary sandbox (`SkillPathBoundary`) enforcing normalized directory containment (`path.resolve()`), blocking relative traversal (`../../`), null-byte injection, and out-of-root symlinks with `SECURITY_ACCESS_DENIED`.
+
 ---
 
 ## 🏗️ Repository Structure
