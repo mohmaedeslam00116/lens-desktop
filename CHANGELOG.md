@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Stratified Evidence Admission & Multi-Hop Coverage Audit ([#30](https://github.com/mohmaedeslam00116/lens-desktop/issues/30))**:
+  - Implemented `StratifiedEvidenceAdmission` (`frontend/electron/engine/admission.ts`):
+    - Guarantees minimum quota allocation $K_{\text{min}} = 8$ admitted candidate chunks per approved research plan milestone before allocating residual capacity by global hybrid relevance score.
+    - Handles under-quota milestones gracefully by admitting all available candidates and returning spare quota slots to the residual pool.
+    - Proportional fairness bounding when $N_{\text{milestones}} \times K_{\text{min}} > M_{\text{max}}$, preventing subtopic starvation.
+    - Exposes granular milestone telemetry (`candidateCount`, `admittedQuotaCount`, `admittedResidualCount`, `totalAdmittedCount`, `quotaSatisfied`, `underQuotaShortfall`).
+  - Seamless integration with mathematical evidence coverage auditing (`evidenceCoverage.ts`):
+    - Multi-facet audit quantifying subquery topic coverage, empirical metric density, analytical perspective aspects (architecture, benchmarks, risks), and domain diversity.
+    - Smart early exit when admitted evidence satisfies coverage quality threshold ($\ge 80\%$), transitioning directly to synthesis without redundant retrieval passes.
+    - Adaptive multi-hop triggering synthesizing targeted gap queries when coverage $< 80\%$ and budget remains.
+    - Honest budget exhaustion telemetry emitting `budget_exhausted` events with detailed coverage deficits and interactive `[Extend Research]` action payloads (`suggestedAdditionalSources: 20`, `suggestedAdditionalHops: 1`).
+    - Full Arabic and English bilingual parity across recommendations, gap descriptions, and action buttons.
+  - Comprehensive 9-test unit suite (`frontend/test/stratified_admission.test.mjs`) verifying quota guarantees, under-quota residual pooling, early exit behaviors, and honest budget exhaustion.
 - **Bounded Parallel Ingestion & 3-Level Deduplication Engine ([#29](https://github.com/mohmaedeslam00116/lens-desktop/issues/29))**:
   - Implemented 3-level deduplication engine (`frontend/electron/engine/dedup.ts`):
     - Level 1: Canonical URL normalization (stripping tracking query parameters such as `utm_*`, `fbclid`, `ref`, stripping default ports and URL fragments, lowercasing hostname/protocol, sorting query parameters deterministically, and stripping trailing slashes).
