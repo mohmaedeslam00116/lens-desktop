@@ -129,3 +129,9 @@ The deterministic shadowing hierarchy governing duplicate skill names across sco
 
 ### SkillPathBoundary
 A security enforcement mechanism ensuring all secondary file lookups (`references/*`, `assets/*`) resolve strictly within the parent skill root directory via normalized path validation, preventing directory traversal escapes and unauthorized filesystem access.
+
+### DualActivationStrategy
+A hybrid activation model providing deterministic controller pre-activation during collaborative plan approval for all models (including local Ollama models), combined with dynamic tool-driven activation (`activate_skill`) for tool-capable cloud providers (Gemini, OpenAI, Claude).
+
+### HostToolMapper
+The integration seam that bridges standard skill `allowed-tools` declarations to native LENS engine primitives (`MultiSearchProvider`, `PageScraper`, `read_resource`), providing transparent advisory notices for unmapped tools while strictly preventing unauthorized privilege escalation.
