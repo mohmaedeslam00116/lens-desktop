@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Agent Skills Management UX, Non-Destructive Resolver & Launch Skills ([#36](https://github.com/mohmaedeslam00116/lens-desktop/issues/36))**:
+  - Implemented Two Official Launch Skills (`skills/academic-paper-analysis/` & `skills/competitive-market-intelligence/`):
+    - `academic-paper-analysis`: standardized scientific literature extraction with `SKILL.md`, `references/methodology-audit.md`, and `references/ablation-checklist.md`.
+    - `competitive-market-intelligence`: commercial benchmarking with `SKILL.md`, `references/feature-matrix-template.md`, and `references/swot-framework.md`.
+  - Pure Node.js Zero-Dependency PKZIP Archiver (`frontend/electron/engine/skills/zipArchive.ts`):
+    - Pure TypeScript/Node.js PKZIP 2.0 archiver using built-in `node:zlib` (`deflateRawSync`/`inflateRawSync`) and standard CRC-32 table with zero external C++ native dependencies.
+    - Strict Zip-Slip directory traversal attack defense rejecting `../`, absolute root escapes, and null-byte injection with `SECURITY_ACCESS_DENIED`.
+    - Automatic exclusion of `.git/`, `.DS_Store`, `Thumbs.db`, `.env`, and sensitive files during export.
+  - Non-Destructive Collision Resolver (`frontend/electron/engine/skills/collisionResolver.ts`):
+    - Provides 3 explicit resolution strategies: `Keep Existing` (aborts import without disk writes), `Overwrite with Backup` (creates timestamped `.backup_<ISO_TIMESTAMP>` folder), and `Rename on Import` (auto-renames directory and rewrites frontmatter `name:`).
+    - In-memory loaded snapshot isolation protecting active running research sessions from concurrent disk modifications.
+  - Engine Skills Management Service & REST Endpoints (`frontend/electron/engine/skills/service.ts` & `frontend/electron/engine/server.ts`):
+    - In-memory pre-inspection (`POST /api/skills/inspect`) extracting frontmatter, allowed tools, and scanning for executable scripts (`.sh`, `.bat`, `.ps1`, `.js`, etc.) with security warnings without disk writes.
+    - 5-state lifecycle management (`Installed`, `Enabled`, `Selected`, `Active`, `Incompatible`).
+    - 1-click enable/disable toggle (`POST /api/skills/toggle`), ZIP package import with collision resolution (`POST /api/skills/import`), and pristine export (`GET /api/skills/export`).
+  - Skills Manager UI (`frontend/src/components/skills/SkillsManagerView.tsx`):
+    - Primary navigation tab in `Sidebar.tsx` with `Sparkles` icon and full Arabic RTL / English LTR bilingual parity adhering to `BRAND.md` and `DESIGN.md` monochrome palette (`#111111`, `#191919`).
+    - Drag-and-drop zone and file picker for `.zip` packages, telemetry header counters, and 5-state lifecycle status badges.
+    - In-memory pre-inspection modal with script security warnings and interactive collision resolution dialog.
+  - Architecture Decision Record & Documentation:
+    - Recorded ADR-0006 (`docs/adr/0006-agent-skills-management-and-collision-resolution.md`).
+    - 100% offline test coverage in `frontend/test/skills_management_resolver.test.mjs` verifying ZIP roundtrip fidelity, Zip-Slip rejection, collision resolution, pre-inspection, 5-state badges, and launch skills validation.
 - **Report Evidence Inspection Drawer & Facet-Grouped Source Shelf UI ([#35](https://github.com/mohmaedeslam00116/lens-desktop/issues/35))**:
   - Implemented `EvidenceInspectionDrawer` (`frontend/src/components/research/EvidenceInspectionDrawer.tsx`):
     - Accessible slide-over drawer with backdrop scrim, keyboard Escape listener, focus trapping, and bidirectional LTR/RTL support.

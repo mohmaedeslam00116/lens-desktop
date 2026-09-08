@@ -1,11 +1,11 @@
 import React from 'react';
-import { Plus, Home, Compass, BookOpen, Network, Settings, Globe, Moon, Sun } from 'lucide-react';
+import { Plus, Home, Compass, BookOpen, Network, Sparkles, Settings, Globe, Moon, Sun } from 'lucide-react';
 import { Language } from '../../types';
 import { BrandLogo } from '../brand/BrandLogo';
 
 interface SidebarProps {
-  activeTab: 'home' | 'discover' | 'history' | 'graph';
-  onSelectTab: (tab: 'home' | 'discover' | 'history' | 'graph') => void;
+  activeTab: 'home' | 'discover' | 'history' | 'graph' | 'skills';
+  onSelectTab: (tab: 'home' | 'discover' | 'history' | 'graph' | 'skills') => void;
   onNewResearch: () => void;
   onOpenSettings: () => void;
   language: Language;
@@ -21,6 +21,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     { id: 'discover' as const, icon: Compass, label: ar ? 'استكشف' : 'Discover' },
     { id: 'history' as const, icon: BookOpen, label: ar ? 'المكتبة' : 'Library' },
     { id: 'graph' as const, icon: Network, label: ar ? 'الخريطة' : 'Graph' },
+    { id: 'skills' as const, icon: Sparkles, label: ar ? 'المهارات' : 'Skills' },
   ];
   return (
     <aside className="app-rail" aria-label={ar ? 'شريط التطبيق' : 'Application sidebar'}>

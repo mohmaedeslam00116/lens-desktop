@@ -80,6 +80,13 @@
     - Bilingual evidence fidelity: side-by-side alignment comparing synthesized report claims with original foreign-language excerpts without breaking reading flow.
     - `FacetGroupedShelf` organizing admitted sources by approved plan milestones, featuring 5-dimensional filtering (milestone facet, citation status, relevance tier, source domain, instant search) and real-time aggregate telemetry counters.
 
+16. **Agent Skills Management UX, Non-Destructive Resolver & Launch Skills:**
+    - Dedicated Agent Skills management interface (`SkillsManagerView`) integrated into the primary sidebar with package drag-and-drop, telemetry counters, and 5-state lifecycle tracking (`Installed`, `Enabled`, `Selected`, `Active`, `Incompatible`).
+    - In-memory pre-inspection modal extracting frontmatter, allowed tools, and scanning for executable scripts with security warnings prior to installation.
+    - Zero-dependency Node.js PKZIP archiver (`zipArchive.ts`) featuring strict Zip-Slip directory traversal defense and pristine 1-click package export.
+    - Non-destructive collision resolver (`collisionResolver.ts`) offering `Keep Existing`, `Overwrite with Backup` (timestamped preservation), and `Rename on Import`, while isolating active research sessions from disk modifications.
+    - Official launch skills: `academic-paper-analysis` (methodology audit and ablation checklists) and `competitive-market-intelligence` (feature matrices and SWOT frameworks).
+
 ---
 
 ## 🏗️ Repository Structure
@@ -93,6 +100,7 @@ lens-desktop/
 ├── AGENTS.md                  # Operational guidelines for AI agents and engineering skills
 ├── docs/                      # Architectural documents and issue tracker setup
 │   └── agents/                # GitHub issues, triage labels, and domain doc conventions
+├── skills/                    # Bundled Agent Skills (academic-paper-analysis, competitive-market-intelligence)
 ├── frontend/                  # Electron desktop application
 │   ├── electron/              # Electron main process and embedded engine
 │   │   ├── engine/            # Native TypeScript research, search, scraper, and discovery
