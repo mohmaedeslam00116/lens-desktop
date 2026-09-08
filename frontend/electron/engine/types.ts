@@ -194,6 +194,13 @@ export interface WideResearchResult {
   plan: ResearchPlan;
   sources: SourceItem[];
   coverageAudit?: LiveEvent['coverage'];
+  groundingVerification?: {
+    totalFoundInReport: number;
+    validCitations: number;
+    hallucinatedStripped: number;
+    deterministicVerification: boolean;
+    citedIndices: number[];
+  };
   metrics?: {
     totalSources?: number;
     durationMs?: number;

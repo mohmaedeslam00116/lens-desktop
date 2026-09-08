@@ -25,6 +25,7 @@ Electron desktop application using a React frontend and an embedded TypeScript r
 ## Capabilities and Constraints
 
 - Research question with quick, balanced, and deep modes, plus web, academic, and community focus.
+- Hierarchical milestone-by-milestone synthesis and meta-synthesis with deterministic citation grounding contract, stripping unmapped citation brackets.
 - Streamed research steps and source discovery; report reading, table extraction, and diagram presentation.
 - Compact navigation rail: Home, Discover, Library, and Knowledge graph.
 - Local report history and search; report export controls for PDF, DOCX, Markdown, and extracted-table CSV.

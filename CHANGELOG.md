@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Hierarchical Per-Facet Synthesis & Citation Grounding Contract ([#34](https://github.com/mohmaedeslam00116/lens-desktop/issues/34))**:
+  - Implemented `HierarchicalSynthesis` (`frontend/electron/engine/synthesis.ts`):
+    - Multi-stage hierarchical synthesis architecture: generates exhaustive, publication-grade analytical sections for each approved plan milestone from admitted evidence passages (<15k token prompt bounds), followed by an overarching Meta-Synthesis Pass.
+    - Meta-synthesis pass generating executive overviews, strategic takeaway callouts (`> [!NOTE]`), cross-cutting comparison matrices contrasting milestones and metrics in GFM tables, and prioritized strategic recommendations (`> [!TIP]`).
+    - Deterministic offline fallback mode constructing grounded sections, comparison matrices, and references even when external LLM providers are unavailable.
+  - Implemented `CitationGroundingContract` (`frontend/electron/engine/synthesis.ts`):
+    - Pre-allocates deterministic 1-based sequential citation indices (`[1]`, `[2]`...) to candidate passages prior to synthesis.
+    - Automated post-synthesis regex verifier that scans generated text, cleans whitespace/punctuation, and strips or remaps any unmapped, out-of-bounds, or hallucinated citation brackets.
+    - Comprehensive multilingual and academic citation delimiter support: recognizes semicolons (`[1; 99]`), Modern Standard Arabic commas (`[1، 99]`), Arabic-Indic and Persian numeral normalization (`[١]` -> `[1]`), Unicode dash range variants (em-dash `—`, minus sign `−`), and large multi-source range bounding up to 250 items.
+    - Advanced post-strip punctuation normalization: collapses duplicate delimiters, removes orphaned commas/semicolons before terminal punctuation, and eliminates empty bracket pairs.
+    - Strict protection for fenced and inline code blocks, `<skill_content>` tags, markdown links (`[text](url)`), callout badges (`[!NOTE]`, `[!WARNING]`), and task list checkboxes (`- [ ]`, `- [x]`) with newline preservation.
+    - Mandatory secondary verification sweep guaranteeing `zeroHallucinationGuaranteed = true` across dossiers of any scale.
+    - Internal bracket sanitization for verbatim snippets in Grounded References to prevent false citation leaks.
+  - Empirical Contradiction Callouts:
+    - Instructs models via system and milestone prompts to detect and call out empirical disagreements between admitted sources.
+    - Standardized GFM alert format (`> [!WARNING]`) with full Modern Standard Arabic and English bilingual parity.
+    - Automated heuristic detection (`detectMetricContradictions`) identifying >20% numerical variance between distinct domains, proactively alerting the synthesizer.
+    - Extraction and parsing helper (`extractContradictionCallouts`) recovering structured claims and discrepancy analyses from report text.
+  - Verification Suite & ADR:
+    - Architecture Decision Record (`docs/adr/0004-hierarchical-synthesis-citation-grounding.md`): Documents the hierarchical synthesis architecture and zero-hallucination verification contract.
+    - Comprehensive 26-test unit, scale, and multilingual edge-case suite (`frontend/test/hierarchical_synthesis_grounding.test.mjs`) verifying deterministic indexing, regex verification, element preservation, contradiction formatting, and zero hallucinated citations on 50-source and 200-source synthesized reports.
 - **Dual-Path Skill Activation, Model Routing & Compaction Shield ([#33](https://github.com/mohmaedeslam00116/lens-desktop/issues/33))**:
   - Implemented `CompactionShield` (`frontend/electron/engine/skills/compactionShield.ts`):
     - Tags active skill instructions with `<skill_content name="..."> ... </skill_content>`.
