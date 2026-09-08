@@ -16,14 +16,17 @@ import {
   FileCode,
   Network,
   Plus,
-  ArrowUpRight
+  ArrowUpRight,
+  BookCopy
 } from 'lucide-react';
 import { MessageSources } from './MessageSources';
 import { PerplexityRadar } from './PerplexityRadar';
 import { ReportRenderer } from './ReportRenderer';
 import { AgentWorkspace } from './AgentWorkspace';
 import { GraphView } from './GraphView';
-import { SourceItem, ResearchStep, Language } from '../../types';
+import { FacetGroupedShelf } from '../research/FacetGroupedShelf';
+import { EvidenceInspectionDrawer } from '../research/EvidenceInspectionDrawer';
+import { SourceItem, ResearchStep, Language, ResearchPlan } from '../../types';
 import { extractTables, tableToCSV } from '../../utils/markdownArtifacts';
 
 interface MessageBoxProps {
@@ -33,6 +36,7 @@ interface MessageBoxProps {
   steps: ResearchStep[];
   loading: boolean;
   language: Language;
+  plan?: ResearchPlan | null;
   onExport: (format: 'pdf' | 'docx' | 'markdown') => void;
   onFollowUp: (q: string) => void;
 }
@@ -44,13 +48,16 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   steps,
   loading,
   language,
+  plan,
   onExport,
   onFollowUp,
 }) => {
   const isArabic = language === 'ar';
-  const [viewMode, setViewMode] = useState<'report' | 'workspace' | 'graph'>('report');
+  const [viewMode, setViewMode] = useState<'report' | 'shelf' | 'workspace' | 'graph'>('report');
   const [copied, setCopied] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [selectedCitationIndex, setSelectedCitationIndex] = useState<number | null>(null);
 
   // Stop speech when component unmounts or query changes
   useEffect(() => {
@@ -164,6 +171,24 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
 
               <button
                 type="button"
+                onClick={() => setViewMode('shelf')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                  viewMode === 'shelf' 
+                    ? 'bg-white/[0.08] text-accent shadow-sm' 
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <BookCopy className="w-3.5 h-3.5 text-muted" />
+                <span>{isArabic ? 'رف المصادر' : 'Source Shelf'}</span>
+                {sources.length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-surface text-muted">
+                    {sources.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setViewMode('workspace')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                   viewMode === 'workspace' 
@@ -271,7 +296,25 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
             <ReportRenderer 
               content={report} 
               sources={sources} 
-              language={language} 
+              language={language}
+              onInspectCitation={(idx) => {
+                setSelectedCitationIndex(idx);
+                setIsDrawerOpen(true);
+              }}
+              onOpenShelf={() => setViewMode('shelf')}
+            />
+          )}
+
+          {viewMode === 'shelf' && (
+            <FacetGroupedShelf
+              sources={sources}
+              plan={plan}
+              reportContent={report}
+              language={language}
+              onInspectEvidence={(idx) => {
+                setSelectedCitationIndex(idx);
+                setIsDrawerOpen(true);
+              }}
             />
           )}
 
@@ -280,7 +323,12 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
               report={report} 
               sources={sources} 
               steps={steps} 
-              language={language} 
+              language={language}
+              plan={plan}
+              onInspectEvidence={(idx) => {
+                setSelectedCitationIndex(idx);
+                setIsDrawerOpen(true);
+              }}
             />
           )}
 
@@ -294,6 +342,18 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
           )}
         </div>
       )}
+
+      {/* 4. Evidence Inspection Drawer */}
+      <EvidenceInspectionDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        targetCitationIndex={selectedCitationIndex}
+        sources={sources}
+        plan={plan}
+        reportContent={report}
+        language={language}
+        onNavigateCitation={(newIdx) => setSelectedCitationIndex(newIdx)}
+      />
 
       {/* 4. Deepen Exploration Action Pills */}
       {report && !loading && (

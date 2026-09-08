@@ -305,6 +305,7 @@ export function App() {
               sources: formattedSources.length > 0 ? formattedSources : accumulatedSources,
               depth,
               perspective,
+              plan: payload.plan || proposedPlan || undefined,
               graphNodes,
               reflections: payload.reflections || reflections,
               createdAt: new Date().toISOString(),
@@ -497,6 +498,7 @@ export function App() {
                   steps={compiledSteps}
                   loading={isSearching}
                   language={language}
+                  plan={activeReport?.plan || proposedPlan}
                   onExport={handleExport}
                   onFollowUp={(q) => handleStartResearch(q)}
                 />

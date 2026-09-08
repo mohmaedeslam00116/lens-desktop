@@ -1,35 +1,57 @@
-import React, { useState } from 'react';
-import { ExternalLink, ShieldCheck } from 'lucide-react';
+import React from 'react';
 import { SourceItem } from '../../types';
 
 interface CitationBadgeProps {
   index: number;
   sources: SourceItem[];
+  onInspect?: (index: number) => void;
 }
 
-export const CitationBadge: React.FC<CitationBadgeProps> = ({ index, sources }) => {
-  const [showTooltip, setShowTooltip] = useState(false);
-  const source = sources[index - 1];
+export const CitationBadge: React.FC<CitationBadgeProps> = ({ index, sources, onInspect }) => {
+  const source = sources.find(s => s.citationIndex === index) || sources[index - 1];
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (onInspect) {
+      onInspect(index);
+    } else if (source?.url) {
+      if (window.electronAPI?.openExternal) {
+        window.electronAPI.openExternal(source.url);
+      } else {
+        window.open(source.url, '_blank', 'noopener,noreferrer');
+      }
+    }
+  };
+
+  const faviconUrl = source?.url
+    ? `https://s2.googleusercontent.com/s2/favicons?domain_url=${encodeURIComponent(source.url)}&sz=32`
+    : undefined;
+
+  const tooltipTitle = source?.title
+    ? `[${index}] ${source.title}`
+    : `[${index}]`;
 
   if (!source) {
     return (
-      <span className="inline-block px-1.5 py-0.2 mx-0.5 rounded bg-panel text-slate-500 font-mono text-[11px] align-baseline">
+      <button
+        type="button"
+        onClick={() => onInspect && onInspect(index)}
+        className="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-panel text-muted font-mono text-[11px] align-baseline hover:text-ink cursor-pointer border border-line transition duration-150 active:scale-95"
+        title={`[${index}]`}
+      >
         [{index}]
-      </span>
+      </button>
     );
   }
 
-  const faviconUrl = `https://s2.googleusercontent.com/s2/favicons?domain_url=${encodeURIComponent(source.url)}&sz=32`;
-
   return (
-    <span className="relative inline-block align-baseline mx-0.5">
-      <button
-        type="button"
-        onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')}
-        onMouseEnter={() => setShowTooltip(true)}
-        onMouseLeave={() => setShowTooltip(false)}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-panel hover:bg-surface border border-line-strong hover:border-accent/50 text-accent hover:text-accent font-mono text-[11px] transition duration-150 cursor-pointer group shadow-sm active:scale-95"
-      >
+    <button
+      type="button"
+      onClick={handleClick}
+      title={tooltipTitle}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded bg-panel hover:bg-surface border border-line-strong hover:border-accent/50 text-accent hover:text-accent font-mono text-[11px] transition duration-150 cursor-pointer align-baseline shadow-sm active:scale-95"
+    >
+      {faviconUrl && (
         <img
           src={faviconUrl}
           alt=""
@@ -38,38 +60,8 @@ export const CitationBadge: React.FC<CitationBadgeProps> = ({ index, sources }) 
             (e.target as HTMLElement).style.display = 'none';
           }}
         />
-        <span className="font-semibold">{index}</span>
-      </button>
-
-      {/* Hover Preview Popover */}
-      {showTooltip && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-panel border border-line-strong rounded-xl  z-50 pointer-events-none animate-fadeIn">
-          <div className="flex items-start gap-2.5">
-            <img
-              src={faviconUrl}
-              alt=""
-              className="w-4 h-4 rounded-sm shrink-0 mt-0.5"
-              onError={(e) => {
-                (e.target as HTMLElement).style.display = 'none';
-              }}
-            />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-slate-200 line-clamp-2 leading-snug">
-                {source.title || source.url}
-              </p>
-              <p className="text-[10px] text-slate-500 font-mono truncate mt-1">
-                {source.domain || source.url}
-              </p>
-              {source.credibilityScore && (
-                <div className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono mt-1">
-                  <ShieldCheck className="w-3 h-3" />
-                  <span>{source.credibilityScore}% موثوقية أكاديمية</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
       )}
-    </span>
+      <span className="font-semibold">{index}</span>
+    </button>
   );
 };

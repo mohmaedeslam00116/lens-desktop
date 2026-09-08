@@ -128,10 +128,10 @@ An evidence provenance mechanism implemented in `frontend/electron/engine/synthe
 A standardized empirical disagreement alert formatted as a GitHub Flavored Markdown block (`> [!WARNING]`), surfacing conflicting quantitative benchmarks, release dates, or factual claims between sources (e.g. throughput, latency, parameter counts) with explicit discrepancy analysis and full Arabic and English bilingual parity.
 
 ### EvidenceInspectionDrawer
-An interactive slide-over inspector component that surfaces the verbatim source passage, source metadata, URL, and side-by-side bilingual original excerpts whenever a user clicks any citation badge `[x]` in the report view, without breaking the reading flow.
+An interactive slide-over inspector component (`frontend/src/components/research/EvidenceInspectionDrawer.tsx`) that surfaces the verbatim source passage, relevance score and tier, credibility score, source domain badge with favicon, canonical URL, assigned milestone facet, sequential citation stepper navigation, and side-by-side bilingual claim-to-excerpt alignment whenever a user clicks any citation badge `[x]` in the living report or source shelf, preserving the reading flow without context loss.
 
 ### FacetGroupedShelf
-A structured source explorer view that organizes the 100–200 ingested research sources into distinct tabs/sections corresponding to approved research plan milestones, providing instant filtering between cited-only and all ingested pages.
+A structured evidence explorer view (`frontend/src/components/research/FacetGroupedShelf.tsx`) that organizes the 100–200 ingested research sources into distinct sections corresponding to approved research plan milestones (`ResearchPlan.milestones`), backed by `frontend/electron/engine/evidenceShelf.ts`. Provides 5-dimensional filtering (milestone facet, citation status, relevance tier, source domain, and instant keyword search), real-time aggregate telemetry counters, and 1-click evidence inspection.
 
 ### ProgressiveDisclosure
 The standard 3-tier loading mechanism for Agent Skills (`agentskills.io`): Tier 1 (Catalog, ~50–100 tokens per skill at session start), Tier 2 (Instructions, `<5000` tokens loaded on activation), and Tier 3 (Resources, referenced documentation and static assets loaded strictly on demand).
