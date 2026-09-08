@@ -16,20 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `colon-description-skill`: Cursor / OpenAI-compatible skill format featuring unquoted colons in description fields verified through lenient YAML frontmatter parsing.
     - `adversarial-zipslip-skill`: Adversarial test fixtures with path traversal vectors (`../../etc/passwd`, `..\..\Windows\System32`, `subdir/../../etc/hosts`, bare `..`, null-byte injection) confirming strict rejection with `SECURITY_ACCESS_DENIED`.
   - Bit-for-Bit Round-Trip Qualification:
-    - End-to-end `import (zip) -> SkillRegistry -> export (zip)` pipeline test verifying that imported packages re-export with identical content without injecting proprietary metadata (`.lens-meta`, `.lens-config`, `.git/`).
+    - End-to-end `import (zip) -> SkillRegistry -> export (zip)` pipeline test verifying every text and binary package entry re-exports with identical bytes and no proprietary metadata (`.lens-meta`, `.lens-config`, `.git/`).
   - Deterministic Mock SSE Stream Fixtures (4 Supported Providers):
-    - Google Gemini: simulated functionCall part in response parts triggering dynamic tool invocation loop.
-    - OpenAI / OpenAI-Compatible: simulated `tool_calls` with JSON arguments parsed and dispatched to `activate_skill`.
-    - Anthropic Claude: simulated `tool_use` content blocks with input schema parsing.
+    - Google Gemini: simulated SSE `functionCall` part parsing and dynamic tool invocation loop.
+    - OpenAI / OpenAI-Compatible: simulated SSE `tool_calls` with JSON arguments parsed and dispatched to `activate_skill`.
+    - Anthropic Claude: simulated SSE `tool_use` content blocks with input schema parsing.
     - Ollama (Local): simulated controller-assisted pre-activation injecting shielded instructions into session context with tool schema exclusion.
     - Verified tool format schemas (`LLMToolDefinition`) across all 4 providers via `ModelClient.formatProviderTools`.
   - Four-Pillar Acceptance Gate Verification:
     - *Format Gate*: 100% compliance with `agentskills.io` specification across all on-disk fixtures and official launch skills (`academic-paper-analysis`, `competitive-market-intelligence`), rejecting missing names, missing descriptions, oversized descriptions (>1024 chars), and invalid tool names.
-    - *Security Gate*: 100% rejection rate for all path traversal variants (`../../`), absolute path escapes, null-byte injection, and execution warnings for un-sandboxed script files (`.py`, `.sh`, `.exe`, `.ps1`, `.bat`).
-    - *Precision Gate*: 100% activation recall on domain queries and 0% false-positive activation on irrelevant queries, verifying exclusion of disabled skills.
-    - *Citation Fidelity Gate*: 100% verified citation retention across context compaction passes via `CompactionShield`, and in-memory session snapshot isolation preventing citation corruption during concurrent on-disk modifications.
+    - *Security Gate*: 100% rejection rate for a committed ZipSlip fixture (`../../`), absolute path escapes, null-byte injection, and un-sandboxed script package imports (`.py`, `.sh`, `.exe`, `.ps1`, `.bat`).
+    - *Precision Gate*: query-driven activation of matching domain skills with 0% domain false positives on irrelevant queries, also verifying exclusion of disabled skills.
+    - *Citation Fidelity Gate*: 100% verified citation retention across context compaction passes via `CompactionShield`, in-memory session snapshot isolation, and a full wide research run that strips hallucinated citation indices.
   - Test Suite Integration:
-    - Added `frontend/test/interoperability_acceptance_gates.test.mjs` with 33 comprehensive tests integrated into `npm test` (`node --test`), keeping CI 100% green across 309 tests and 85 suites with zero native C++ dependencies.
+    - Added `frontend/test/interoperability_acceptance_gates.test.mjs` with 36 comprehensive tests integrated into `npm test` (`node --test`), keeping CI 100% green across 312 tests and 85 suites with zero native C++ dependencies.
 - **Agent Skills Management UX, Non-Destructive Resolver & Launch Skills ([#36](https://github.com/mohmaedeslam00116/lens-desktop/issues/36))**:
   - Implemented Two Official Launch Skills (`skills/academic-paper-analysis/` & `skills/competitive-market-intelligence/`):
     - `academic-paper-analysis`: standardized scientific literature extraction with `SKILL.md`, `references/methodology-audit.md`, and `references/ablation-checklist.md`.

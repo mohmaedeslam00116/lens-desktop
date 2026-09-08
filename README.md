@@ -90,9 +90,9 @@
 17. **End-to-End Interoperability Suite & Four-Pillar Acceptance Gates:**
     - Automated cross-client offline test fixtures for Anthropic (nested references) and Cursor / OpenAI (lenient unquoted colons), with strict Zip-Slip traversal rejection.
     - Deterministic bit-for-bit round-trip qualification (`import (zip) -> SkillRegistry -> export (zip)`) verifying 100% content preservation without proprietary metadata injection.
-    - Deterministic mock SSE stream fixtures simulating all 4 supported providers (Gemini, OpenAI, Claude, Ollama) testing tool schemas and controller pre-activation.
-    - Four-Pillar Acceptance Gate verification: Format Gate (100% `agentskills.io` schema compliance), Security Gate (100% traversal and script injection rejection), Precision Gate (100% domain activation recall, 0% false positives on irrelevant queries), and Citation Fidelity Gate (zero hallucinated citations).
-    - 100% offline verification in `node --test` integrated into `npm test` across 309 tests with zero native C++ dependencies.
+    - Deterministic SSE parsing fixtures simulating all 4 supported providers (Gemini, OpenAI, Claude, Ollama), plus tool schemas and controller pre-activation.
+    - Four-Pillar Acceptance Gate verification: Format Gate (100% `agentskills.io` schema compliance), Security Gate (100% traversal and unsandboxed-script import rejection), Precision Gate (query-driven domain activation with 0% domain false positives), and Citation Fidelity Gate (zero hallucinated citations in a full wide research run).
+    - 100% offline verification in `node --test` integrated into `npm test` across 312 tests with zero native C++ dependencies.
 
 ---
 

@@ -5,6 +5,7 @@ import { ModelClient, LLMRequestOptions, ToolCallHandler } from './models';
 import { createEmbeddingModel, rankSourcePassages, fallbackEvidence, EmbeddingProvider } from './embeddings';
 import { auditEvidenceCoverage, generateAdaptiveHopPlan, formatAuditReflections } from './evidenceCoverage';
 import { SkillActivationManager, CompactionShield } from './skills';
+import { CitationGroundingContract } from './synthesis';
 
 export class DeepResearchAgent {
   private sessionId: string;
@@ -528,6 +529,18 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
     } catch (err: any) {
       report = `# تقرير البحث: ${query}\n\nعذراً، حدث خطأ أثناء صياغة التقرير عبر مزود الذكاء الاصطناعي: ${err.message}\n\nالمصادر المكتشفة مسجلة في قائمة المراجع أدناه.`;
     }
+
+    // Enforce the CitationGroundingContract on every completed research run,
+    // including the non-hierarchical fallback path used when providers are offline.
+    const citationContract = new CitationGroundingContract();
+    citationContract.registerExcerpts(scrapedSources.map((source) => ({
+      id: source.url,
+      text: source.content,
+      sourceUrl: source.url,
+      sourceTitle: source.title,
+      sourceDomain: source.domain
+    })));
+    report = citationContract.verifyAndSanitize(report).sanitizedText;
 
     // 7. Emit Finished Event
     const formattedSources: SourceItem[] = scrapedSources.map(s => ({

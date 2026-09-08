@@ -301,6 +301,11 @@ export class SkillManagerService {
     if (!inspection.valid) {
       throw new Error(`CANNOT_IMPORT_INVALID_SKILL: ${inspection.error}`);
     }
+    if (inspection.hasScripts) {
+      throw new Error(
+        `CANNOT_IMPORT_UNSANDBOXED_SCRIPTS: Package contains executable files: ${inspection.scriptFiles.join(', ')}`
+      );
+    }
 
     // Determine target root scope directory
     const baseWorkspace = options.workspaceDir || process.cwd();

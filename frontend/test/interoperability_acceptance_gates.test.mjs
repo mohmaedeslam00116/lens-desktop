@@ -48,8 +48,13 @@ import {
   HostToolMapper
 } from '../dist-electron/engine/skills/hostToolMapper.js';
 import {
-  ModelClient
+  ModelClient,
+  parseProviderSseEvents
 } from '../dist-electron/engine/models.js';
+import { suggestSkillsForQuery } from '../dist-electron/engine/scoping.js';
+import { DeepResearchAgent } from '../dist-electron/engine/agent.js';
+import { MultiSearchProvider } from '../dist-electron/engine/search.js';
+import { PageScraper } from '../dist-electron/engine/scraper.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // § 1  Cross-Client Offline Test Fixtures
@@ -233,6 +238,10 @@ Instructions for search.`;
         {
           relativePath: 'references/data.json',
           content: JSON.stringify({ metrics: [1.5, 2.7, 3.14], verified: true }, null, 2)
+        },
+        {
+          relativePath: 'assets/evidence.bin',
+          content: Buffer.from([0x00, 0xff, 0x10, 0x80, 0x42])
         }
       ];
 
@@ -267,20 +276,17 @@ Instructions for search.`;
       // 6. Extract exported ZIP and verify content identity
       const reExtracted = readZipArchive(exportResult.buffer);
 
-      // Verify SKILL.md content is identical
-      const reSkill = reExtracted.find(f => f.relativePath === 'SKILL.md');
-      assert.ok(reSkill, 'Exported ZIP must contain SKILL.md');
-      assert.equal(reSkill.content.toString('utf8'), originalFiles[0].content);
-
-      // Verify reference doc content is identical
-      const reGuide = reExtracted.find(f => f.relativePath === 'references/guide.md');
-      assert.ok(reGuide, 'Exported ZIP must contain references/guide.md');
-      assert.equal(reGuide.content.toString('utf8'), originalFiles[1].content);
-
-      // Verify JSON data content is identical
-      const reJson = reExtracted.find(f => f.relativePath === 'references/data.json');
-      assert.ok(reJson, 'Exported ZIP must contain references/data.json');
-      assert.equal(reJson.content.toString('utf8'), originalFiles[2].content);
+      // Every entry, including opaque binary content, must be reproduced exactly.
+      assert.equal(reExtracted.length, originalFiles.length);
+      for (const original of originalFiles) {
+        const restored = reExtracted.find((entry) => entry.relativePath === original.relativePath);
+        assert.ok(restored, `Exported ZIP must contain ${original.relativePath}`);
+        assert.deepEqual(
+          restored.content,
+          Buffer.isBuffer(original.content) ? original.content : Buffer.from(original.content, 'utf8'),
+          `${original.relativePath} must survive the round-trip byte-for-byte`
+        );
+      }
 
       // 7. Verify no proprietary metadata was injected
       const allPaths = reExtracted.map(f => f.relativePath);
@@ -322,6 +328,42 @@ Execute deterministic mock queries for provider qualification.`
       await registry.discoverAll();
       activationManager = new SkillActivationManager(registry);
       toolDef = activationManager.getToolDefinition();
+    });
+
+    it('parses deterministic SSE framing and provider-specific text and tool-call payloads', () => {
+      const fixtures = [
+        {
+          provider: 'gemini',
+          stream: 'event: message\ndata: {"candidates":[{"content":{"parts":[{"text":"Gemini "},{"functionCall":{"name":"activate_skill","args":{"name":"sse-test-skill"}}}]}}]}\n\n',
+          text: 'Gemini ',
+          toolName: 'activate_skill'
+        },
+        {
+          provider: 'openai',
+          stream: 'data: {"choices":[{"delta":{"content":"OpenAI ","tool_calls":[{"function":{"name":"activate_skill","arguments":"{\\"name\\":\\"sse-test-skill\\"}"}}]}}]}\n\ndata: [DONE]\n\n',
+          text: 'OpenAI ',
+          toolName: 'activate_skill'
+        },
+        {
+          provider: 'anthropic',
+          stream: 'event: content_block_start\ndata: {"type":"content_block_start","content_block":{"type":"tool_use","name":"activate_skill","input":{"name":"sse-test-skill"}}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Claude "}}\n\n',
+          text: 'Claude ',
+          toolName: 'activate_skill'
+        },
+        {
+          provider: 'ollama',
+          stream: 'data: {"message":{"content":"Ollama ","tool_calls":[{"function":{"name":"activate_skill","arguments":{"name":"sse-test-skill"}}}]}}\n\n',
+          text: 'Ollama ',
+          toolName: 'activate_skill'
+        }
+      ];
+
+      for (const fixture of fixtures) {
+        const parsed = parseProviderSseEvents(fixture.provider, fixture.stream);
+        assert.equal(parsed.text, fixture.text, `${fixture.provider} text chunk must parse`);
+        assert.equal(parsed.toolCalls[0]?.name, fixture.toolName, `${fixture.provider} tool call must parse`);
+        assert.equal(parsed.toolCalls[0]?.arguments.name, 'sse-test-skill');
+      }
     });
 
     afterEach(async () => {
@@ -714,12 +756,18 @@ Execute deterministic mock queries for provider qualification.`
 
   // ── § 4.2  SECURITY GATE: 100% rejection rate ────────────────────────────
   describe('Four-Pillar Gate 2: Security Gate — 100% Path Traversal & Script Rejection', () => {
-    it('achieves 100% rejection rate across all ZipSlip traversal variants', () => {
+    it('achieves 100% rejection rate across committed ZipSlip fixture entries', async () => {
+      const fixturePath = path.resolve(
+        __dirname,
+        'fixtures',
+        'skills',
+        'adversarial-zipslip-skill',
+        'zip-slip-entries.json'
+      );
+      const fixtureEntries = JSON.parse(await fs.promises.readFile(fixturePath, 'utf8'));
       const traversalAttempts = [
-        '../../etc/passwd',
+        ...fixtureEntries.map((entry) => entry.relativePath),
         '../../../root/.bash_history',
-        '..\\..\\Windows\\System32\\cmd.exe',
-        'subdir/../../etc/hosts',
         '..',
         '../',
         '..\\',
@@ -745,7 +793,7 @@ Execute deterministic mock queries for provider qualification.`
       );
     });
 
-    it('rejects unsandboxed script files in pre-inspection with hasScripts warning', () => {
+    it('rejects unsandboxed script packages before they can be imported', async () => {
       const registry = new SkillRegistry({ workspaceDir: tempDir });
       const service = new SkillManagerService(registry, tempDir);
 
@@ -770,6 +818,16 @@ Execute deterministic mock queries for provider qualification.`
       assert.ok(inspection.scriptFiles.includes('scripts/pwn.exe'));
       assert.ok(inspection.scriptFiles.includes('scripts/inject.ps1'));
       assert.ok(inspection.scriptFiles.includes('scripts/backdoor.bat'));
+
+      await assert.rejects(
+        () => service.importSkill(filesWithScripts, {
+          scope: 'workspace',
+          collisionAction: 'overwrite',
+          workspaceDir: tempDir
+        }),
+        /CANNOT_IMPORT_UNSANDBOXED_SCRIPTS/
+      );
+      assert.equal(registry.hasSkill('script-danger'), false);
     });
 
     it('SkillPathBoundary rejects all path escape vectors with SECURITY_ACCESS_DENIED', () => {
@@ -934,6 +992,16 @@ Execute deterministic mock queries for provider qualification.`
       assert.equal(result.success, false);
       assert.equal(result.error, 'SKILL_DISABLED');
     });
+
+    it('selects domain skills only for matching queries, with no domain false positives', () => {
+      const academicBenchmark = suggestSkillsForQuery('Compare academic quantum computing benchmark papers', false);
+      assert.ok(academicBenchmark.includes('academic-paper-analysis'));
+      assert.ok(academicBenchmark.includes('comparative-synthesis'));
+      assert.ok(academicBenchmark.includes('empirical-data-extraction'));
+
+      const irrelevantQuery = suggestSkillsForQuery('How do I bake sourdough bread?', false);
+      assert.deepEqual(irrelevantQuery, ['web-retrieval-curator']);
+    });
   });
 
   // ── § 4.4  CITATION FIDELITY GATE: zero hallucinated citations ────────────
@@ -1052,6 +1120,54 @@ Always use DOI-verified references from the citation database.`
       assert.equal(snapshot.name, 'snapshot-citation-skill');
       assert.ok(snapshot.resourceSnapshot.has('references/verified-sources.md'));
       assert.ok(snapshot.resourceSnapshot.get('references/verified-sources.md').includes('DOI:10.1234/verified-a'));
+    });
+
+    it('strips hallucinated citations during a full wide research run', async () => {
+      const originalSearch = MultiSearchProvider.search;
+      const originalScrape = PageScraper.scrape;
+      const originalGenerate = ModelClient.generate;
+      const events = [];
+
+      MultiSearchProvider.search = async () => ([
+        { url: 'https://example.org/verified-one', title: 'Verified one', snippet: 'Evidence one' },
+        { url: 'https://example.net/verified-two', title: 'Verified two', snippet: 'Evidence two' }
+      ]);
+      PageScraper.scrape = async (url) => ({
+        url,
+        title: url.includes('one') ? 'Verified one' : 'Verified two',
+        domain: new URL(url).hostname,
+        content: 'Verified research evidence.',
+        credibilityScore: 90
+      });
+      ModelClient.generate = async () => '# Grounded Report\nVerified claim [1]. Hallucinated claim [99].';
+
+      try {
+        const agent = new DeepResearchAgent('citation-gate-run', (event) => events.push(event));
+        await agent.run({
+          query: 'Verify citation grounding',
+          report_type: 'storm',
+          plan: {
+            id: 'citation-plan',
+            version: 1,
+            objective: 'Verify citation grounding',
+            milestones: [{ id: 'm1', query: 'citation evidence', rationale: 'grounding' }],
+            suggestedSkills: [],
+            estimatedScope: { targetSources: 2, maxHops: 0 }
+          },
+          search_provider: 'duckduckgo',
+          llm_provider: 'ollama',
+          embedding_enabled: false
+        });
+      } finally {
+        MultiSearchProvider.search = originalSearch;
+        PageScraper.scrape = originalScrape;
+        ModelClient.generate = originalGenerate;
+      }
+
+      const finished = events.find((event) => event.type === 'finished');
+      assert.ok(finished, 'Wide research run must finish');
+      assert.ok(finished.report.includes('[1]'));
+      assert.ok(!finished.report.includes('[99]'));
     });
   });
 

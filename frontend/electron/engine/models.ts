@@ -32,6 +32,110 @@ export interface LLMRequestOptions {
   onChunk?: (chunk: string) => void;
 }
 
+export interface ParsedSseToolCall {
+  name: string;
+  arguments: Record<string, any>;
+}
+
+export interface ParsedProviderSseEvents {
+  text: string;
+  toolCalls: ParsedSseToolCall[];
+}
+
+/**
+ * Parses a complete Server-Sent Events payload from a supported provider.
+ * Keeping the parser independent of transport makes provider qualification
+ * deterministic and lets callers consume streamed text and tool calls safely.
+ */
+export function parseProviderSseEvents(provider: string, payload: string): ParsedProviderSseEvents {
+  const events: Array<{ event: string; data: string }> = [];
+  let eventName = 'message';
+  let dataLines: string[] = [];
+
+  const flush = () => {
+    if (dataLines.length > 0) {
+      events.push({ event: eventName, data: dataLines.join('\n') });
+    }
+    eventName = 'message';
+    dataLines = [];
+  };
+
+  for (const line of payload.replace(/\r\n/g, '\n').split('\n')) {
+    if (!line) {
+      flush();
+    } else if (line.startsWith('event:')) {
+      eventName = line.slice('event:'.length).trim() || 'message';
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice('data:'.length).trimStart());
+    }
+  }
+  flush();
+
+  const text: string[] = [];
+  const toolCalls: ParsedSseToolCall[] = [];
+  const normalizedProvider = provider.toLowerCase().trim();
+
+  for (const event of events) {
+    if (event.data === '[DONE]') continue;
+
+    let data: any;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      continue;
+    }
+
+    if (normalizedProvider === 'gemini' || normalizedProvider === 'google') {
+      for (const part of data.candidates?.[0]?.content?.parts || []) {
+        if (part.text) text.push(part.text);
+        if (part.functionCall?.name) {
+          toolCalls.push({ name: part.functionCall.name, arguments: part.functionCall.args || {} });
+        }
+      }
+      continue;
+    }
+
+    if (normalizedProvider === 'anthropic') {
+      const block = data.content_block;
+      if (block?.type === 'tool_use' && block.name) {
+        toolCalls.push({ name: block.name, arguments: block.input || {} });
+      }
+      if (data.delta?.type === 'text_delta' && data.delta.text) {
+        text.push(data.delta.text);
+      }
+      continue;
+    }
+
+    if (normalizedProvider === 'ollama') {
+      const message = data.message || data;
+      if (message.content || data.response) text.push(message.content || data.response);
+      for (const call of message.tool_calls || []) {
+        if (call.function?.name) {
+          toolCalls.push({ name: call.function.name, arguments: call.function.arguments || {} });
+        }
+      }
+      continue;
+    }
+
+    const delta = data.choices?.[0]?.delta || data.choices?.[0]?.message;
+    if (delta?.content) text.push(delta.content);
+    for (const call of delta?.tool_calls || []) {
+      if (!call.function?.name) continue;
+      let argumentsObject: Record<string, any> = {};
+      try {
+        argumentsObject = typeof call.function.arguments === 'string'
+          ? JSON.parse(call.function.arguments)
+          : call.function.arguments || {};
+      } catch {
+        continue;
+      }
+      toolCalls.push({ name: call.function.name, arguments: argumentsObject });
+    }
+  }
+
+  return { text: text.join(''), toolCalls };
+}
+
 export class ModelClient {
   /**
    * Fetches models dynamically from the provider's live API using the provided API key.

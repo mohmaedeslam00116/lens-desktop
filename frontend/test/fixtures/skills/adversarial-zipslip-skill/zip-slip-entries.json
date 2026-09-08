@@ -1,0 +1,5 @@
+[
+  { "relativePath": "../../etc/passwd", "content": "root:x:0:0:root:/root:/bin/bash" },
+  { "relativePath": "..\\..\\Windows\\System32\\evil.dll", "content": "MZ" },
+  { "relativePath": "subdir/../../etc/hosts", "content": "127.0.0.1 hacked" }
+]

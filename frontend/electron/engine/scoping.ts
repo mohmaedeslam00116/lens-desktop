@@ -189,7 +189,7 @@ export function validateResearchPlan(plan: ResearchPlan): { valid: boolean; erro
 /**
  * Deterministic skill suggestion heuristic based on query content and language.
  */
-function suggestSkillsForQuery(query: string, isArabic: boolean): string[] {
+export function suggestSkillsForQuery(query: string, isArabic: boolean): string[] {
   const qLower = query.toLowerCase();
   const skills = new Set<string>();
 
