@@ -146,9 +146,12 @@ describe('Session Lifecycle State Machine & Transition Rules', () => {
     assert.ok(session.signal);
   });
 
-  it('defaults mode to wide when report_type is storm, standard otherwise', () => {
+  it('uses wide mode only when it is explicitly requested', () => {
     const stormSession = new ResearchSession({ query: 'AI Chips', report_type: 'storm' });
-    assert.equal(stormSession.mode, 'wide');
+    assert.equal(stormSession.mode, 'standard');
+
+    const wideSession = new ResearchSession({ query: 'AI Chips', report_type: 'storm', mode: 'wide' });
+    assert.equal(wideSession.mode, 'wide');
 
     const standardSession = new ResearchSession({ query: 'AI Chips', report_type: 'quick' });
     assert.equal(standardSession.mode, 'standard');

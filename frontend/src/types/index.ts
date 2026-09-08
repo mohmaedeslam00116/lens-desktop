@@ -1,6 +1,7 @@
 export type Language = 'ar' | 'en';
 export type ResearchDepth = 'quick' | 'deep' | 'storm';
 export type ResearchPerspective = 'balanced' | 'technical' | 'market' | 'critical' | 'storm';
+export type ResearchMode = 'standard' | 'wide';
 export type LLMProvider = 'openai' | 'gemini' | 'anthropic' | 'groq' | 'deepseek' | 'openrouter' | 'mistral' | 'ollama';
 export type EmbeddingProvider = 'gemini' | 'openai' | 'ollama' | 'none';
 
@@ -76,6 +77,26 @@ export interface ResearchPlan {
   updatedAt?: number;
 }
 
+export interface WideResearchTelemetry {
+  initialBudget: number;
+  activeBudget: number;
+  maximumBudget: number;
+  discovered: number;
+  fetched: number;
+  unique: number;
+  admitted: number;
+  cited: number;
+  hop: number;
+  coverageScore?: number;
+  expansion?: {
+    from: number;
+    to: number;
+    reason: string;
+    uncoveredMilestones: string[];
+    uncoveredSubqueries: string[];
+  };
+}
+
 export interface LiveEvent {
   type:
     | 'status'
@@ -94,7 +115,8 @@ export interface LiveEvent {
     | 'plan_rejected'
     | 'session_state'
     | 'cancelled'
-    | 'budget_exhausted';
+    | 'budget_exhausted'
+    | 'wide_telemetry';
   sessionId?: string;
   state?: string;
   plan?: ResearchPlan;
@@ -115,6 +137,7 @@ export interface LiveEvent {
   followups?: string[];
   node?: ResearchGraphNode;
   reflections?: string[];
+  wideTelemetry?: WideResearchTelemetry;
 }
 
 export interface TocHeading {
@@ -164,6 +187,8 @@ export interface ReportData {
   createdAt: string;
   costs?: number;
   language: string;
+  mode?: ResearchMode;
+  wideTelemetry?: WideResearchTelemetry;
   readingTimeMinutes?: number;
   wordCount?: number;
 }

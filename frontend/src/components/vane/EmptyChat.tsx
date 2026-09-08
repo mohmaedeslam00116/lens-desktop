@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowUpRight, ArrowRight, KeyRound } from 'lucide-react';
 import { EmptyChatMessageInput } from './EmptyChatMessageInput';
-import { Language, ApiSettings } from '../../types';
+import { Language, ApiSettings, ResearchMode } from '../../types';
 import { BrandLogo } from '../brand/BrandLogo';
 
 interface EmptyChatProps {
@@ -16,6 +16,8 @@ interface EmptyChatProps {
   setOptimizationMode: (m: 'speed' | 'balanced' | 'quality') => void;
   sourceFocus: 'web' | 'academic' | 'social';
   setSourceFocus: (f: 'web' | 'academic' | 'social') => void;
+  researchMode: ResearchMode;
+  setResearchMode: (mode: ResearchMode) => void;
 }
 
 export const EmptyChat: React.FC<EmptyChatProps> = (props) => {

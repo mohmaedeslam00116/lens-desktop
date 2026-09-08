@@ -13,7 +13,7 @@ import {
   Sliders,
   FileText
 } from 'lucide-react';
-import { Language, ResearchPlan, PlanMilestone } from '../../types';
+import { Language, ResearchPlan, PlanMilestone, ResearchMode } from '../../types';
 import { useDialogFocus } from '../../hooks/useDialogFocus';
 
 interface PlanApprovalModalProps {
@@ -24,6 +24,7 @@ interface PlanApprovalModalProps {
   onRegenerate: (modifier?: string) => void;
   onDiscard: (reason?: string) => void;
   isRegenerating?: boolean;
+  mode?: ResearchMode;
 }
 
 const AVAILABLE_SKILL_LABELS: Record<string, { en: string; ar: string; descEn: string; descAr: string }> = {
@@ -67,8 +68,10 @@ export const PlanApprovalModal: React.FC<PlanApprovalModalProps> = ({
   onRegenerate,
   onDiscard,
   isRegenerating = false,
+  mode = 'standard',
 }) => {
   const isArabic = language === 'ar';
+  const isWide = mode === 'wide';
   const dialogRef = useDialogFocus(isOpen, () => onDiscard('User dismissed modal'));
 
   const [milestones, setMilestones] = useState<PlanMilestone[]>([]);
@@ -173,8 +176,8 @@ export const PlanApprovalModal: React.FC<PlanApprovalModalProps> = ({
               </div>
               <p className="text-xs text-[#8E8E8E] mt-0.5">
                 {isArabic 
-                  ? 'راجع المحاور المقترحة وخصص مسار البحث قبل بدء عملية الاسترجاع الموسعة' 
-                  : 'Review proposed milestones and authorize retrieval trajectory before wide execution'}
+                  ? (isWide ? 'يبدأ البحث الموسع بـ 100 مصدر، وقد يتوسع تلقائيًا حتى 200 فقط عند بقاء فجوات أدلة.' : 'راجع المحاور المقترحة وخصص مسار البحث قبل بدء عملية الاسترجاع.')
+                  : (isWide ? 'Wide Research starts with 100 sources and automatically expands to 200 only when evidence gaps remain.' : 'Review proposed milestones and authorize the retrieval trajectory.')}
               </p>
             </div>
           </div>
@@ -348,6 +351,13 @@ export const PlanApprovalModal: React.FC<PlanApprovalModalProps> = ({
                 <span className="text-[#A0A0A0] font-medium">{isArabic ? 'المصادر المستهدفة:' : 'Target Sources:'} </span>
                 <span className="text-[#EDEDEB] font-mono font-semibold">{targetSources}</span>
               </div>
+              {isWide && <>
+                <div className="w-px h-3 bg-[#333333]" />
+                <div>
+                  <span className="text-[#A0A0A0] font-medium">{isArabic ? 'البداية / الحد الأقصى:' : 'Start / maximum:'} </span>
+                  <span className="text-[#EDEDEB] font-mono font-semibold">100 / 200</span>
+                </div>
+              </>}
               <div className="w-px h-3 bg-[#333333]" />
               <div>
                 <span className="text-[#A0A0A0] font-medium">{isArabic ? 'أقصى جولات استقصاء:' : 'Max Hops:'} </span>
@@ -355,7 +365,7 @@ export const PlanApprovalModal: React.FC<PlanApprovalModalProps> = ({
               </div>
             </div>
             <span className="text-[11px] text-[#6E6E6E]">
-              {isArabic ? 'مضبوط تلقائيًا وفق النطاق الموسع' : 'Standard wide research budget'}
+              {isWide ? (isArabic ? 'توسع تلقائي مشروط بفجوات الأدلة' : 'Automatic expansion only for evidence gaps') : (isArabic ? 'نطاق البحث المعتمد' : 'Authorized research scope')}
             </span>
           </div>
 

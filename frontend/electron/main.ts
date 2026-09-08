@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { startEmbeddedServer, stopEmbeddedServer } from './engine/server';
+import { ReportExportService } from './engine/reportExport';
 
 let mainWindow: BrowserWindow | null = null;
 const isDev = !app.isPackaged;
@@ -10,7 +11,29 @@ const BACKEND_PORT = 8000;
 async function startBackendEngine() {
   try {
     console.log(`[Electron Main] Initializing native Vane embedded engine on port ${BACKEND_PORT}...`);
-    await startEmbeddedServer(BACKEND_PORT);
+    const reportExportService: ReportExportService = {
+      renderPdf: async (html) => {
+        const exportWindow = new BrowserWindow({
+          show: false,
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+          },
+        });
+        try {
+          await exportWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+          return await exportWindow.webContents.printToPDF({
+            pageSize: 'A4',
+            printBackground: true,
+            preferCSSPageSize: true,
+          });
+        } finally {
+          if (!exportWindow.isDestroyed()) exportWindow.destroy();
+        }
+      },
+    };
+    await startEmbeddedServer(BACKEND_PORT, { reportExportService });
     console.log(`[Electron Main] Native Vane research engine active on http://127.0.0.1:${BACKEND_PORT}`);
   } catch (err) {
     console.error('[Electron Main] Failed to start native embedded engine:', err);

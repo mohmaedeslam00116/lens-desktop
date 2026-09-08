@@ -26,7 +26,8 @@ import { AgentWorkspace } from './AgentWorkspace';
 import { GraphView } from './GraphView';
 import { FacetGroupedShelf } from '../research/FacetGroupedShelf';
 import { EvidenceInspectionDrawer } from '../research/EvidenceInspectionDrawer';
-import { SourceItem, ResearchStep, Language, ResearchPlan } from '../../types';
+import { SourceItem, ResearchStep, Language, ResearchPlan, WideResearchTelemetry } from '../../types';
+import { WideResearchTelemetry as WideResearchTelemetryPanel } from '../research/WideResearchTelemetry';
 import { extractTables, tableToCSV } from '../../utils/markdownArtifacts';
 
 interface MessageBoxProps {
@@ -39,6 +40,7 @@ interface MessageBoxProps {
   plan?: ResearchPlan | null;
   onExport: (format: 'pdf' | 'docx' | 'markdown') => void;
   onFollowUp: (q: string) => void;
+  wideTelemetry?: WideResearchTelemetry | null;
 }
 
 export const MessageBox: React.FC<MessageBoxProps> = ({
@@ -51,6 +53,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   plan,
   onExport,
   onFollowUp,
+  wideTelemetry,
 }) => {
   const isArabic = language === 'ar';
   const [viewMode, setViewMode] = useState<'report' | 'shelf' | 'workspace' | 'graph'>('report');
@@ -148,6 +151,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
         loading={loading} 
         language={language} 
       />
+      {wideTelemetry && <WideResearchTelemetryPanel telemetry={wideTelemetry} language={language} />}
 
       {/* 3. Post-Research Workspace View Mode Switcher */}
       {report && (

@@ -4,11 +4,19 @@ import * as crypto from 'crypto';
 import { LiveEvent, ResearchPlan, ResearchRequest, WideResearchRequest } from './types';
 import { ModelClient } from './models';
 import { DeepResearchAgent } from './agent';
+import { WideResearchAgent } from './wideAgent';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
 import { SessionLifecycleManager, ResearchSession } from './sessionLifecycle';
 import { generateResearchPlan, regenerateResearchPlan } from './scoping';
 import { SkillRegistry, SkillActivationManager, SkillManagerService } from './skills';
+import {
+  createDocxBuffer,
+  createExportFilename,
+  createExportHtml,
+  ReportExportService,
+  validateReportExportPayload,
+} from './reportExport';
 
 interface ActiveSession {
   id: string;
@@ -16,6 +24,26 @@ interface ActiveSession {
   sockets: Set<WebSocket>;
   researchSession: ResearchSession;
   isCompleted: boolean;
+}
+
+export function normalizeResearchRequest(body: WideResearchRequest): WideResearchRequest {
+  const isWide = body.mode === 'wide';
+  return {
+    ...body,
+    mode: isWide ? 'wide' : 'standard',
+    ...(isWide ? { maxSources: 200, maxHops: 2 } : {}),
+  };
+}
+
+export function createResearchAgent(
+  request: WideResearchRequest,
+  sessionId: string,
+  emitEvent: (event: LiveEvent) => void,
+  activationManager?: SkillActivationManager,
+): DeepResearchAgent | WideResearchAgent {
+  return request.mode === 'wide'
+    ? new WideResearchAgent(sessionId, emitEvent, {}, activationManager)
+    : new DeepResearchAgent(sessionId, emitEvent, activationManager);
 }
 
 const sessionManager = new SessionLifecycleManager();
@@ -28,6 +56,11 @@ globalSkillRegistry.discoverAll().catch(err => {
 
 let httpServer: http.Server | null = null;
 let wss: WebSocketServer | null = null;
+let reportExportService: ReportExportService | null = null;
+
+export interface EmbeddedServerOptions {
+  reportExportService?: ReportExportService;
+}
 
 function setCorsHeaders(res: http.ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -78,7 +111,8 @@ function startAuthorizedExecution(session: ActiveSession, approvedPlan?: Researc
 
   setImmediate(async () => {
     const activationManager = new SkillActivationManager(globalSkillRegistry);
-    const agent = new DeepResearchAgent(
+    const agent = createResearchAgent(
+      session.request,
       session.id,
       (event: LiveEvent) => {
         session.researchSession.emitEvent(event);
@@ -98,12 +132,13 @@ function startAuthorizedExecution(session: ActiveSession, approvedPlan?: Researc
   });
 }
 
-export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
+export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions = {}): Promise<{ port: number }> {
   return new Promise((resolve, reject) => {
     if (httpServer) {
       resolve({ port });
       return;
     }
+    reportExportService = options.reportExportService || null;
 
     httpServer = http.createServer(async (req, res) => {
       setCorsHeaders(res);
@@ -286,12 +321,13 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
         // Start Deep Research Task
         if (pathname === '/api/research/start' && req.method === 'POST') {
           const body = await parseJsonBody<WideResearchRequest>(req);
-          const researchSession = sessionManager.createSession(body);
+          const normalizedRequest = normalizeResearchRequest(body);
+          const researchSession = sessionManager.createSession(normalizedRequest);
           const sessionId = researchSession.id;
 
           const session: ActiveSession = {
             id: sessionId,
-            request: body,
+            request: normalizedRequest,
             sockets: new Set(),
             researchSession,
             isCompleted: false
@@ -311,18 +347,18 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
             }
           });
 
-          const isWideMode = body.mode === 'wide' || body.report_type === 'storm';
+          const isWideMode = normalizedRequest.mode === 'wide';
 
           if (isWideMode) {
             // Phase 1: Collaborative Plan Scoping Protocol
             setImmediate(async () => {
               try {
-                const plan = await generateResearchPlan(body.query, {
-                  language: body.language,
-                  mode: body.mode,
-                  reportType: body.report_type,
-                  targetSources: body.maxSources || 100,
-                  maxHops: body.maxHops !== undefined ? body.maxHops : 2
+                const plan = await generateResearchPlan(normalizedRequest.query, {
+                  language: normalizedRequest.language,
+                  mode: 'wide',
+                  reportType: normalizedRequest.report_type,
+                  targetSources: 100,
+                  maxHops: 2
                 });
                 researchSession.submitPlanProposed(plan);
               } catch (err: any) {
@@ -444,6 +480,43 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
           return;
         }
 
+        if ((pathname === '/api/export/pdf' || pathname === '/api/export/docx') && req.method === 'POST') {
+          let payload;
+          try {
+            payload = validateReportExportPayload(await parseJsonBody<unknown>(req));
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message || 'Invalid export payload' }));
+            return;
+          }
+
+          const isPdf = pathname.endsWith('/pdf');
+          if (isPdf && !reportExportService) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'PDF export is available only in the desktop application.' }));
+            return;
+          }
+
+          try {
+            const buffer = isPdf
+              ? await reportExportService!.renderPdf(createExportHtml(payload))
+              : createDocxBuffer(payload);
+            const extension = isPdf ? 'pdf' : 'docx';
+            res.writeHead(200, {
+              'Content-Type': isPdf
+                ? 'application/pdf'
+                : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              'Content-Length': buffer.length,
+              'Content-Disposition': `attachment; filename="${createExportFilename(payload.title, extension)}"`,
+            });
+            res.end(buffer);
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message || 'Unable to create export' }));
+          }
+          return;
+        }
+
         // Follow-up question endpoint
         if (pathname === '/api/followup' && req.method === 'POST') {
           const body = await parseJsonBody<any>(req);
@@ -562,8 +635,10 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
     });
 
     httpServer.listen(port, '127.0.0.1', () => {
-      console.log(`[EmbeddedEngine] Native Vane TypeScript Engine running on http://127.0.0.1:${port}`);
-      resolve({ port });
+      const address = httpServer?.address();
+      const activePort = address && typeof address === 'object' ? address.port : port;
+      console.log(`[EmbeddedEngine] Native Vane TypeScript Engine running on http://127.0.0.1:${activePort}`);
+      resolve({ port: activePort });
     });
   });
 }
@@ -577,6 +652,7 @@ export function stopEmbeddedServer(): Promise<void> {
     if (httpServer) {
       httpServer.close(() => {
         httpServer = null;
+        reportExportService = null;
         resolve();
       });
     } else {

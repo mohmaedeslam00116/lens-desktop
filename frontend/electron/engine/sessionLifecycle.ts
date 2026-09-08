@@ -49,7 +49,7 @@ export class ResearchSession {
   ) {
     this.id = id;
     this.request = request;
-    this.mode = request.mode || (request.report_type === 'storm' ? 'wide' : 'standard');
+    this.mode = request.mode === 'wide' ? 'wide' : 'standard';
     this.state = 'planning';
     this.eventBuffer = new EventRingBuffer(bufferCapacity);
     this.abortController = new AbortController();

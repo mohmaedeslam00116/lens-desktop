@@ -20,8 +20,11 @@ import {
   ApiSettings, 
   SourceItem,
   ResearchStep,
-  ResearchPlan
+  ResearchPlan,
+  ResearchMode,
+  WideResearchTelemetry,
 } from './types';
+import { buildResearchStartPayload } from './utils/researchRequest.mjs';
 
 const API_BASE = 'http://127.0.0.1:8000';
 const WS_BASE = 'ws://127.0.0.1:8000';
@@ -64,6 +67,7 @@ export function App() {
   // Search Engine Parameters
   const [query, setQuery] = useState('');
   const [optimizationMode, setOptimizationMode] = useState<'speed' | 'balanced' | 'quality'>('quality');
+  const [researchMode, setResearchMode] = useState<ResearchMode>('standard');
   const [sourceFocus, setSourceFocus] = useState<'web' | 'academic' | 'social'>('web');
   const [isSearching, setIsSearching] = useState(false);
 
@@ -76,6 +80,7 @@ export function App() {
   const [visitedSources, setVisitedSources] = useState<SourceItem[]>([]);
   const [reflections, setReflections] = useState<string[]>([]);
   const [graphNodes, setGraphNodes] = useState<ResearchGraphNode[]>([]);
+  const [wideTelemetry, setWideTelemetry] = useState<WideResearchTelemetry | null>(null);
   
   // Collaborative Plan Scoping (Tracer 4)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -164,6 +169,7 @@ export function App() {
     setVisitedSources([]);
     setReflections([]);
     setGraphNodes([]);
+    setWideTelemetry(null);
     setProposedPlan(null);
     setIsPlanModalOpen(false);
     setIsRegeneratingPlan(false);
@@ -196,6 +202,7 @@ export function App() {
     setVisitedSources([]);
     setReflections([]);
     setGraphNodes([]);
+    setWideTelemetry(null);
 
     // Map optimization mode to depth & perspective
     let depth: ResearchDepth = 'deep';
@@ -220,8 +227,10 @@ export function App() {
       const response = await fetch(`${API_BASE}/api/research/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(buildResearchStartPayload({
           query: effectiveQuery,
+          mode: researchMode,
+          depth,
           report_type: depth,
           perspective,
           language,
@@ -237,7 +246,7 @@ export function App() {
             : settings.embedding?.api_key,
           embedding_endpoint: settings.embedding?.endpoint || settings.ollama_endpoint,
           embedding_enabled: settings.embedding?.enabled,
-        }),
+        })),
       });
 
       if (!response.ok) throw new Error(`Server returned ${response.status}`);
@@ -292,6 +301,8 @@ export function App() {
             if (payload.node) {
               setGraphNodes((prev) => [...prev, payload.node]);
             }
+          } else if (payload.type === 'wide_telemetry' && payload.wideTelemetry) {
+            setWideTelemetry(payload.wideTelemetry);
           } else if (payload.type === 'finished') {
             const formattedSources = (payload.sources || []).map((s: any) => {
               if (typeof s === 'string') return { url: s, title: s, credibilityScore: 85 };
@@ -312,6 +323,8 @@ export function App() {
               createdAt: new Date().toISOString(),
               costs: payload.costs || 0.0,
               language,
+              mode: researchMode,
+              wideTelemetry: payload.wideTelemetry || wideTelemetry || undefined,
             };
 
             setActiveReport(finalReport);
@@ -401,6 +414,7 @@ export function App() {
         a.href = url;
         a.download = `Research_Report_${Date.now()}.md`;
         a.click();
+        URL.revokeObjectURL(url);
         return;
       }
 
@@ -423,8 +437,10 @@ export function App() {
       a.href = url;
       a.download = `Research_Report_${Date.now()}.${format === 'docx' ? 'docx' : 'pdf'}`;
       a.click();
+      URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Export error:', err);
+      setResearchError(language === 'ar' ? 'تعذر تصدير التقرير. حاول مرة أخرى.' : 'Unable to export the report. Please try again.');
     }
   };
 
@@ -489,6 +505,8 @@ export function App() {
                 setOptimizationMode={setOptimizationMode}
                 sourceFocus={sourceFocus}
                 setSourceFocus={setSourceFocus}
+                researchMode={researchMode}
+                setResearchMode={setResearchMode}
               />
             ) : (
               <div className="flex-1 flex flex-col justify-between pb-8">
@@ -502,6 +520,7 @@ export function App() {
                   plan={activeReport?.plan || proposedPlan}
                   onExport={handleExport}
                   onFollowUp={(q) => handleStartResearch(q)}
+                  wideTelemetry={wideTelemetry}
                 />
 
                 {/* Docked Follow-up input bar */}
@@ -598,6 +617,7 @@ export function App() {
           isOpen={isPlanModalOpen}
           language={language}
           plan={proposedPlan}
+          mode={researchMode}
           onApprove={handleApprovePlan}
           onRegenerate={handleRegeneratePlan}
           onDiscard={handleDiscardPlan}

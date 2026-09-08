@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Explicit Wide Research Completion ([#27](https://github.com/mohmaedeslam00116/lens-desktop/issues/27))**:
+  - Dedicated `WideResearchAgent` with mandatory plan approval, bounded 100-source initial retrieval, evidence-gap-driven expansion capped at 200, hybrid evidence admission, hierarchical synthesis, and citation-grounding verification.
+  - Visible Arabic/English Standard Research and Wide Research controls, an approved-plan budget summary, and live source-stage telemetry with the reason for every expansion.
+  - Implemented desktop `POST /api/export/pdf` and `POST /api/export/docx` endpoints. PDF uses Chromium’s print engine; DOCX is a valid, bidirectional OOXML package generated without native dependencies.
+  - Added deterministic tests for wide-agent boundaries, explicit mode routing, UI request construction, DOCX package contents, export HTTP responses, and malformed export payload rejection.
 - **End-to-End Interoperability Suite & Four-Pillar Acceptance Gates ([#37](https://github.com/mohmaedeslam00116/lens-desktop/issues/37))**:
   - Automated Cross-Client Test Fixtures (`frontend/test/fixtures/skills/`):
     - `anthropic-reference-skill`: Anthropic-style skill package with complex YAML metadata, license declarations, and deeply nested reference documents (`references/nested/deep-methodology.md`, `references/citation-policy.md`).
