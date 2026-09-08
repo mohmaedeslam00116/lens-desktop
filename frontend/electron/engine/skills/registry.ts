@@ -19,9 +19,36 @@ export class SkillRegistry {
   ]);
   private diagnostics: Array<{ path: string; error: string }> = [];
   private options: SkillDiscoveryOptions;
+  private disabledSkills: Set<string> = new Set();
 
   constructor(options: SkillDiscoveryOptions = {}) {
     this.options = options;
+  }
+
+  /**
+   * Sets whether a skill is enabled in the registry.
+   */
+  public setSkillEnabled(name: string, enabled: boolean): void {
+    const norm = name.trim().toLowerCase();
+    if (enabled) {
+      this.disabledSkills.delete(norm);
+    } else {
+      this.disabledSkills.add(norm);
+    }
+  }
+
+  /**
+   * Checks whether a skill is currently enabled in the registry.
+   */
+  public isSkillEnabled(name: string): boolean {
+    return !this.disabledSkills.has(name.trim().toLowerCase());
+  }
+
+  /**
+   * Returns list of disabled skill names.
+   */
+  public getDisabledSkills(): string[] {
+    return Array.from(this.disabledSkills);
   }
 
   /**
@@ -89,9 +116,12 @@ export class SkillRegistry {
   /**
    * Returns Tier 1 lightweight skill summaries (~50-100 tokens each)
    * suitable for model catalog disclosure at session start.
+   * By default filters out disabled skills, dynamically updating Tier 1 disclosure.
    */
-  public listSummaries(): SkillSummary[] {
-    return this.listSkills().map(pkg => ({
+  public listSummaries(options?: { includeDisabled?: boolean }): SkillSummary[] {
+    const all = this.listSkills();
+    const active = options?.includeDisabled ? all : all.filter(pkg => this.isSkillEnabled(pkg.name));
+    return active.map(pkg => ({
       name: pkg.name,
       description: pkg.frontmatter.description,
       scope: pkg.scope,

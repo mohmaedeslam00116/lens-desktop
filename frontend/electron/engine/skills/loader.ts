@@ -62,6 +62,15 @@ export async function loadSkillResource(
   pkg: SkillPackage,
   relativeResourcePath: string
 ): Promise<string> {
+  const normalizedKey = relativeResourcePath.replace(/\\/g, '/').toLowerCase();
+  if (pkg.resourceSnapshot && pkg.resourceSnapshot.has(normalizedKey)) {
+    return pkg.resourceSnapshot.get(normalizedKey)!;
+  }
   const boundary: SkillPathBoundary = pkg.boundary || new SkillPathBoundary(pkg.rootPath);
-  return boundary.readResource(relativeResourcePath, 'utf8');
+  const content = await boundary.readResource(relativeResourcePath, 'utf8');
+  if (!pkg.resourceSnapshot) {
+    pkg.resourceSnapshot = new Map();
+  }
+  pkg.resourceSnapshot.set(normalizedKey, content);
+  return content;
 }

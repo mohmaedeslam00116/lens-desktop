@@ -6,6 +6,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { SkillRegistry } from './registry';
 import { SkillPackage, SkillScope, SkillFrontmatter } from './types';
 import { parseSkillFrontmatter } from './parser';
@@ -57,12 +58,36 @@ export interface SkillImportOptions {
 
 export class SkillManagerService {
   private registry: SkillRegistry;
+  private workspaceDir: string;
+  private userGlobalDir?: string;
   private disabledSkills: Set<string> = new Set();
   private activeSessionSkills: Set<string> = new Set();
   private selectedPlanSkills: Set<string> = new Set();
+  private sessionSnapshots: Map<string, SkillPackage> = new Map();
 
-  constructor(registry: SkillRegistry) {
+  constructor(registry: SkillRegistry, workspaceDir: string = process.cwd(), userGlobalDir?: string) {
     this.registry = registry;
+    this.workspaceDir = workspaceDir;
+    this.userGlobalDir = userGlobalDir;
+  }
+
+  /**
+   * Preserves an in-memory snapshot of an active skill package for running research sessions,
+   * isolating active execution from concurrent on-disk imports, renames, or overwrites.
+   */
+  public snapshotActiveSkill(pkg: SkillPackage): void {
+    const norm = pkg.name.toLowerCase();
+    this.sessionSnapshots.set(norm, {
+      ...pkg,
+      resourceSnapshot: new Map(pkg.resourceSnapshot || [])
+    });
+  }
+
+  /**
+   * Retrieves an in-memory session snapshot if one exists.
+   */
+  public getSessionSnapshot(name: string): SkillPackage | undefined {
+    return this.sessionSnapshots.get(name.toLowerCase());
   }
 
   /**
@@ -135,7 +160,7 @@ export class SkillManagerService {
       throw new Error(`SKILL_NOT_FOUND: Skill "${name}" is not registered`);
     }
 
-    const currentEnabled = !this.disabledSkills.has(norm);
+    const currentEnabled = this.registry.isSkillEnabled(norm);
     const newEnabled = enabled !== undefined ? enabled : !currentEnabled;
 
     if (newEnabled) {
@@ -144,6 +169,7 @@ export class SkillManagerService {
       this.disabledSkills.add(norm);
     }
 
+    this.registry.setSkillEnabled(norm, newEnabled);
     return newEnabled;
   }
 
@@ -214,15 +240,25 @@ export class SkillManagerService {
           return scriptExtensions.includes(ext);
         });
 
-      // Check collision against registry and disk
+      // Check collision against target scope directory on disk
       const normName = parsed.frontmatter.name.toLowerCase();
-      const existingInRegistry = this.registry.getSkill(normName);
-      let hasCollision = Boolean(existingInRegistry);
-      let collidingScope = existingInRegistry?.scope;
-
-      if (!hasCollision && customScopeDir) {
-        hasCollision = SkillCollisionResolver.checkCollision(customScopeDir, normName);
+      let targetScopeDir: string;
+      if (customScopeDir) {
+        targetScopeDir = customScopeDir;
+      } else if (targetScope === 'workspace') {
+        targetScopeDir = path.join(this.workspaceDir, '.agents', 'skills');
+      } else {
+        targetScopeDir =
+          this.userGlobalDir ||
+          (process.env.APPDATA
+            ? path.join(process.env.APPDATA, 'LENS', 'skills')
+            : path.join(os.homedir(), '.agents', 'skills'));
       }
+
+      const diskCollision = SkillCollisionResolver.checkCollision(targetScopeDir, normName);
+      const existingInRegistry = this.registry.getSkill(normName);
+      const hasCollision = diskCollision || (existingInRegistry !== undefined && existingInRegistry.scope === targetScope);
+      const collidingScope = hasCollision ? (existingInRegistry?.scope || targetScope) : undefined;
 
       return {
         valid: true,

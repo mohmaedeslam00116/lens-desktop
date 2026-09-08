@@ -23,6 +23,7 @@ export interface SkillPackage {
   rawBody: string;
   parsedAt: number;
   boundary?: any;
+  resourceSnapshot?: Map<string, string>;
 }
 
 /**

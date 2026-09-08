@@ -564,8 +564,8 @@ export function App() {
           <SkillsManagerView
             language={language}
             apiBase={API_BASE}
-            activeSkillNames={proposedPlan?.suggestedSkills || activeReport?.plan?.suggestedSkills || []}
-            selectedSkillNames={proposedPlan?.suggestedSkills || []}
+            activeSkillNames={isSearching && activeReport?.plan?.suggestedSkills ? activeReport.plan.suggestedSkills : []}
+            selectedSkillNames={proposedPlan?.suggestedSkills || activeReport?.plan?.suggestedSkills || []}
           />
         )}
       </main>

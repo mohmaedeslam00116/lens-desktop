@@ -26,6 +26,9 @@ import {
   loadSkillPackage,
   loadSkillResource
 } from '../dist-electron/engine/skills/loader.js';
+import {
+  SkillActivationManager
+} from '../dist-electron/engine/skills/activation.js';
 
 describe('Tracer 9: Agent Skills Management, Non-Destructive Resolver & Launch Skills', () => {
   let tempDir;
@@ -317,6 +320,103 @@ describe('Tracer 9: Agent Skills Management, Non-Destructive Resolver & Launch S
       const reSkill = reExtracted.find(f => f.relativePath === 'SKILL.md');
       assert.ok(reSkill);
       assert.ok(reSkill.content.toString('utf8').includes('name: exportable-skill'));
+    });
+
+    it('dynamically excludes disabled skills from Tier 1 catalog summaries and prevents activation', async () => {
+      // 1. Register a skill
+      const skillDir = path.join(tempDir, 'active-disable-test');
+      await fs.promises.mkdir(skillDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: active-disable-test\ndescription: Test skill for disable\n---\n# Guide'
+      );
+
+      const pkg = await loadSkillPackage(skillDir, 'workspace');
+      registry.registerDynamic(pkg);
+
+      // Initially enabled: listed in Tier 1 summaries
+      const initialSummaries = registry.listSummaries();
+      assert.ok(initialSummaries.some(s => s.name === 'active-disable-test'));
+
+      // Toggle disabled via service
+      service.toggleSkillEnabled('active-disable-test', false);
+      assert.equal(registry.isSkillEnabled('active-disable-test'), false);
+
+      // Dynamically excluded from Tier 1 catalog summaries
+      const filteredSummaries = registry.listSummaries();
+      assert.ok(!filteredSummaries.some(s => s.name === 'active-disable-test'));
+
+      // Can still be retrieved if explicitly including disabled
+      const allSummaries = registry.listSummaries({ includeDisabled: true });
+      assert.ok(allSummaries.some(s => s.name === 'active-disable-test'));
+
+      // ActivationManager rejects activation of disabled skills
+      const activationManager = new SkillActivationManager(registry);
+      const preActivated = await activationManager.preActivateSkills(['active-disable-test']);
+      assert.equal(preActivated.length, 0);
+
+      const res = await activationManager.handleActivateSkillToolCall({ name: 'active-disable-test' });
+      assert.equal(res.success, false);
+      assert.equal(res.error, 'SKILL_DISABLED');
+    });
+
+    it('ensures active running sessions remain isolated from on-disk collision modifications via in-memory snapshots', async () => {
+      // 1. Create a skill on disk with a reference doc
+      const skillDir = path.join(tempDir, 'running-session-skill');
+      const refsDir = path.join(skillDir, 'references');
+      await fs.promises.mkdir(refsDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: running-session-skill\ndescription: Running session skill\n---\n# Original Version 1'
+      );
+      await fs.promises.writeFile(
+        path.join(refsDir, 'guide.md'),
+        '# Original Guide V1: Critical analytical procedures'
+      );
+
+      const pkg = await loadSkillPackage(skillDir, 'workspace');
+      registry.registerDynamic(pkg);
+
+      // 2. Active session activates the skill
+      const activationManager = new SkillActivationManager(registry);
+      const preActivated = await activationManager.preActivateSkills(['running-session-skill']);
+      assert.equal(preActivated.length, 1);
+      assert.ok(preActivated[0].shieldedContent.includes('Original Version 1'));
+
+      // Read resource once to snapshot into in-memory cache
+      const initialResource = await loadSkillResource(pkg, 'references/guide.md');
+      assert.ok(initialResource.includes('Original Guide V1'));
+
+      // Service records active snapshot
+      service.snapshotActiveSkill(pkg);
+
+      // 3. User performs a collision overwrite on disk while session is running
+      const collisionResult = await SkillCollisionResolver.resolve(
+        tempDir,
+        'running-session-skill',
+        'overwrite'
+      );
+      assert.ok(collisionResult.backupDir);
+
+      // Mutate or write completely different content to the overwritten folder on disk
+      await fs.promises.writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: running-session-skill\ndescription: Completely new V2\n---\n# Overwritten V2'
+      );
+      await fs.promises.mkdir(path.join(skillDir, 'references'), { recursive: true });
+      await fs.promises.writeFile(
+        path.join(skillDir, 'references', 'guide.md'),
+        '# Overwritten Guide V2'
+      );
+
+      // 4. Verify running session remains isolated: reads from in-memory snapshot
+      const isolatedResource = await loadSkillResource(pkg, 'references/guide.md');
+      assert.equal(isolatedResource, '# Original Guide V1: Critical analytical procedures');
+      assert.ok(preActivated[0].shieldedContent.includes('Original Version 1'));
+
+      const sessionSnapshot = service.getSessionSnapshot('running-session-skill');
+      assert.ok(sessionSnapshot);
+      assert.equal(sessionSnapshot.name, 'running-session-skill');
     });
   });
 

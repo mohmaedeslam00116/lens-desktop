@@ -77,6 +77,11 @@ export class SkillActivationManager {
         continue;
       }
 
+      if (!this.registry.isSkillEnabled(normalized)) {
+        // Skill is disabled by user configuration; skip pre-activation
+        continue;
+      }
+
       const activated = this.activatePackage(pkg, 'pre_activated', emitEvent, options?.language);
       activatedList.push(activated);
     }
@@ -152,6 +157,14 @@ export class SkillActivationManager {
       };
     }
 
+    if (!this.registry.isSkillEnabled(normalized)) {
+      return {
+        success: false,
+        error: 'SKILL_DISABLED',
+        message: `Skill "${normalized}" has been disabled by user and cannot be activated.`
+      };
+    }
+
     // If already active, use existing activation; otherwise activate package
     const activated =
       this.activeSkills.get(normalized) ||
@@ -203,6 +216,12 @@ export class SkillActivationManager {
   ): ActivatedSkill {
     const mapping = HostToolMapper.mapTools(pkg.frontmatter.allowedTools || []);
     const shieldedContent = CompactionShield.shield(pkg.name, pkg.rawBody);
+
+    // In-memory snapshotting: isolate active session from concurrent on-disk modifications
+    if (!pkg.resourceSnapshot) {
+      pkg.resourceSnapshot = new Map();
+    }
+    pkg.resourceSnapshot.set('skill.md', pkg.rawBody);
 
     const activated: ActivatedSkill = {
       name: pkg.name,

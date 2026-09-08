@@ -17,6 +17,35 @@ import {
 } from 'lucide-react';
 import { Language } from '../../types';
 import { translations } from '../../i18n/translations';
+import { useDialogFocus } from '../../hooks/useDialogFocus';
+
+async function readEntryTree(entry: any, currentPath = ''): Promise<Array<{ path: string; content: string }>> {
+  if (entry.isFile) {
+    return new Promise((resolve) => {
+      entry.file((file: File) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = (reader.result as string) || '';
+          resolve([{ path: currentPath ? `${currentPath}/${entry.name}` : entry.name, content: text }]);
+        };
+        reader.onerror = () => resolve([]);
+        reader.readAsText(file);
+      });
+    });
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const subEntries: any[] = await new Promise((resolve) => {
+      reader.readEntries((ents: any[]) => resolve(ents || []));
+    });
+    const accumulated: Array<{ path: string; content: string }> = [];
+    for (const sub of subEntries) {
+      const results = await readEntryTree(sub, currentPath ? `${currentPath}/${entry.name}` : entry.name);
+      accumulated.push(...results);
+    }
+    return accumulated;
+  }
+  return [];
+}
 
 export type SkillScope = 'workspace' | 'user' | 'builtin';
 export type SkillLifecycleState = 'installed' | 'enabled' | 'selected' | 'active' | 'incompatible';
@@ -93,6 +122,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
   const [targetScope, setTargetScope] = useState<'workspace' | 'user'>('workspace');
   const [isSubmittingImport, setIsSubmittingImport] = useState(false);
 
+  const dialogRef = useDialogFocus(isPreInspectOpen, () => setIsPreInspectOpen(false));
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchSkills = async () => {
@@ -119,32 +149,17 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
 
   // Handle Enable/Disable Toggle
   const handleToggle = async (name: string, currentEnabled: boolean) => {
+    setActionError(null);
     try {
       const res = await fetch(`${apiBase}/api/skills/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, enabled: !currentEnabled })
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (data.success) {
-        setSkills((prev) =>
-          prev.map((s) => {
-            if (s.name.toLowerCase() === name.toLowerCase()) {
-              const newEnabled = data.isEnabled;
-              const newStates: SkillLifecycleState[] = ['installed'];
-              if (newEnabled && !s.isIncompatible) newStates.push('enabled');
-              if (s.isSelected) newStates.push('selected');
-              if (s.isActive) newStates.push('active');
-              if (s.isIncompatible) newStates.push('incompatible');
-              return { ...s, isEnabled: newEnabled, states: newStates };
-            }
-            return s;
-          })
-        );
-      }
+      if (!res.ok) throw new Error(`Failed to toggle skill (HTTP ${res.status})`);
+      await fetchSkills();
     } catch (err: any) {
-      setActionError(`Failed to toggle skill: ${err.message}`);
+      setActionError(err.message || 'Error toggling skill');
     }
   };
 
@@ -160,6 +175,64 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
   };
 
   // File Upload / Drop handler
+  const inspectAndStageZip = async (base64: string, scope: 'workspace' | 'user') => {
+    setActionError(null);
+    try {
+      const inspectRes = await fetch(`${apiBase}/api/skills/inspect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ zipBase64: base64, scope })
+      });
+
+      if (!inspectRes.ok) throw new Error(`Inspection failed (HTTP ${inspectRes.status})`);
+      const inspectData = await inspectRes.json();
+      const result: SkillPreInspectionResult = inspectData.inspection;
+
+      setInspectionData(result);
+      setStagedPayload({ zipBase64: base64 });
+      setRenameInput(result.hasCollision ? `${result.name}-custom` : '');
+      setCollisionAction(result.hasCollision ? 'keep' : 'overwrite');
+      setIsPreInspectOpen(true);
+    } catch (err: any) {
+      setActionError(`Inspection error: ${err.message}`);
+    }
+  };
+
+  const inspectAndStageFiles = async (
+    files: Array<{ path: string; content: string }>,
+    scope: 'workspace' | 'user'
+  ) => {
+    setActionError(null);
+    try {
+      const inspectRes = await fetch(`${apiBase}/api/skills/inspect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files, scope })
+      });
+
+      if (!inspectRes.ok) throw new Error(`Inspection failed (HTTP ${inspectRes.status})`);
+      const inspectData = await inspectRes.json();
+      const result: SkillPreInspectionResult = inspectData.inspection;
+
+      setInspectionData(result);
+      setStagedPayload({ files });
+      setRenameInput(result.hasCollision ? `${result.name}-custom` : '');
+      setCollisionAction(result.hasCollision ? 'keep' : 'overwrite');
+      setIsPreInspectOpen(true);
+    } catch (err: any) {
+      setActionError(`Inspection error: ${err.message}`);
+    }
+  };
+
+  const handleScopeChangeInModal = async (newScope: 'workspace' | 'user') => {
+    setTargetScope(newScope);
+    if (stagedPayload?.zipBase64) {
+      await inspectAndStageZip(stagedPayload.zipBase64, newScope);
+    } else if (stagedPayload?.files) {
+      await inspectAndStageFiles(stagedPayload.files, newScope);
+    }
+  };
+
   const processUploadedFile = async (file: File) => {
     setActionError(null);
     try {
@@ -170,23 +243,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
         const base64 = btoa(
           new Uint8Array(arrayBuf).reduce((data, byte) => data + String.fromCharCode(byte), '')
         );
-
-        // Pre-inspect in memory
-        const inspectRes = await fetch(`${apiBase}/api/skills/inspect`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ zipBase64: base64, scope: targetScope })
-        });
-
-        if (!inspectRes.ok) throw new Error(`Inspection failed (HTTP ${inspectRes.status})`);
-        const inspectData = await inspectRes.json();
-        const result: SkillPreInspectionResult = inspectData.inspection;
-
-        setInspectionData(result);
-        setStagedPayload({ zipBase64: base64 });
-        setRenameInput(result.hasCollision ? `${result.name}-custom` : '');
-        setCollisionAction(result.hasCollision ? 'overwrite' : 'overwrite');
-        setIsPreInspectOpen(true);
+        await inspectAndStageZip(base64, targetScope);
       };
       reader.readAsArrayBuffer(file);
     } catch (err: any) {
@@ -203,9 +260,31 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
     setIsDragging(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
+    setActionError(null);
+
+    // Support folder drag-and-drop via webkitGetAsEntry
+    const items = e.dataTransfer.items;
+    if (items && items.length > 0) {
+      const entry = (items[0] as any).webkitGetAsEntry?.();
+      if (entry && entry.isDirectory) {
+        try {
+          const files = await readEntryTree(entry);
+          if (files.length === 0) {
+            setActionError('The dropped folder contains no accessible files');
+            return;
+          }
+          await inspectAndStageFiles(files, targetScope);
+          return;
+        } catch (err: any) {
+          setActionError(`Failed to process dropped folder: ${err.message}`);
+          return;
+        }
+      }
+    }
+
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
       processUploadedFile(file);
@@ -302,7 +381,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-primary text-on-primary text-xs font-semibold hover:opacity-90 transition cursor-pointer shadow-sm active:scale-95"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-[7px] bg-primary text-on-primary text-xs font-semibold hover:opacity-90 transition cursor-pointer shadow-sm active:scale-95"
             >
               <Upload className="w-4 h-4" />
               <span>{t.skills_import_btn || (isArabic ? 'استيراد مهارة' : 'Import Skill')}</span>
@@ -311,7 +390,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
               type="button"
               onClick={fetchSkills}
               title={isArabic ? 'تحديث' : 'Refresh'}
-              className="p-2 rounded-xl bg-panel border border-line text-secondary hover:text-ink hover:bg-surface transition"
+              className="p-2 rounded-[7px] bg-panel border border-line text-secondary hover:text-ink hover:bg-surface transition"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
@@ -320,19 +399,19 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
 
         {/* Telemetry Header Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="p-3.5 rounded-xl bg-panel border border-line space-y-1">
+          <div className="p-3.5 rounded-[8px] bg-panel border border-line space-y-1">
             <span className="text-[11px] text-muted font-sans">
               {t.skills_total_installed || (isArabic ? 'المهارات المثبتة' : 'Installed Skills')}
             </span>
             <p className="text-lg font-mono font-bold text-ink">{totalInstalled}</p>
           </div>
-          <div className="p-3.5 rounded-xl bg-panel border border-line space-y-1">
+          <div className="p-3.5 rounded-[8px] bg-panel border border-line space-y-1">
             <span className="text-[11px] text-muted font-sans">
               {t.skills_total_enabled || (isArabic ? 'المهارات المفعّلة' : 'Enabled Skills')}
             </span>
             <p className="text-lg font-mono font-bold text-accent">{totalEnabled}</p>
           </div>
-          <div className="p-3.5 rounded-xl bg-panel border border-line space-y-1">
+          <div className="p-3.5 rounded-[8px] bg-panel border border-line space-y-1">
             <span className="text-[11px] text-muted font-sans">
               {t.skills_total_active || (isArabic ? 'نشطة بالجلسة' : 'Active in Session')}
             </span>
@@ -341,7 +420,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
               <p className="text-lg font-mono font-bold text-ink">{totalActive}</p>
             </div>
           </div>
-          <div className="p-3.5 rounded-xl bg-panel border border-line space-y-1">
+          <div className="p-3.5 rounded-[8px] bg-panel border border-line space-y-1">
             <span className="text-[11px] text-muted font-sans">
               {t.skills_total_incompatible || (isArabic ? 'غير متوافقة' : 'Incompatible')}
             </span>
@@ -352,9 +431,9 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
 
       {/* Error Banner */}
       {actionError && (
-        <div className="p-3 rounded-xl bg-panel border border-line text-xs text-ink flex items-center justify-between gap-2 border-s-4 border-s-accent">
+        <div className="p-3 rounded-[8px] bg-red-500/10 border border-red-500/30 text-xs text-red-400 dark:text-red-300 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-accent shrink-0" />
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
             <span>{actionError}</span>
           </div>
           <button
@@ -373,7 +452,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
-        className={`border-2 border-dashed rounded-2xl p-6 text-center transition cursor-pointer flex flex-col items-center justify-center gap-2 ${
+        className={`border-2 border-dashed rounded-[14px] p-6 text-center transition cursor-pointer flex flex-col items-center justify-center gap-2 ${
           isDragging
             ? 'border-accent bg-surface/80 scale-[1.005]'
             : 'border-line hover:border-line-strong bg-panel/50 hover:bg-surface/30'
@@ -399,12 +478,12 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t.skills_search_placeholder || (isArabic ? 'بحث في المهارات...' : 'Search skills...')}
-            className="w-full ps-9 pe-3 py-2 rounded-xl bg-panel border border-line text-xs text-ink placeholder:text-muted focus:outline-none focus:border-accent"
+            className="w-full ps-9 pe-3 py-2 rounded-[8px] bg-panel border border-line text-xs text-ink placeholder:text-muted focus:outline-none focus:border-accent"
           />
         </div>
 
         {/* Scope Filter Tabs */}
-        <div className="flex items-center gap-1 p-1 rounded-xl bg-panel border border-line text-xs font-medium self-stretch sm:self-auto overflow-x-auto">
+        <div className="flex items-center gap-1 p-1 rounded-[8px] bg-panel border border-line text-xs font-medium self-stretch sm:self-auto overflow-x-auto">
           {(['all', 'workspace', 'user', 'builtin'] as const).map((sc) => {
             const labels: Record<string, string> = {
               all: t.skills_filter_all || (isArabic ? 'كافة النطاقات' : 'All Scopes'),
@@ -433,7 +512,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
 
       {/* Skills Cards Grid */}
       {filteredSkills.length === 0 ? (
-        <div className="p-12 text-center border border-dashed border-line rounded-2xl text-muted text-xs">
+        <div className="p-12 text-center border border-dashed border-line rounded-[14px] text-muted text-xs">
           <p>{t.skills_no_skills || (isArabic ? 'لم يتم العثور على مهارات مطابقة.' : 'No agent skills found matching criteria.')}</p>
         </div>
       ) : (
@@ -446,7 +525,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
             return (
               <article
                 key={`${skill.scope}-${skill.name}`}
-                className="flex flex-col justify-between p-4 rounded-2xl bg-panel border border-line hover:border-line-strong transition space-y-3 shadow-xs"
+                className="flex flex-col justify-between p-4 rounded-[14px] bg-panel border border-line hover:border-line-strong transition space-y-3 shadow-xs"
               >
                 <div className="space-y-2.5">
                   {/* Top Row: Name, Scope & Toggle */}
@@ -592,12 +671,19 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
           aria-modal="true"
           dir={isArabic ? 'rtl' : 'ltr'}
         >
-          <div className="w-full max-w-xl bg-canvas border border-line shadow-lg rounded-2xl overflow-hidden flex flex-col max-h-[90vh]">
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="preinspect-dialog-title"
+            tabIndex={-1}
+            className="w-full max-w-xl bg-canvas border border-line shadow-lg rounded-[14px] overflow-hidden flex flex-col max-h-[90vh] outline-none"
+          >
             {/* Modal Header */}
             <header className="px-5 py-4 border-b border-line bg-panel flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-accent" />
-                <h2 className="text-sm font-bold text-ink">
+                <h2 id="preinspect-dialog-title" className="text-sm font-bold text-ink">
                   {t.skills_preinspect_title || (isArabic ? 'المعاينة الأولية لحزمة المهارة' : 'Skill Package Pre-Inspection')}
                 </h2>
               </div>
@@ -613,7 +699,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
             {/* Modal Body */}
             <div className="p-5 overflow-y-auto space-y-4 text-xs">
               {/* Metadata Card */}
-              <div className="p-4 rounded-xl bg-panel border border-line space-y-2">
+              <div className="p-4 rounded-[8px] bg-panel border border-line space-y-2">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold font-mono text-ink">{inspectionData.name}</h3>
                   {inspectionData.license && (
@@ -650,9 +736,9 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
 
               {/* Executable Script Security Callout */}
               {inspectionData.hasScripts && (
-                <div className="p-3.5 rounded-xl bg-panel border border-line text-ink space-y-1 border-s-4 border-s-accent">
-                  <div className="flex items-center gap-1.5 font-semibold text-xs text-accent">
-                    <AlertTriangle className="w-4 h-4" />
+                <div className="p-3.5 rounded-[8px] bg-amber-500/10 border border-amber-500/30 text-ink space-y-1">
+                  <div className="flex items-center gap-1.5 font-semibold text-xs text-amber-500 dark:text-amber-400">
+                    <AlertTriangle className="w-4 h-4 text-amber-500" />
                     <span>{t.skills_script_warning_title || (isArabic ? 'تحذير: يحتوي ملفات برمجية تنفيذية' : 'Executable Script Warning')}</span>
                   </div>
                   <p className="text-[11px] text-muted leading-relaxed">
@@ -671,8 +757,8 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => setTargetScope('workspace')}
-                    className={`p-2.5 rounded-xl border text-start transition cursor-pointer ${
+                    onClick={() => handleScopeChangeInModal('workspace')}
+                    className={`p-2.5 rounded-[8px] border text-start transition cursor-pointer ${
                       targetScope === 'workspace'
                         ? 'border-accent bg-surface text-ink font-semibold'
                         : 'border-line bg-panel text-muted hover:text-ink'
@@ -683,8 +769,8 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setTargetScope('user')}
-                    className={`p-2.5 rounded-xl border text-start transition cursor-pointer ${
+                    onClick={() => handleScopeChangeInModal('user')}
+                    className={`p-2.5 rounded-[8px] border text-start transition cursor-pointer ${
                       targetScope === 'user'
                         ? 'border-accent bg-surface text-ink font-semibold'
                         : 'border-line bg-panel text-muted hover:text-ink'
@@ -698,7 +784,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
 
               {/* Collision Resolver Options */}
               {inspectionData.hasCollision && (
-                <div className="p-3.5 rounded-xl bg-panel border border-line space-y-2.5">
+                <div className="p-3.5 rounded-[8px] bg-panel border border-line space-y-2.5">
                   <div className="flex items-center gap-1.5 font-semibold text-xs text-ink">
                     <Shield className="w-4 h-4 text-accent" />
                     <span>{t.skills_collision_detected || (isArabic ? 'تم رصد تعارض في اسم المهارة' : 'Naming Collision Detected')}</span>
@@ -768,7 +854,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
               <button
                 type="button"
                 onClick={() => setIsPreInspectOpen(false)}
-                className="px-3.5 py-1.5 rounded-xl bg-surface hover:bg-hover text-secondary hover:text-ink text-xs font-medium border border-line transition cursor-pointer"
+                className="px-3.5 py-1.5 rounded-[7px] bg-surface hover:bg-hover text-secondary hover:text-ink text-xs font-medium border border-line transition cursor-pointer"
               >
                 {t.skills_cancel || (isArabic ? 'إلغاء' : 'Cancel')}
               </button>
@@ -776,7 +862,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
                 type="button"
                 onClick={handleConfirmImport}
                 disabled={isSubmittingImport}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-primary text-on-primary text-xs font-semibold hover:opacity-90 transition cursor-pointer shadow-sm disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-[7px] bg-primary text-on-primary text-xs font-semibold hover:opacity-90 transition cursor-pointer shadow-sm disabled:opacity-50"
               >
                 {isSubmittingImport ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                 <span>{t.skills_confirm_import || (isArabic ? 'تأكيد وتثبيت المهارة' : 'Confirm & Install')}</span>

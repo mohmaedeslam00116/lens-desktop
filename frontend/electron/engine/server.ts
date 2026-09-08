@@ -50,6 +50,16 @@ function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
   });
 }
 
+function extractArchivePayload(body: any): Buffer | Array<{ path: string; content: string }> | null {
+  if (body?.zipBase64) {
+    return Buffer.from(body.zipBase64, 'base64');
+  }
+  if (Array.isArray(body?.files)) {
+    return body.files;
+  }
+  return null;
+}
+
 function startAuthorizedExecution(session: ActiveSession, approvedPlan?: ResearchPlan) {
   if (session.researchSession.state === 'awaiting_approval' || session.researchSession.state === 'planning') {
     session.researchSession.approvePlan(approvedPlan);
@@ -164,12 +174,8 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
 
         if (pathname === '/api/skills/inspect' && req.method === 'POST') {
           const body = await parseJsonBody<any>(req);
-          let payload: Buffer | Array<{ path: string; content: string }>;
-          if (body.zipBase64) {
-            payload = Buffer.from(body.zipBase64, 'base64');
-          } else if (Array.isArray(body.files)) {
-            payload = body.files;
-          } else {
+          const payload = extractArchivePayload(body);
+          if (!payload) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Missing zipBase64 or files payload' }));
             return;
@@ -183,12 +189,8 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
 
         if (pathname === '/api/skills/import' && req.method === 'POST') {
           const body = await parseJsonBody<any>(req);
-          let payload: Buffer | Array<{ path: string; content: string }>;
-          if (body.zipBase64) {
-            payload = Buffer.from(body.zipBase64, 'base64');
-          } else if (Array.isArray(body.files)) {
-            payload = body.files;
-          } else {
+          const payload = extractArchivePayload(body);
+          if (!payload) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Missing zipBase64 or files payload' }));
             return;
