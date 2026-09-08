@@ -19,17 +19,22 @@ import { CalloutAlert } from './CalloutAlert';
 import { CitationBadge } from './CitationBadge';
 import { SourceItem, Language } from '../../types';
 import { extractTocHeadings } from '../../utils/markdownArtifacts';
+import { normalizeEasternNumerals } from '../../utils/evidenceShelf';
 
 interface ReportRendererProps {
   content: string;
   sources: SourceItem[];
   language: Language;
+  onInspectCitation?: (index: number) => void;
+  onOpenShelf?: () => void;
 }
 
 export const ReportRenderer: React.FC<ReportRendererProps> = ({
   content,
   sources,
   language,
+  onInspectCitation,
+  onOpenShelf,
 }) => {
   const isArabic = language === 'ar';
   const [showToc, setShowToc] = useState(false);
@@ -53,21 +58,63 @@ export const ReportRenderer: React.FC<ReportRendererProps> = ({
     };
   }, [content, sources]);
 
-  // Helper to parse citations inside text
+  // Helper to parse citations inside text with full multi-citation, range, and Arabic numeral support
   const renderTextWithCitations = (text: string) => {
     if (!text || typeof text !== 'string') return text;
 
-    const parts = text.split(/(\[\d+\])/g);
+    // Match any bracket containing digits, eastern arabic digits, commas, semicolons, dashes
+    const bracketRegex = /(\[[\d٠-٩۰-۹\s,;،\-\u2013\u2014]+\])/g;
+    const parts = text.split(bracketRegex);
     if (parts.length === 1) return text;
 
-    return parts.map((part, idx) => {
-      const match = part.match(/^\[(\d+)\]$/);
-      if (match) {
-        const citationNum = parseInt(match[1], 10);
-        return <CitationBadge key={idx} index={citationNum} sources={sources} />;
+    const result: React.ReactNode[] = [];
+
+    parts.forEach((part, idx) => {
+      const match = part.match(/^\[([\d٠-٩۰-۹\s,;،\-\u2013\u2014]+)\]$/);
+      if (match && /[\d٠-٩۰-۹]/.test(match[1])) {
+        // Extract all individual citation numbers
+        const inner = normalizeEasternNumerals(match[1].trim());
+        const subparts = inner.split(/[,;،]/);
+        const numbers: number[] = [];
+
+        for (const raw of subparts) {
+          const s = raw.trim();
+          if (!s) continue;
+          const rangeMatch = s.match(/^(\d+)\s*[\-\u2013\u2014]\s*(\d+)$/);
+          if (rangeMatch) {
+            const start = parseInt(rangeMatch[1], 10);
+            const end = parseInt(rangeMatch[2], 10);
+            if (start <= end && end - start <= 100) {
+              for (let k = start; k <= end; k++) {
+                if (k > 0) numbers.push(k);
+              }
+            }
+          } else {
+            const num = parseInt(s, 10);
+            if (!isNaN(num) && num > 0) {
+              numbers.push(num);
+            }
+          }
+        }
+
+        if (numbers.length > 0) {
+          numbers.forEach((num, subIdx) => {
+            result.push(
+              <CitationBadge
+                key={`cit-${idx}-${subIdx}-${num}`}
+                index={num}
+                sources={sources}
+                onInspect={onInspectCitation}
+              />
+            );
+          });
+          return;
+        }
       }
-      return part;
+      result.push(part);
     });
+
+    return result;
   };
 
   // Helper to recursively process React children for inline citations
@@ -246,10 +293,22 @@ export const ReportRenderer: React.FC<ReportRendererProps> = ({
             </span>
           )}
 
-          <span className="flex items-center gap-1.5 text-slate-300">
-            <ShieldCheck className="w-3.5 h-3.5 text-accent" />
-            <span>{stats.sourcesCount} {isArabic ? 'مصادر موثقة' : 'citations'}</span>
-          </span>
+          {onOpenShelf ? (
+            <button
+              type="button"
+              onClick={onOpenShelf}
+              className="flex items-center gap-1.5 text-slate-300 hover:text-accent transition cursor-pointer p-0.5 rounded hover:bg-white/5"
+              title={isArabic ? 'فتح رف المصادر المصنفة' : 'Open facet-grouped source shelf'}
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-accent" />
+              <span>{stats.sourcesCount} {isArabic ? 'مصادر موثقة' : 'citations'}</span>
+            </button>
+          ) : (
+            <span className="flex items-center gap-1.5 text-slate-300">
+              <ShieldCheck className="w-3.5 h-3.5 text-accent" />
+              <span>{stats.sourcesCount} {isArabic ? 'مصادر موثقة' : 'citations'}</span>
+            </span>
+          )}
         </div>
 
         {/* ToC Toggle Button */}

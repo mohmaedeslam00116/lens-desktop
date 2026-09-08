@@ -28,6 +28,15 @@ export interface SourceItem {
   favicon?: string;
   snippet?: string;
   credibilityScore: number;
+  passage?: string;
+  originalSnippet?: string;
+  score?: number;
+  relevanceTier?: 'high' | 'medium' | 'low';
+  milestoneId?: string;
+  milestoneTitle?: string;
+  citationIndex?: number;
+  citationIndices?: number[];
+  isCited?: boolean;
 }
 
 export type ResearchMode = 'standard' | 'wide';

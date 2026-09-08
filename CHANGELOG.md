@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Report Evidence Inspection Drawer & Facet-Grouped Source Shelf UI ([#35](https://github.com/mohmaedeslam00116/lens-desktop/issues/35))**:
+  - Implemented `EvidenceInspectionDrawer` (`frontend/src/components/research/EvidenceInspectionDrawer.tsx`):
+    - Accessible slide-over drawer with backdrop scrim, keyboard Escape listener, focus trapping, and bidirectional LTR/RTL support.
+    - Displays exact highlighted verbatim source passage, normalized relevance score (0..100%), relevance tier (`High`, `Medium`, `Standard`), academic credibility indicator, domain badge with favicon, canonical title, and direct external link.
+    - Assigned plan milestone facet display with milestone badge and subquery rationale.
+    - Sequential citation stepper navigation (`[← Prev]` / `[Next →]`) for hopping between cited sources.
+    - Side-by-side bilingual claim-to-excerpt verification grounding Modern Standard Arabic report synthesis directly against English primary literature excerpts.
+  - Implemented `FacetGroupedShelf` (`frontend/src/components/research/FacetGroupedShelf.tsx`):
+    - Milestone-organized source explorer grouping admitted sources by approved plan milestones with fallback for general background research.
+    - Header telemetry bar with aggregate metrics: Total Admitted, Cited in Report, Background Context, and Unique Domains.
+    - 5-dimensional filtering: milestone facet tabs, source domain select, relevance tier dropdown, citation status toggle (`all`, `cited`, `background`), and instant keyword search.
+    - Responsive source cards with domain favicons, relevance score pills, citation badges, excerpt preview, and 1-click `[Inspect Evidence]` action.
+  - Pure Engine & Client Evidence Shelf Utilities (`frontend/electron/engine/evidenceShelf.ts` & `frontend/src/utils/evidenceShelf.ts`):
+    - Multilingual citation index extraction (`extractCitationIndicesFromMarkdown`): extracts `[N]` references while protecting fenced code blocks, inline code, links (`[text](url)`), callout blocks (`[!NOTE]`, `[!WARNING]`), and task list checkboxes (`[ ]`, `[x]`). Normalizes Eastern Arabic numerals.
+    - Source enrichment (`enrichSourcesWithCitations`): maps citation indices and cited status to source items.
+    - Multi-dimensional filtering (`filterSources`): applies 5-filter predicate pipeline.
+    - Facet grouping (`groupSourcesByMilestone`): groups sources by milestone ID, tracking cited/background counts.
+    - Metrics computation (`computeShelfStats`): calculates total, cited, background, unique domains, and average relevance score.
+  - UI Component Integration:
+    - `CitationBadge` (`frontend/src/components/vane/CitationBadge.tsx`): Added `onInspect` callback enabling 1-click pill activation from inline report text, plus enhanced hover popovers with passage snippets and relevance scores.
+    - `ReportRenderer` (`frontend/src/components/vane/ReportRenderer.tsx`): Bound `onInspectCitation` down to all `CitationBadge` instances; added "Sources Shelf" shortcut button in the reading stats bar.
+    - `MessageBox` (`frontend/src/components/vane/MessageBox.tsx`): Added `shelf` view mode pill alongside `formatted` and `raw`, rendering `FacetGroupedShelf`, and embedded `EvidenceInspectionDrawer` overlay.
+    - `AgentWorkspace` (`frontend/src/components/vane/AgentWorkspace.tsx`): Upgraded TAB 4 (`sources` tab) to render `FacetGroupedShelf` with active research plan milestones.
+    - `App.tsx`: Preserved `plan` on `ReportData` and forwarded to `MessageBox`.
+  - Localization & Domain Documentation:
+    - Added bilingual translation dictionaries (`ar` and `en`) in `frontend/src/i18n/translations.ts` for all drawer and shelf UI controls.
+    - Architecture Decision Record (`docs/adr/0005-report-evidence-inspection-drawer-and-source-shelf.md`): Documents Evidence Inspection Drawer & Facet-Grouped Source Shelf architecture.
+    - Updated `CONTEXT.md` with domain definitions for `EvidenceInspectionDrawer` and `FacetGroupedShelf`.
+    - Updated `README.md` with Key Capabilities entry for the Report Evidence Inspection Drawer & Facet-Grouped Source Shelf.
+  - Verification Suite:
+    - Comprehensive 32-test unit, edge-case, and 200-source scale stress suite (`frontend/test/evidence_shelf_drawer.test.mjs`) verifying citation extraction, markdown element protection, numeral normalization, enrichment, filtering (including citation index & hashtag search), range citation claim grounding, bilingual script predominance, milestone grouping, and drawer navigation.
 - **Hierarchical Per-Facet Synthesis & Citation Grounding Contract ([#34](https://github.com/mohmaedeslam00116/lens-desktop/issues/34))**:
   - Implemented `HierarchicalSynthesis` (`frontend/electron/engine/synthesis.ts`):
     - Multi-stage hierarchical synthesis architecture: generates exhaustive, publication-grade analytical sections for each approved plan milestone from admitted evidence passages (<15k token prompt bounds), followed by an overarching Meta-Synthesis Pass.

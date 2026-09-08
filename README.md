@@ -74,6 +74,12 @@
     - Automated post-synthesis regex verification: scans generated text, cleans whitespace/punctuation, and strips or remaps any unmapped or hallucinated citation brackets, mathematically guaranteeing zero hallucinated citations on reports of any scale (50- and 200-source scale tested).
     - Standardized GFM empirical contradiction callouts (`> [!WARNING]`) highlighting metric and benchmark discrepancies between sources with full Arabic and English bilingual parity.
 
+15. **Report Evidence Inspection Drawer & Facet-Grouped Source Shelf:**
+    - Interactive slide-over `EvidenceInspectionDrawer` opening directly upon clicking citation pills (`[1]`, `[2]`...) in the living report or source cards in the shelf.
+    - Displays exact highlighted verbatim source passage, normalized hybrid relevance score and tier (`High`, `Medium`, `Standard`), academic credibility, source domain badge with favicon, external URL link, assigned plan milestone facet, and sequential citation navigation stepper.
+    - Bilingual evidence fidelity: side-by-side alignment comparing synthesized report claims with original foreign-language excerpts without breaking reading flow.
+    - `FacetGroupedShelf` organizing admitted sources by approved plan milestones, featuring 5-dimensional filtering (milestone facet, citation status, relevance tier, source domain, instant search) and real-time aggregate telemetry counters.
+
 ---
 
 ## 🏗️ Repository Structure

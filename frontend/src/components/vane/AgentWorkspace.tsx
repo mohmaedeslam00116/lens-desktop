@@ -17,7 +17,8 @@ import {
   Filter
 } from 'lucide-react';
 import { MermaidDiagram } from './MermaidDiagram';
-import { SourceItem, Language, ResearchStep } from '../../types';
+import { FacetGroupedShelf } from '../research/FacetGroupedShelf';
+import { SourceItem, Language, ResearchStep, ResearchPlan } from '../../types';
 import { extractTables, extractMermaidDiagrams, extractKeyMetrics, tableToCSV } from '../../utils/markdownArtifacts';
 
 interface AgentWorkspaceProps {
@@ -25,6 +26,8 @@ interface AgentWorkspaceProps {
   sources: SourceItem[];
   steps: ResearchStep[];
   language: Language;
+  plan?: ResearchPlan | null;
+  onInspectEvidence?: (citationIndex: number) => void;
 }
 
 export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({
@@ -32,6 +35,8 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({
   sources,
   steps,
   language,
+  plan,
+  onInspectEvidence,
 }) => {
   const isArabic = language === 'ar';
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<'tables' | 'diagrams' | 'metrics' | 'sources'>('tables');
@@ -319,63 +324,17 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({
         </div>
       )}
 
-      {/* TAB 4: VERIFIED SOURCES HUB */}
+      {/* TAB 4: VERIFIED SOURCES HUB / FACET-GROUPED SHELF */}
       {activeWorkspaceTab === 'sources' && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {sources.map((s, idx) => {
-              const faviconUrl = `https://s2.googleusercontent.com/s2/favicons?domain_url=${encodeURIComponent(s.url)}&sz=32`;
-              return (
-                <div 
-                  key={idx}
-                  className="p-3.5 rounded-xl bg-surface border border-line hover:border-accent/30 transition flex flex-col justify-between gap-2.5"
-                >
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-5 h-5 rounded-md bg-panel border border-line-strong text-accent flex items-center justify-center text-[10px] font-mono font-bold shrink-0">
-                          {idx + 1}
-                        </span>
-                        <img 
-                          src={faviconUrl} 
-                          alt="" 
-                          className="w-3.5 h-3.5 rounded shrink-0" 
-                          onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
-                        />
-                        <span className="text-[11px] font-mono text-slate-400 truncate">{s.domain || 'web'}</span>
-                      </div>
-
-                      {s.credibilityScore && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          {Math.round(s.credibilityScore * 100)}% موثوقية
-                        </span>
-                      )}
-                    </div>
-
-                    <h5 className="text-xs font-semibold text-slate-200 line-clamp-2 leading-snug">
-                      {s.title || s.url}
-                    </h5>
-
-                    {s.snippet && (
-                      <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">
-                        {s.snippet}
-                      </p>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => window.open(s.url, '_blank')}
-                    className="flex items-center gap-1 text-[10px] text-accent hover:text-accent transition font-medium self-end"
-                  >
-                    <span>{isArabic ? 'زيارة المصدر' : 'Visit Source'}</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <FacetGroupedShelf
+          sources={sources}
+          plan={plan}
+          reportContent={report}
+          language={language}
+          onInspectEvidence={(idx) => {
+            if (onInspectEvidence) onInspectEvidence(idx);
+          }}
+        />
       )}
     </div>
   );

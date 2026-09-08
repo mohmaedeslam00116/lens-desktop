@@ -30,6 +30,15 @@ export interface SourceItem {
   snippet?: string;
   credibility?: number;
   credibilityScore?: number;
+  passage?: string;
+  originalSnippet?: string;
+  score?: number;
+  relevanceTier?: 'high' | 'medium' | 'low';
+  milestoneId?: string;
+  milestoneTitle?: string;
+  citationIndex?: number;
+  citationIndices?: number[];
+  isCited?: boolean;
 }
 
 export interface ResearchStep {
@@ -149,6 +158,7 @@ export interface ReportData {
   sources: SourceItem[];
   depth: ResearchDepth;
   perspective?: ResearchPerspective;
+  plan?: ResearchPlan;
   graphNodes?: ResearchGraphNode[];
   reflections?: string[];
   createdAt: string;
