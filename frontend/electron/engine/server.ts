@@ -8,7 +8,7 @@ import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
 import { SessionLifecycleManager, ResearchSession } from './sessionLifecycle';
 import { generateResearchPlan, regenerateResearchPlan } from './scoping';
-import { SkillRegistry, SkillActivationManager } from './skills';
+import { SkillRegistry, SkillActivationManager, SkillManagerService } from './skills';
 
 interface ActiveSession {
   id: string;
@@ -21,6 +21,7 @@ interface ActiveSession {
 const sessionManager = new SessionLifecycleManager();
 const sessions = new Map<string, ActiveSession>();
 const globalSkillRegistry = new SkillRegistry();
+export const skillService = new SkillManagerService(globalSkillRegistry);
 globalSkillRegistry.discoverAll().catch(err => {
   console.warn('[Server] Error discovering agent skills:', err);
 });
@@ -142,6 +143,93 @@ export function startEmbeddedServer(port = 8000): Promise<{ port: number }> {
           const articles = await DiscoverService.fetchNews(topic, query, language);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ topic, articles }));
+          return;
+        }
+
+        // Skills Management API (Tracer 9)
+        if (pathname === '/api/skills' && req.method === 'GET') {
+          const skills = await skillService.listSkillsDetailed();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ skills }));
+          return;
+        }
+
+        if (pathname === '/api/skills/toggle' && req.method === 'POST') {
+          const body = await parseJsonBody<any>(req);
+          const isEnabled = skillService.toggleSkillEnabled(body.name, body.enabled);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, name: body.name, isEnabled }));
+          return;
+        }
+
+        if (pathname === '/api/skills/inspect' && req.method === 'POST') {
+          const body = await parseJsonBody<any>(req);
+          let payload: Buffer | Array<{ path: string; content: string }>;
+          if (body.zipBase64) {
+            payload = Buffer.from(body.zipBase64, 'base64');
+          } else if (Array.isArray(body.files)) {
+            payload = body.files;
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing zipBase64 or files payload' }));
+            return;
+          }
+
+          const inspection = skillService.inspectPackage(payload, body.scope || 'workspace');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ inspection }));
+          return;
+        }
+
+        if (pathname === '/api/skills/import' && req.method === 'POST') {
+          const body = await parseJsonBody<any>(req);
+          let payload: Buffer | Array<{ path: string; content: string }>;
+          if (body.zipBase64) {
+            payload = Buffer.from(body.zipBase64, 'base64');
+          } else if (Array.isArray(body.files)) {
+            payload = body.files;
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing zipBase64 or files payload' }));
+            return;
+          }
+
+          try {
+            const result = await skillService.importSkill(payload, {
+              scope: body.scope || 'workspace',
+              collisionAction: body.collisionAction || 'overwrite',
+              renameTo: body.renameTo
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message || String(err) }));
+          }
+          return;
+        }
+
+        if (pathname === '/api/skills/export' && req.method === 'GET') {
+          const name = parsedUrl.searchParams.get('name');
+          if (!name) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing skill name parameter' }));
+            return;
+          }
+
+          try {
+            const { filename, buffer } = await skillService.exportSkill(name);
+            res.writeHead(200, {
+              'Content-Type': 'application/zip',
+              'Content-Disposition': `attachment; filename="${filename}"`,
+              'Content-Length': buffer.length
+            });
+            res.end(buffer);
+          } catch (err: any) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message || String(err) }));
+          }
           return;
         }
 

@@ -265,3 +265,16 @@ function stripQuotes(str: string): string {
   }
   return str;
 }
+
+export function validateSkillName(name: string, filePath?: string): void {
+  if (!name || typeof name !== 'string' || !SKILL_NAME_REGEX.test(name)) {
+    throw new SkillError(
+      'INVALID_SKILL_NAME',
+      `Skill 'name' is missing or invalid: "${name}". Name must match lowercase alphanumeric pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`,
+      filePath
+    );
+  }
+}
+
+export const parseSkillFrontmatter = parseLenientYamlFrontmatter;
+

@@ -10,6 +10,7 @@ import { GraphView } from './components/vane/GraphView';
 import { SettingsModal } from './components/SettingsModal';
 import { CommandPalette } from './components/CommandPalette';
 import { PlanApprovalModal } from './components/research/PlanApprovalModal';
+import { SkillsManagerView } from './components/skills/SkillsManagerView';
 import { 
   Language, 
   ResearchDepth, 
@@ -56,7 +57,7 @@ export function App() {
     try { return localStorage.getItem('lens_theme') === 'light' ? 'light' : 'dark'; } catch { return 'dark'; }
   });
   const [researchError, setResearchError] = useState('');
-  const [activeTab, setActiveTab] = useState<'home' | 'discover' | 'history' | 'graph'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'discover' | 'history' | 'graph' | 'skills'>('home');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
@@ -556,6 +557,15 @@ export function App() {
             query={currentQuery || activeReport?.query || ''}
             loading={isSearching}
             language={language}
+          />
+        )}
+
+        {activeTab === 'skills' && (
+          <SkillsManagerView
+            language={language}
+            apiBase={API_BASE}
+            activeSkillNames={proposedPlan?.suggestedSkills || activeReport?.plan?.suggestedSkills || []}
+            selectedSkillNames={proposedPlan?.suggestedSkills || []}
           />
         )}
       </main>

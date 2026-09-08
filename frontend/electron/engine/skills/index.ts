@@ -6,3 +6,6 @@ export * from './registry';
 export * from './compactionShield';
 export * from './hostToolMapper';
 export * from './activation';
+export * from './zipArchive';
+export * from './collisionResolver';
+export * from './service';
