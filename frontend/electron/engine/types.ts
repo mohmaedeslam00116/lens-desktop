@@ -96,6 +96,26 @@ export interface ResearchExtensionPayload {
   };
 }
 
+export interface WideResearchTelemetry {
+  initialBudget: number;
+  activeBudget: number;
+  maximumBudget: number;
+  discovered: number;
+  fetched: number;
+  unique: number;
+  admitted: number;
+  cited: number;
+  hop: number;
+  coverageScore?: number;
+  expansion?: {
+    from: number;
+    to: number;
+    reason: string;
+    uncoveredMilestones: string[];
+    uncoveredSubqueries: string[];
+  };
+}
+
 export type PlanApprovalAction = 'approve_plan' | 'reject_plan' | 'regenerate_plan';
 
 export interface PlanScopingOptions {
@@ -125,7 +145,8 @@ export interface LiveEvent {
     | 'session_state'
     | 'cancelled'
     | 'budget_exhausted'
-    | 'skill_activated';
+    | 'skill_activated'
+    | 'wide_telemetry';
   eventId?: number;
   sessionId?: string;
   state?: SessionState;
@@ -163,6 +184,7 @@ export interface LiveEvent {
     diversityScore: number;
     uncoveredSubqueries: string[];
   };
+  wideTelemetry?: WideResearchTelemetry;
 }
 
 export interface ResearchRequest {

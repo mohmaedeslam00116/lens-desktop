@@ -71,13 +71,16 @@ A bidirectional technical taxonomy and acronym mapper that bridges Arabic and En
 ### ResearchMode
 The operational workflow mode of a research session:
 - **`standard`**: Direct, single-turn research execution across configured depth tiers (`quick`, `deep`, `storm`).
-- **`wide`**: Multi-phase autonomous investigation featuring collaborative scoping, user-approved research plans, massive source retrieval across hundreds of websites, Agent Skills standard integration, and verifiable citation-grounded synthesis.
+- **`wide`**: A separately selected investigation workflow that requires plan approval, begins with a 100-source retrieval budget, may automatically expand that budget only for evidence gaps, and is capped at a 200-source budget. Actual retrieved counts are reported separately.
 
 ### WideResearch
-An advanced autonomous investigation workflow in LENS (Arabic: **بحث استقصائي موسع**) designed to explore complex topics across dozens to hundreds of sources with explicit scoping, verifiable evidence provenance, and open-standard skill integration.
+An advanced autonomous investigation workflow in LENS (Arabic: **بحث استقصائي موسع**) for complex topics requiring explicit scoping, transparent source-stage telemetry, and verifiable evidence provenance.
 
 ### WideResearchAgent
-A dedicated autonomous orchestrator class (`frontend/electron/engine/wideAgent.ts`) that executes the 5-phase Wide Research lifecycle: (1) Collaborative scoping and research plan approval, (2) Parallel wide retrieval, (3) Iterative audit and adaptive hops, (4) Hybrid evidence ranking and skill injection, and (5) Verifiable citation-grounded synthesis. It operates independently from `DeepResearchAgent` while reusing core retrieval and scraping modules.
+The dedicated orchestrator for an approved Wide Research plan. It is distinct from `DeepResearchAgent`, applies bounded source expansion, and ends in citation-grounded synthesis.
+
+### WideResearchTelemetry
+The live account of a Wide Research run: discovered, fetched, unique, admitted, and cited evidence counts; current budget; coverage; and the reason for any automatic expansion.
 
 ### ThreeTierEvidence
 An evidence architecture decoupling massive raw corpus capacity from the LLM generation context budget:

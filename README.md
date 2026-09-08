@@ -35,7 +35,7 @@
    - Upright, left-to-right LENS wordmark preserved across both languages.
 
 7. **Multi-Format Export & Speech:**
-   - Instant export to **PDF**, **Microsoft Word (.docx)**, **Markdown (.md)**, and **CSV** for extracted tables.
+   - Real desktop export to **PDF** and **Microsoft Word (.docx)**, plus client-side **Markdown (.md)** and **CSV** for extracted tables.
    - Built-in text-to-speech reading for auditory review.
 
 8. **Resilient Session Lifecycle & Reconnect Recovery:**
@@ -54,7 +54,7 @@
     - Smart early exit when coverage meets target quality threshold ($\ge 80\%$), with honest budget exhaustion telemetry and interactive `[Extend Research]` action payloads when retrieval limits are reached.
 
 11. **Collaborative Research Plan Scoping & Approval UX:**
-    - Phase 1 collaborative scoping generating versioned 4-element `ResearchPlan` blueprints (`objective`, `milestones`, `suggestedSkills`, `estimatedScope`) for wide and storm research investigations.
+    - Explicit Wide Research mode generates versioned 4-element `ResearchPlan` blueprints (`objective`, `milestones`, `suggestedSkills`, `estimatedScope`); it begins with a 100-source retrieval budget and may expand that budget automatically to 200 only when evidence gaps remain.
     - Interactive bilingual React `PlanApprovalModal` with inline subquery editing, milestone creation and removal, and contextual skill toggles.
     - Strict human-in-the-loop trajectory authorization freezing retrieval bounds, paired with iterative regeneration guidance (`v1` -> `v2`) and sub-second cancellation resilience.
 

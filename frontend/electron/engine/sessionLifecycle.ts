@@ -49,7 +49,7 @@ export class ResearchSession {
   ) {
     this.id = id;
     this.request = request;
-    this.mode = request.mode || (request.report_type === 'storm' ? 'wide' : 'standard');
+    this.mode = request.mode === 'wide' ? 'wide' : 'standard';
     this.state = 'planning';
     this.eventBuffer = new EventRingBuffer(bufferCapacity);
     this.abortController = new AbortController();
@@ -102,6 +102,15 @@ export class ResearchSession {
       for (const src of stamped.sources) {
         this.recordSource(src);
       }
+    }
+    if (stamped.type === 'source' && stamped.url) {
+      this.recordSource({
+        url: stamped.url,
+        title: stamped.title || stamped.domain || stamped.url,
+        domain: stamped.domain || '',
+        snippet: stamped.snippet,
+        credibilityScore: stamped.credibility || 0,
+      });
     }
     if (stamped.subqueries && stamped.subqueries.length > 0) {
       this.recordSubqueries(stamped.subqueries);
@@ -359,7 +368,10 @@ export class ResearchSession {
   /**
    * Marks the session as completed successfully.
    */
-  public complete(result?: { report?: string; sources?: SourceItem[]; metrics?: any }): void {
+  public complete(
+    result?: { report?: string; sources?: SourceItem[]; metrics?: any },
+    options: { emitFinished?: boolean } = {},
+  ): void {
     if (this.isTerminal()) {
       return;
     }
@@ -374,6 +386,10 @@ export class ResearchSession {
     }
 
     this.transitionTo('completed', 'Research session completed successfully');
+
+    if (options.emitFinished === false) {
+      return;
+    }
 
     this.emitEvent({
       type: 'finished',

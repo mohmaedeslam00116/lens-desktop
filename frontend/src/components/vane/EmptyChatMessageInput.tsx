@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { ArrowUp, Loader2, Table2, Boxes, TrendingUp, ShieldCheck, Cpu, Globe, SlidersHorizontal } from 'lucide-react';
-import { Language, ApiSettings } from '../../types';
+import { Language, ApiSettings, ResearchMode } from '../../types';
 
 interface EmptyChatMessageInputProps {
   query: string;
@@ -14,6 +14,8 @@ interface EmptyChatMessageInputProps {
   setOptimizationMode: (m: 'speed' | 'balanced' | 'quality') => void;
   sourceFocus: 'web' | 'academic' | 'social';
   setSourceFocus: (f: 'web' | 'academic' | 'social') => void;
+  researchMode: ResearchMode;
+  setResearchMode: (mode: ResearchMode) => void;
 }
 
 export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (props) => {
@@ -39,6 +41,17 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
           }} />
         <div className="composer-toolbar">
           <div className="composer-options">
+            <fieldset className="composer-select border-0 p-0 flex items-center gap-1" aria-describedby={props.researchMode === 'wide' ? 'wide-research-guidance' : undefined}>
+              <legend className="sr-only">{ar ? 'وضع البحث' : 'Research mode'}</legend>
+              <label className={`cursor-pointer rounded px-2 py-1 text-xs ${props.researchMode === 'standard' ? 'bg-hover text-ink' : 'text-muted'}`}>
+                <input className="sr-only" type="radio" name="research-mode" value="standard" checked={props.researchMode === 'standard'} onChange={() => props.setResearchMode('standard')} />
+                {ar ? 'بحث قياسي' : 'Standard Research'}
+              </label>
+              <label className={`cursor-pointer rounded px-2 py-1 text-xs ${props.researchMode === 'wide' ? 'bg-hover text-ink' : 'text-muted'}`}>
+                <input className="sr-only" type="radio" name="research-mode" value="wide" checked={props.researchMode === 'wide'} onChange={() => props.setResearchMode('wide')} />
+                {ar ? 'البحث الموسع' : 'Wide Research'}
+              </label>
+            </fieldset>
             <label className="composer-select"><SlidersHorizontal size={15} aria-hidden="true" />
               <span className="sr-only">{ar ? 'عمق البحث' : 'Research depth'}</span>
               <select value={props.optimizationMode} onChange={e => props.setOptimizationMode(e.target.value as EmptyChatMessageInputProps['optimizationMode'])}>
@@ -63,6 +76,7 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
         </div>
       </form>
       <div className="composer-meta"><button onClick={props.onOpenSettings} className="model-control" title={ar ? 'اختيار النموذج' : 'Choose model'}><Cpu size={14} /><bdi>{modelLabel}</bdi></button><span id="composer-hint">{ar ? 'Enter للبحث · Shift + Enter لسطر جديد' : 'Enter to research · Shift + Enter for a new line'}</span></div>
+      {props.researchMode === 'wide' && <p id="wide-research-guidance" className="text-xs text-muted mt-2">{ar ? 'ميزانية الاسترجاع الأولية تصل إلى 100 مصدر، وقد ترتفع تلقائيًا حتى 200 عند بقاء فجوات أدلة. يعرض المؤشر أدناه الأعداد الفعلية.' : 'The initial retrieval budget is up to 100 sources and may rise to 200 only when evidence gaps remain. The telemetry shows actual counts.'}</p>}
       <div className="workflow-templates" aria-label={ar ? 'قوالب البحث' : 'Research templates'}>
         <span>{ar ? 'ابدأ بـ' : 'Start with'}</span>
         {templates.map(({ icon: Icon, label, prefix, mode, ...template }) => (
