@@ -41,13 +41,13 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
           }} />
         <div className="composer-toolbar">
           <div className="composer-options">
-            <fieldset className="composer-select border-0 p-0 flex items-center gap-1" aria-describedby="wide-research-guidance">
+            <fieldset className="composer-select border-0 p-0 flex items-center gap-1" aria-describedby={props.researchMode === 'wide' ? 'wide-research-guidance' : undefined}>
               <legend className="sr-only">{ar ? 'وضع البحث' : 'Research mode'}</legend>
-              <label className={`cursor-pointer rounded px-2 py-1 text-xs ${props.researchMode === 'standard' ? 'bg-[#303030] text-[#EDEDEB]' : 'text-[#8E8E8E]'}`}>
+              <label className={`cursor-pointer rounded px-2 py-1 text-xs ${props.researchMode === 'standard' ? 'bg-hover text-ink' : 'text-muted'}`}>
                 <input className="sr-only" type="radio" name="research-mode" value="standard" checked={props.researchMode === 'standard'} onChange={() => props.setResearchMode('standard')} />
                 {ar ? 'بحث قياسي' : 'Standard Research'}
               </label>
-              <label className={`cursor-pointer rounded px-2 py-1 text-xs ${props.researchMode === 'wide' ? 'bg-[#303030] text-[#EDEDEB]' : 'text-[#8E8E8E]'}`}>
+              <label className={`cursor-pointer rounded px-2 py-1 text-xs ${props.researchMode === 'wide' ? 'bg-hover text-ink' : 'text-muted'}`}>
                 <input className="sr-only" type="radio" name="research-mode" value="wide" checked={props.researchMode === 'wide'} onChange={() => props.setResearchMode('wide')} />
                 {ar ? 'البحث الموسع' : 'Wide Research'}
               </label>
@@ -76,7 +76,7 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
         </div>
       </form>
       <div className="composer-meta"><button onClick={props.onOpenSettings} className="model-control" title={ar ? 'اختيار النموذج' : 'Choose model'}><Cpu size={14} /><bdi>{modelLabel}</bdi></button><span id="composer-hint">{ar ? 'Enter للبحث · Shift + Enter لسطر جديد' : 'Enter to research · Shift + Enter for a new line'}</span></div>
-      {props.researchMode === 'wide' && <p id="wide-research-guidance" className="text-xs text-[#A0A0A0] mt-2">{ar ? 'يبدأ بـ 100 مصدر، ويتوسع تلقائيًا حتى 200 فقط عندما تبقى فجوات أدلة.' : 'Starts with 100 sources and automatically expands to 200 only when evidence gaps remain.'}</p>}
+      {props.researchMode === 'wide' && <p id="wide-research-guidance" className="text-xs text-muted mt-2">{ar ? 'ميزانية الاسترجاع الأولية تصل إلى 100 مصدر، وقد ترتفع تلقائيًا حتى 200 عند بقاء فجوات أدلة. يعرض المؤشر أدناه الأعداد الفعلية.' : 'The initial retrieval budget is up to 100 sources and may rise to 200 only when evidence gaps remain. The telemetry shows actual counts.'}</p>}
       <div className="workflow-templates" aria-label={ar ? 'قوالب البحث' : 'Research templates'}>
         <span>{ar ? 'ابدأ بـ' : 'Start with'}</span>
         {templates.map(({ icon: Icon, label, prefix, mode, ...template }) => (

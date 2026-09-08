@@ -52,6 +52,12 @@ interface SynthesisResult {
   };
 }
 
+export interface WideResearchRunResult {
+  report: string;
+  sources: SourceItem[];
+  telemetry: WideResearchTelemetry;
+}
+
 export interface WideResearchAgentDependencies {
   search?: (
     query: string,
@@ -127,12 +133,12 @@ export class WideResearchAgent {
     this.activationManager = activationManager;
   }
 
-  public async run(request: WideResearchRequest, signal?: AbortSignal): Promise<void> {
+  public async run(request: WideResearchRequest, signal?: AbortSignal): Promise<WideResearchRunResult | undefined> {
     const plan = request.plan;
     if (request.mode !== 'wide' || !plan || plan.status !== 'approved') {
       throw new Error('Wide Research requires an approved plan before retrieval can begin.');
     }
-    if (signal?.aborted) return;
+    if (signal?.aborted) return undefined;
 
     const language = request.language || 'en';
     const ar = isArabic(language);
@@ -196,14 +202,14 @@ export class WideResearchAgent {
           });
         },
       });
-      if (signal?.aborted) return;
+      if (signal?.aborted) return undefined;
 
       for (const page of scraped) pagesByUrl.set(page.url, page);
       const sources = Array.from(pagesByUrl.values());
       const candidates = await this.buildCandidates(request, sources, milestones, new Map(
         Array.from(discovered.entries()).map(([url, data]) => [url, data.milestoneId]),
       ));
-      if (signal?.aborted) return;
+      if (signal?.aborted) return undefined;
 
       latestAdmission = (this.dependencies.admitEvidence || ((allCandidates, planMilestones, query, options) =>
         admitStratifiedEvidence(allCandidates, planMilestones, query, options)))(
@@ -267,14 +273,14 @@ export class WideResearchAgent {
       hop++;
     }
 
-    if (signal?.aborted) return;
+    if (signal?.aborted) return undefined;
     const evidence = latestAdmission?.admittedChunks || [];
     const synthesis = await (this.dependencies.synthesize || ((input) => this.defaultSynthesize(input)))({
       request,
       plan,
       evidence,
     });
-    if (signal?.aborted) return;
+    if (signal?.aborted) return undefined;
 
     const sourceItems: SourceItem[] = synthesis.references.map(reference => ({
       url: reference.url,
@@ -295,12 +301,14 @@ export class WideResearchAgent {
       hop,
       coverageScore: latestAdmission?.coverageAudit.overallScore,
     });
+    const report = sanitizeCitationIndices(synthesis.report, synthesis.references.length);
     this.emitEvent({ type: 'wide_telemetry', wideTelemetry: finalTelemetry });
     this.emitEvent({
       type: 'finished',
-      report: sanitizeCitationIndices(synthesis.report, synthesis.references.length),
+      report,
       sources: sourceItems,
       costs: 0,
+      wideTelemetry: finalTelemetry,
       coverage: latestAdmission ? {
         overallScore: latestAdmission.coverageAudit.overallScore,
         subqueryScore: latestAdmission.coverageAudit.subqueryScore,
@@ -310,6 +318,7 @@ export class WideResearchAgent {
         uncoveredSubqueries: latestAdmission.coverageAudit.uncoveredSubqueries,
       } : undefined,
     });
+    return { report, sources: sourceItems, telemetry: finalTelemetry };
   }
 
   private async discoverUntilBudget(input: {

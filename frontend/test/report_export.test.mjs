@@ -47,10 +47,17 @@ describe('Report export artifacts', () => {
 
   it('serves PDF and DOCX downloads from the embedded server', async () => {
     const fakePdf = Buffer.from('%PDF-1.7\nLENS\n');
+    let pdfRenderCalls = 0;
     const { port } = await startEmbeddedServer(0, {
-      reportExportService: { renderPdf: async () => fakePdf },
+      reportExportService: { renderPdf: async () => { pdfRenderCalls++; return fakePdf; } },
     });
     try {
+      const invalid = await fetch(`http://127.0.0.1:${port}/api/export/pdf`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: '', content: 'x', sources: [] }),
+      });
+      assert.equal(invalid.status, 400);
+      assert.equal(pdfRenderCalls, 0);
+
       const pdf = await fetch(`http://127.0.0.1:${port}/api/export/pdf`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
@@ -58,6 +65,7 @@ describe('Report export artifacts', () => {
       assert.match(pdf.headers.get('content-type'), /application\/pdf/);
       assert.match(pdf.headers.get('content-disposition'), /attachment/);
       assert.deepEqual(Buffer.from(await pdf.arrayBuffer()), fakePdf);
+      assert.equal(pdfRenderCalls, 1);
 
       const docx = await fetch(`http://127.0.0.1:${port}/api/export/docx`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),

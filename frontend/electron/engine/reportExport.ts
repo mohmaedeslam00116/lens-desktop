@@ -67,17 +67,19 @@ export function validateReportExportPayload(value: unknown): ReportExportPayload
 
 export function createExportHtml(payload: ReportExportPayload): string {
   const direction = payload.language === 'ar' || containsArabic(`${payload.title}\n${payload.content}`) ? 'rtl' : 'ltr';
+  const arabic = payload.language === 'ar';
+  const labels = arabic ? { cost: 'التكلفة', sources: 'المصادر' } : { cost: 'Cost', sources: 'Sources' };
   const createdAt = payload.created_at ? escapeHtml(payload.created_at) : '';
   const sourceList = payload.sources.map(source => `<li>${escapeHtml(source)}</li>`).join('');
-  const cost = typeof payload.costs === 'number' ? `<p class="meta">Cost: ${payload.costs}</p>` : '';
+  const cost = typeof payload.costs === 'number' ? `<p class="meta">${labels.cost}: ${payload.costs}</p>` : '';
   return `<!doctype html>
 <html lang="${payload.language || 'en'}" dir="${direction}">
 <head><meta charset="utf-8"><style>
 @page { size: A4; margin: 20mm; }
-body { color: #111111; background: #ffffff; font-family: Arial, "Cairo", sans-serif; font-size: 11pt; line-height: 1.65; }
+body { color: #111111; background: #ffffff; font-family: Inter, Cairo, sans-serif; font-size: 11pt; line-height: 1.65; }
 h1 { font-size: 22pt; line-height: 1.3; margin: 0 0 8px; } .meta { color: #555; font-size: 9pt; margin: 3px 0; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 24px 0; } h2 { font-size: 14pt; margin-top: 28px; } li { overflow-wrap: anywhere; margin: 5px 0; }
-</style></head><body><h1>${escapeHtml(payload.title)}</h1><p class="meta">${createdAt}</p>${cost}<pre>${escapeHtml(payload.content)}</pre><h2>Sources</h2><ol>${sourceList}</ol></body></html>`;
+</style></head><body><h1>${escapeHtml(payload.title)}</h1><p class="meta">${createdAt}</p>${cost}<pre>${escapeHtml(payload.content)}</pre><h2>${labels.sources}</h2><ol>${sourceList}</ol></body></html>`;
 }
 
 function paragraph(text: string, bidi: boolean, style?: string): string {
@@ -87,12 +89,13 @@ function paragraph(text: string, bidi: boolean, style?: string): string {
 
 export function createDocxBuffer(payload: ReportExportPayload): Buffer {
   const bidi = payload.language === 'ar' || containsArabic(`${payload.title}\n${payload.content}`);
+  const labels = payload.language === 'ar' ? { cost: 'التكلفة', sources: 'المصادر' } : { cost: 'Cost', sources: 'Sources' };
   const body = [
     paragraph(payload.title, bidi, 'Title'),
     payload.created_at ? paragraph(payload.created_at, bidi, 'Meta') : '',
-    typeof payload.costs === 'number' ? paragraph(`Cost: ${payload.costs}`, bidi, 'Meta') : '',
+    typeof payload.costs === 'number' ? paragraph(`${labels.cost}: ${payload.costs}`, bidi, 'Meta') : '',
     ...payload.content.split(/\r?\n/).map(line => paragraph(line || ' ', bidi)),
-    paragraph('Sources', bidi, 'Heading1'),
+    paragraph(labels.sources, bidi, 'Heading1'),
     ...payload.sources.map((source, index) => paragraph(`${index + 1}. ${source}`, bidi)),
     '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>',
   ].join('');
@@ -112,7 +115,7 @@ export function createDocxBuffer(payload: ReportExportPayload): Buffer {
     },
     {
       relativePath: 'word/styles.xml',
-      content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Meta"><w:name w:val="Meta"/><w:rPr><w:color w:val="666666"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>',
+      content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Inter" w:hAnsi="Inter" w:cs="Cairo"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Meta"><w:name w:val="Meta"/><w:rPr><w:color w:val="666666"/><w:sz w:val="18"/></w:rPr></w:style></w:styles>',
     },
     {
       relativePath: 'word/document.xml',

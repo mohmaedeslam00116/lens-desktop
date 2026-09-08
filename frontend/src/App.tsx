@@ -81,6 +81,7 @@ export function App() {
   const [reflections, setReflections] = useState<string[]>([]);
   const [graphNodes, setGraphNodes] = useState<ResearchGraphNode[]>([]);
   const [wideTelemetry, setWideTelemetry] = useState<WideResearchTelemetry | null>(null);
+  const [wideExpansionHistory, setWideExpansionHistory] = useState<WideResearchTelemetry[]>([]);
   
   // Collaborative Plan Scoping (Tracer 4)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -170,6 +171,7 @@ export function App() {
     setReflections([]);
     setGraphNodes([]);
     setWideTelemetry(null);
+    setWideExpansionHistory([]);
     setProposedPlan(null);
     setIsPlanModalOpen(false);
     setIsRegeneratingPlan(false);
@@ -203,6 +205,7 @@ export function App() {
     setReflections([]);
     setGraphNodes([]);
     setWideTelemetry(null);
+    setWideExpansionHistory([]);
 
     // Map optimization mode to depth & perspective
     let depth: ResearchDepth = 'deep';
@@ -303,6 +306,17 @@ export function App() {
             }
           } else if (payload.type === 'wide_telemetry' && payload.wideTelemetry) {
             setWideTelemetry(payload.wideTelemetry);
+            if (payload.wideTelemetry.expansion) {
+              setWideExpansionHistory((previous) => {
+                const expansion = payload.wideTelemetry.expansion;
+                const alreadyRecorded = previous.some((item) =>
+                  item.expansion?.from === expansion.from
+                  && item.expansion?.to === expansion.to
+                  && item.expansion?.reason === expansion.reason,
+                );
+                return alreadyRecorded ? previous : [...previous, payload.wideTelemetry];
+              });
+            }
           } else if (payload.type === 'finished') {
             const formattedSources = (payload.sources || []).map((s: any) => {
               if (typeof s === 'string') return { url: s, title: s, credibilityScore: 85 };
@@ -427,6 +441,7 @@ export function App() {
           sources: activeReport.sources.map((s) => s.url),
           costs: activeReport.costs,
           created_at: activeReport.createdAt,
+          language: activeReport.language,
         }),
       });
 
@@ -521,6 +536,7 @@ export function App() {
                   onExport={handleExport}
                   onFollowUp={(q) => handleStartResearch(q)}
                   wideTelemetry={wideTelemetry}
+                  wideExpansionHistory={wideExpansionHistory}
                 />
 
                 {/* Docked Follow-up input bar */}

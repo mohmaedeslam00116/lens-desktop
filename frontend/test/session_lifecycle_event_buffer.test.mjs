@@ -302,6 +302,23 @@ describe('Session Lifecycle State Machine & Transition Rules', () => {
     session.recordReflection('Insight 1'); // duplicate
     assert.equal(session.partialDraft.reflections.length, 1);
   });
+
+  it('preserves individually streamed sources when cancellation follows', async () => {
+    const session = manager.createSession({ query: 'Wide partial evidence', mode: 'wide' });
+    session.transitionTo('running');
+    session.emitEvent({
+      type: 'source',
+      url: 'https://example.com/evidence',
+      title: 'Partial evidence',
+      domain: 'example.com',
+      snippet: 'Retrieved before cancellation',
+      credibility: 87,
+    });
+
+    const partial = await session.cancel('User stopped the run');
+    assert.equal(partial.sources.length, 1);
+    assert.equal(partial.sources[0].url, 'https://example.com/evidence');
+  });
 });
 
 describe('Sub-Second Cancellation & Partial Evidence Preservation', () => {

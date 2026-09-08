@@ -176,8 +176,8 @@ export const PlanApprovalModal: React.FC<PlanApprovalModalProps> = ({
               </div>
               <p className="text-xs text-[#8E8E8E] mt-0.5">
                 {isArabic 
-                  ? (isWide ? 'يبدأ البحث الموسع بـ 100 مصدر، وقد يتوسع تلقائيًا حتى 200 فقط عند بقاء فجوات أدلة.' : 'راجع المحاور المقترحة وخصص مسار البحث قبل بدء عملية الاسترجاع.')
-                  : (isWide ? 'Wide Research starts with 100 sources and automatically expands to 200 only when evidence gaps remain.' : 'Review proposed milestones and authorize the retrieval trajectory.')}
+                  ? (isWide ? 'تبدأ ميزانية الاسترجاع في البحث الموسع عند 100 وقد ترتفع تلقائيًا إلى 200 فقط عند بقاء فجوات أدلة؛ لا تمثل هذه الأرقام عدد المصادر المضمون.' : 'راجع المحاور المقترحة وخصص مسار البحث قبل بدء عملية الاسترجاع.')
+                  : (isWide ? 'Wide Research begins with a retrieval budget of 100 and can rise to 200 only when evidence gaps remain; these are not guaranteed source counts.' : 'Review proposed milestones and authorize the retrieval trajectory.')}
               </p>
             </div>
           </div>
@@ -348,13 +348,13 @@ export const PlanApprovalModal: React.FC<PlanApprovalModalProps> = ({
           <div className="flex items-center justify-between p-3 rounded-lg bg-[#141414] border border-[#262626] text-xs text-[#8E8E8E]">
             <div className="flex items-center gap-4">
               <div>
-                <span className="text-[#A0A0A0] font-medium">{isArabic ? 'المصادر المستهدفة:' : 'Target Sources:'} </span>
+                <span className="text-[#A0A0A0] font-medium">{isArabic ? (isWide ? 'ميزانية الاسترجاع المستهدفة:' : 'المصادر المستهدفة:') : (isWide ? 'Target retrieval budget:' : 'Target Sources:')} </span>
                 <span className="text-[#EDEDEB] font-mono font-semibold">{targetSources}</span>
               </div>
               {isWide && <>
                 <div className="w-px h-3 bg-[#333333]" />
                 <div>
-                  <span className="text-[#A0A0A0] font-medium">{isArabic ? 'البداية / الحد الأقصى:' : 'Start / maximum:'} </span>
+                  <span className="text-[#A0A0A0] font-medium">{isArabic ? 'ميزانية البداية / الحد الأقصى:' : 'Initial / maximum budget:'} </span>
                   <span className="text-[#EDEDEB] font-mono font-semibold">100 / 200</span>
                 </div>
               </>}

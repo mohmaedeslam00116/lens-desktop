@@ -4,7 +4,7 @@ import * as crypto from 'crypto';
 import { LiveEvent, ResearchPlan, ResearchRequest, WideResearchRequest } from './types';
 import { ModelClient } from './models';
 import { DeepResearchAgent } from './agent';
-import { WideResearchAgent } from './wideAgent';
+import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
 import { SessionLifecycleManager, ResearchSession } from './sessionLifecycle';
@@ -121,8 +121,18 @@ function startAuthorizedExecution(session: ActiveSession, approvedPlan?: Researc
     );
 
     try {
-      await agent.run(session.request, session.researchSession.signal);
-      session.researchSession.complete();
+      const result = await agent.run(session.request, session.researchSession.signal);
+      if (session.researchSession.signal.aborted) return;
+      if (session.request.mode === 'wide') {
+        const wideResult = result as WideResearchRunResult | undefined;
+        session.researchSession.complete({
+          report: wideResult?.report,
+          sources: wideResult?.sources,
+          metrics: { costs: 0 },
+        }, { emitFinished: false });
+      } else {
+        session.researchSession.complete();
+      }
     } catch (err: any) {
       if (session.researchSession.signal.aborted) {
         return;

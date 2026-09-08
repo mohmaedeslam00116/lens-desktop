@@ -28,11 +28,12 @@ describe('Wide Research UI contract', () => {
     assert.equal('maxSources' in standard, false);
   });
 
-  it('exposes distinct Wide Research controls and the 100-to-200 guidance', async () => {
+  it('exposes distinct Wide Research controls and transparent 100-to-200 budget guidance', async () => {
     const composer = await readFile(new URL('../src/components/vane/EmptyChatMessageInput.tsx', import.meta.url), 'utf8');
     assert.match(composer, /Wide Research/);
     assert.match(composer, /البحث الموسع/);
-    assert.match(composer, /Starts with 100 sources and automatically expands to 200/);
-    assert.match(composer, /يبدأ بـ 100 مصدر/);
+    assert.match(composer, /initial retrieval budget is up to 100 sources and may rise to 200/);
+    assert.match(composer, /ميزانية الاسترجاع الأولية تصل إلى 100 مصدر/);
+    assert.match(composer, /telemetry shows actual counts/);
   });
 });

@@ -71,7 +71,7 @@ A bidirectional technical taxonomy and acronym mapper that bridges Arabic and En
 ### ResearchMode
 The operational workflow mode of a research session:
 - **`standard`**: Direct, single-turn research execution across configured depth tiers (`quick`, `deep`, `storm`).
-- **`wide`**: A separately selected investigation workflow that requires plan approval, begins with a 100-source budget, may automatically expand only for evidence gaps, and is capped at 200 sources.
+- **`wide`**: A separately selected investigation workflow that requires plan approval, begins with a 100-source retrieval budget, may automatically expand that budget only for evidence gaps, and is capped at a 200-source budget. Actual retrieved counts are reported separately.
 
 ### WideResearch
 An advanced autonomous investigation workflow in LENS (Arabic: **بحث استقصائي موسع**) for complex topics requiring explicit scoping, transparent source-stage telemetry, and verifiable evidence provenance.

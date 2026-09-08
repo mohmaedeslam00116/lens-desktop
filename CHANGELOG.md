@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Explicit Wide Research Completion ([#27](https://github.com/mohmaedeslam00116/lens-desktop/issues/27))**:
-  - Dedicated `WideResearchAgent` with mandatory plan approval, bounded 100-source initial retrieval, evidence-gap-driven expansion capped at 200, hybrid evidence admission, hierarchical synthesis, and citation-grounding verification.
+  - Dedicated `WideResearchAgent` with mandatory plan approval, a 100-source initial retrieval budget, evidence-gap-driven budget expansion capped at 200, hybrid evidence admission, hierarchical synthesis, and citation-grounding verification.
   - Visible Arabic/English Standard Research and Wide Research controls, an approved-plan budget summary, and live source-stage telemetry with the reason for every expansion.
   - Implemented desktop `POST /api/export/pdf` and `POST /api/export/docx` endpoints. PDF uses Chromium’s print engine; DOCX is a valid, bidirectional OOXML package generated without native dependencies.
   - Added deterministic tests for wide-agent boundaries, explicit mode routing, UI request construction, DOCX package contents, export HTTP responses, and malformed export payload rejection.

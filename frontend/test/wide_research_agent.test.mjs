@@ -116,7 +116,7 @@ describe('WideResearchAgent', () => {
     const { dependencies, poolCalls } = createDependencies({ coverageScore: 0.95 });
     const agent = new WideResearchAgent('wide-100', event => events.push(event), dependencies);
 
-    await agent.run({
+    const result = await agent.run({
       query: 'Wide run',
       mode: 'wide',
       language: 'en',
@@ -132,7 +132,10 @@ describe('WideResearchAgent', () => {
     assert.equal(telemetry.some(event => event.wideTelemetry.expansion), false);
     const finished = events.find(event => event.type === 'finished');
     assert.ok(finished);
+    assert.equal(events.filter(event => event.type === 'finished').length, 1);
     assert.doesNotMatch(finished.report, /\[999\]/);
+    assert.equal(result.report, finished.report);
+    assert.deepEqual(result.telemetry, finished.wideTelemetry);
   });
 
   it('expands only for an evidence gap and never exceeds 200 sources', async () => {
@@ -154,5 +157,20 @@ describe('WideResearchAgent', () => {
     assert.equal(expansion.wideTelemetry.expansion.from, 100);
     assert.ok(expansion.wideTelemetry.expansion.to <= 200);
     assert.ok(expansion.wideTelemetry.expansion.reason.length > 0);
+  });
+
+  it('does not emit a finished event after cancellation', async () => {
+    const events = [];
+    const { dependencies } = createDependencies();
+    const controller = new AbortController();
+    controller.abort('test cancellation');
+    const agent = new WideResearchAgent('wide-cancelled', event => events.push(event), dependencies);
+
+    const result = await agent.run({
+      query: 'Cancelled wide run', mode: 'wide', language: 'en', plan: approvedPlan,
+    }, controller.signal);
+
+    assert.equal(result, undefined);
+    assert.equal(events.some(event => event.type === 'finished'), false);
   });
 });

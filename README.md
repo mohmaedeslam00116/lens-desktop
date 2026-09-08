@@ -54,7 +54,7 @@
     - Smart early exit when coverage meets target quality threshold ($\ge 80\%$), with honest budget exhaustion telemetry and interactive `[Extend Research]` action payloads when retrieval limits are reached.
 
 11. **Collaborative Research Plan Scoping & Approval UX:**
-    - Explicit Wide Research mode generates versioned 4-element `ResearchPlan` blueprints (`objective`, `milestones`, `suggestedSkills`, `estimatedScope`); it starts at 100 sources and may expand automatically to 200 only when evidence gaps remain.
+    - Explicit Wide Research mode generates versioned 4-element `ResearchPlan` blueprints (`objective`, `milestones`, `suggestedSkills`, `estimatedScope`); it begins with a 100-source retrieval budget and may expand that budget automatically to 200 only when evidence gaps remain.
     - Interactive bilingual React `PlanApprovalModal` with inline subquery editing, milestone creation and removal, and contextual skill toggles.
     - Strict human-in-the-loop trajectory authorization freezing retrieval bounds, paired with iterative regeneration guidance (`v1` -> `v2`) and sub-second cancellation resilience.
 
