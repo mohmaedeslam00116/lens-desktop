@@ -68,18 +68,55 @@ function setCorsHeaders(res: http.ServerResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-KEY');
 }
 
-function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
+export const MAX_JSON_REQUEST_SIZE = 2 * 1024 * 1024; // 2 MB safe maximum request size
+
+function parseJsonBody<T>(req: http.IncomingMessage, maxBytes = MAX_JSON_REQUEST_SIZE): Promise<T> {
   return new Promise((resolve, reject) => {
     let data = '';
-    req.on('data', chunk => { data += chunk; });
+    let size = 0;
+    let aborted = false;
+
+    const contentLength = parseInt(req.headers['content-length'] || '0', 10);
+    if (contentLength > maxBytes) {
+      aborted = true;
+      const err: any = new Error('Payload Too Large');
+      err.statusCode = 413;
+      req.pause();
+      req.resume();
+      reject(err);
+      return;
+    }
+
+    req.on('data', chunk => {
+      if (aborted) return;
+      size += chunk.length;
+      if (size > maxBytes) {
+        aborted = true;
+        const err: any = new Error('Payload Too Large');
+        err.statusCode = 413;
+        req.pause();
+        req.resume();
+        reject(err);
+        return;
+      }
+      data += chunk;
+    });
+
     req.on('end', () => {
+      if (aborted) return;
       try {
         resolve(data ? JSON.parse(data) : {} as T);
       } catch (err) {
-        reject(new Error('Invalid JSON payload'));
+        const parseErr: any = new Error('Invalid JSON payload');
+        parseErr.statusCode = 400;
+        reject(parseErr);
       }
     });
-    req.on('error', reject);
+
+    req.on('error', err => {
+      if (aborted) return;
+      reject(err);
+    });
   });
 }
 
@@ -495,7 +532,8 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           try {
             payload = validateReportExportPayload(await parseJsonBody<unknown>(req));
           } catch (err: any) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
+            const statusCode = err.statusCode === 413 ? 413 : 400;
+            res.writeHead(statusCode, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message || 'Invalid export payload' }));
             return;
           }
@@ -550,7 +588,8 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Endpoint not found' }));
       } catch (err: any) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
+        const statusCode = err.statusCode || 500;
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message || 'Internal server error' }));
       }
     });

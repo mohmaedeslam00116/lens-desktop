@@ -25,6 +25,7 @@ import {
   WideResearchTelemetry,
 } from './types';
 import { buildResearchStartPayload } from './utils/researchRequest.mjs';
+import { resolveReportTelemetry } from './utils/reportTelemetry.mjs';
 
 const API_BASE = 'http://127.0.0.1:8000';
 const WS_BASE = 'ws://127.0.0.1:8000';
@@ -339,6 +340,9 @@ export function App() {
               language,
               mode: researchMode,
               wideTelemetry: payload.wideTelemetry || wideTelemetry || undefined,
+              wideExpansionHistory: (wideExpansionHistory.length > 0
+                ? wideExpansionHistory
+                : (payload.wideTelemetry?.expansion ? [payload.wideTelemetry] : undefined)),
             };
 
             setActiveReport(finalReport);
@@ -525,19 +529,24 @@ export function App() {
               />
             ) : (
               <div className="flex-1 flex flex-col justify-between pb-8">
-                <MessageBox
-                  query={currentQuery || activeReport?.query || ''}
-                  report={currentContent}
-                  sources={currentSources}
-                  steps={compiledSteps}
-                  loading={isSearching}
-                  language={language}
-                  plan={activeReport?.plan || proposedPlan}
-                  onExport={handleExport}
-                  onFollowUp={(q) => handleStartResearch(q)}
-                  wideTelemetry={wideTelemetry}
-                  wideExpansionHistory={wideExpansionHistory}
-                />
+                {(() => {
+                  const resolved = resolveReportTelemetry(activeReport, wideTelemetry, wideExpansionHistory);
+                  return (
+                    <MessageBox
+                      query={currentQuery || activeReport?.query || ''}
+                      report={currentContent}
+                      sources={currentSources}
+                      steps={compiledSteps}
+                      loading={isSearching}
+                      language={language}
+                      plan={activeReport?.plan || proposedPlan}
+                      onExport={handleExport}
+                      onFollowUp={(q) => handleStartResearch(q)}
+                      wideTelemetry={resolved.wideTelemetry}
+                      wideExpansionHistory={resolved.wideExpansionHistory}
+                    />
+                  );
+                })()}
 
                 {/* Docked Follow-up input bar */}
                 <MessageInput

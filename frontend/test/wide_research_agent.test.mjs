@@ -173,4 +173,50 @@ describe('WideResearchAgent', () => {
     assert.equal(result, undefined);
     assert.equal(events.some(event => event.type === 'finished'), false);
   });
+
+  it('aborts an already-running search when signal is aborted', async () => {
+    const events = [];
+    const controller = new AbortController();
+    let searchStarted = false;
+    let searchAborted = false;
+
+    const dependencies = {
+      search: async (query, provider, apiKeys, maxResults, signal) => {
+        searchStarted = true;
+        return new Promise((resolve, reject) => {
+          if (signal?.aborted) {
+            searchAborted = true;
+            return reject(new DOMException('Aborted', 'AbortError'));
+          }
+          signal?.addEventListener('abort', () => {
+            searchAborted = true;
+            reject(new DOMException('Aborted', 'AbortError'));
+          });
+        });
+      },
+    };
+
+    const agent = new WideResearchAgent('wide-cancel-running', event => events.push(event), dependencies);
+
+    const runPromise = agent.run({
+      query: 'In-flight search cancellation',
+      mode: 'wide',
+      language: 'en',
+      plan: approvedPlan,
+    }, controller.signal);
+
+    // Wait until search is actively running
+    while (!searchStarted) {
+      await new Promise(r => setImmediate(r));
+    }
+    assert.equal(searchStarted, true);
+
+    // Abort the running search
+    controller.abort('user cancellation');
+
+    const result = await runPromise;
+    assert.equal(result, undefined);
+    assert.equal(searchAborted, true);
+    assert.equal(events.some(event => event.type === 'finished'), false);
+  });
 });

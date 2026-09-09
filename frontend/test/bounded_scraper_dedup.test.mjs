@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 
 import {
   normalizeCanonicalUrl,
@@ -330,6 +331,56 @@ describe('BoundedScraperPool Concurrency & Host Throttling', () => {
 
     assert.equal(result, null);
     assert.ok(elapsed < 200, `Expected cancellation in < 200ms, took ${elapsed}ms`);
+  });
+
+  it('cancels in-flight scrape promptly and returns null on local slow server', async () => {
+    let requestStarted = false;
+    let serverAborted = false;
+    let onRequestStart;
+    const requestStartedPromise = new Promise((resolve) => { onRequestStart = resolve; });
+    let onServerAbort;
+    const serverAbortedPromise = new Promise((resolve) => { onServerAbort = resolve; });
+
+    const server = http.createServer((req, res) => {
+      requestStarted = true;
+      onRequestStart();
+      req.on('close', () => {
+        if (!res.writableEnded) {
+          serverAborted = true;
+          onServerAbort();
+        }
+      });
+    });
+
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const testUrl = `http://127.0.0.1:${port}/slow-page`;
+
+    // Default fetcher without customFetcher forwards sig to PageScraper.scrape
+    const pool = new BoundedScraperPool();
+    const controller = new AbortController();
+
+    const scrapePromise = pool.scrape(testUrl, { signal: controller.signal });
+
+    // Wait for the request to start on the server
+    await requestStartedPromise;
+    assert.equal(requestStarted, true);
+
+    // Abort caller signal while request is in-flight
+    controller.abort();
+
+    // Prove the server connection is aborted promptly
+    await Promise.race([
+      serverAbortedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 2000))
+    ]);
+    assert.equal(serverAborted, true);
+
+    // Assert the pool returns no page
+    const result = await scrapePromise;
+    assert.equal(result, null);
+
+    await new Promise((resolve) => server.close(resolve));
   });
 });
 

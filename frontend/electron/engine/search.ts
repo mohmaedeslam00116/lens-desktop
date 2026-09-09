@@ -9,51 +9,68 @@ export class MultiSearchProvider {
     query: string,
     provider: 'duckduckgo' | 'tavily' | 'serper' | 'google' = 'duckduckgo',
     apiKeys?: Record<string, string>,
-    maxResults = 8
+    maxResults = 8,
+    signal?: AbortSignal
   ): Promise<SearchResultItem[]> {
     const cleanQuery = query.trim();
     if (!cleanQuery) return [];
+    if (signal?.aborted) return [];
 
     const keys = apiKeys || {};
 
     if (provider === 'tavily' && keys.tavily) {
       try {
-        const results = await this.searchTavily(cleanQuery, keys.tavily, maxResults);
+        const results = await this.searchTavily(cleanQuery, keys.tavily, maxResults, signal);
         if (results.length > 0) return results;
       } catch (err) {
+        if (signal?.aborted) throw err;
         console.warn('[MultiSearch] Tavily failed, falling back to DuckDuckGo:', err);
       }
     } else if ((provider === 'serper' || provider === 'google') && keys.serper) {
       try {
-        const results = await this.searchSerper(cleanQuery, keys.serper, maxResults);
+        const results = await this.searchSerper(cleanQuery, keys.serper, maxResults, signal);
         if (results.length > 0) return results;
       } catch (err) {
+        if (signal?.aborted) throw err;
         console.warn('[MultiSearch] Serper failed, falling back to DuckDuckGo:', err);
       }
     }
 
     // Default & reliable fallback: DuckDuckGo HTML search
-    return await this.searchDuckDuckGo(cleanQuery, maxResults);
+    return await this.searchDuckDuckGo(cleanQuery, maxResults, signal);
   }
 
   /**
    * DuckDuckGo free search without API keys.
    */
-  static async searchDuckDuckGo(query: string, maxResults = 8): Promise<SearchResultItem[]> {
+  static async searchDuckDuckGo(query: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
+    if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
     try {
       const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 9000);
 
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
+      const onCallerAbort = () => controller.abort();
+      if (signal) {
+        signal.addEventListener('abort', onCallerAbort, { once: true });
+      }
+
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
+          }
+        });
+      } finally {
+        clearTimeout(timeoutId);
+        if (signal) {
+          signal.removeEventListener('abort', onCallerAbort);
         }
-      });
-      clearTimeout(timeoutId);
+      }
 
       if (!res.ok) {
         throw new Error(`DuckDuckGo returned HTTP ${res.status}`);
@@ -96,20 +113,21 @@ export class MultiSearchProvider {
       if (results.length > 0) return results;
 
       // Secondary fallback: DuckDuckGo Instant Answer API
-      return await this.searchDuckDuckGoInstantApi(query, maxResults);
-    } catch (err) {
+      return await this.searchDuckDuckGoInstantApi(query, maxResults, signal);
+    } catch (err: any) {
+      if (signal?.aborted) throw err;
       console.warn('[MultiSearch] DuckDuckGo HTML scraping error:', err);
-      return await this.searchDuckDuckGoInstantApi(query, maxResults);
+      return await this.searchDuckDuckGoInstantApi(query, maxResults, signal);
     }
   }
 
   /**
    * DuckDuckGo Instant Answer JSON API fallback
    */
-  static async searchDuckDuckGoInstantApi(query: string, maxResults = 8): Promise<SearchResultItem[]> {
+  static async searchDuckDuckGoInstantApi(query: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
     try {
       const apiUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const res = await fetch(apiUrl);
+      const res = await fetch(apiUrl, { signal });
       if (!res.ok) return [];
 
       const data = await res.json() as any;
@@ -137,7 +155,8 @@ export class MultiSearchProvider {
       }
 
       return results;
-    } catch {
+    } catch (err: any) {
+      if (signal?.aborted) throw err;
       return [];
     }
   }
@@ -145,9 +164,10 @@ export class MultiSearchProvider {
   /**
    * Tavily Search API
    */
-  static async searchTavily(query: string, apiKey: string, maxResults = 8): Promise<SearchResultItem[]> {
+  static async searchTavily(query: string, apiKey: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
+      signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         api_key: apiKey,
@@ -173,9 +193,10 @@ export class MultiSearchProvider {
   /**
    * Serper Google Search API
    */
-  static async searchSerper(query: string, apiKey: string, maxResults = 8): Promise<SearchResultItem[]> {
+  static async searchSerper(query: string, apiKey: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
     const res = await fetch('https://google.serper.dev/search', {
       method: 'POST',
+      signal,
       headers: {
         'X-API-KEY': apiKey,
         'Content-Type': 'application/json'

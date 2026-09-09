@@ -353,14 +353,29 @@ export class SkillManagerService {
     }
 
     // 3. Write files into resolution.destinationDir
+    const destDir = path.resolve(resolution.destinationDir);
     for (const f of files) {
       let relativePath = f.path;
       if (prefixToStrip && relativePath.startsWith(prefixToStrip)) {
         relativePath = relativePath.substring(prefixToStrip.length);
       }
-      if (!relativePath || relativePath.startsWith('../')) continue;
+      if (!relativePath) continue;
 
-      const targetPath = path.join(resolution.destinationDir, relativePath);
+      // Reject absolute paths (POSIX and Windows drive paths)
+      if (path.posix.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
+        continue;
+      }
+
+      // Normalize and resolve candidate file path against destination directory
+      const normalizedRel = path.normalize(relativePath);
+      const targetPath = path.resolve(destDir, normalizedRel);
+
+      // Reject any resolved target that is outside resolution.destinationDir
+      const rel = path.relative(destDir, targetPath);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+        continue;
+      }
+
       await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
 
       // If this is SKILL.md and was modified (renamed), write modified content

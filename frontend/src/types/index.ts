@@ -189,6 +189,7 @@ export interface ReportData {
   language: string;
   mode?: ResearchMode;
   wideTelemetry?: WideResearchTelemetry;
+  wideExpansionHistory?: WideResearchTelemetry[];
   readingTimeMinutes?: number;
   wordCount?: number;
 }

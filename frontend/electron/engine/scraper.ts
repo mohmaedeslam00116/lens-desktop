@@ -31,7 +31,7 @@ export function calculateCredibilityScore(url: string): number {
 }
 
 export class PageScraper {
-  static async scrape(url: string, timeoutMs = 8000): Promise<ScrapedPage> {
+  static async scrape(url: string, timeoutMs = 8000, signal?: AbortSignal): Promise<ScrapedPage> {
     let domain = '';
     try {
       domain = new URL(url).hostname.replace('www.', '');
@@ -45,15 +45,31 @@ export class PageScraper {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
+      const onCallerAbort = () => controller.abort();
+      if (signal) {
+        if (signal.aborted) {
+          controller.abort();
+        } else {
+          signal.addEventListener('abort', onCallerAbort, { once: true });
         }
-      });
-      clearTimeout(timer);
+      }
+
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
+          }
+        });
+      } finally {
+        clearTimeout(timer);
+        if (signal) {
+          signal.removeEventListener('abort', onCallerAbort);
+        }
+      }
 
       if (!res.ok) {
         return {

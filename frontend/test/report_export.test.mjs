@@ -77,4 +77,35 @@ describe('Report export artifacts', () => {
       await stopEmbeddedServer();
     }
   });
+
+  it('enforces request body size limits returning 413 for oversized payloads', async () => {
+    const { port } = await startEmbeddedServer(0);
+    try {
+      // Valid payload below limit succeeds with 200
+      const validRes = await fetch(`http://127.0.0.1:${port}/api/export/docx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      assert.equal(validRes.status, 200);
+
+      // Oversized payload exceeding limit returns 413
+      const oversizedPayload = {
+        title: 'Oversized Document',
+        content: 'x'.repeat(2.5 * 1024 * 1024),
+        sources: ['https://example.com/item'],
+        created_at: '2026-09-08T12:00:00.000Z',
+        language: 'en',
+      };
+
+      const oversizedRes = await fetch(`http://127.0.0.1:${port}/api/export/docx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(oversizedPayload),
+      });
+      assert.equal(oversizedRes.status, 413);
+    } finally {
+      await stopEmbeddedServer();
+    }
+  });
 });
