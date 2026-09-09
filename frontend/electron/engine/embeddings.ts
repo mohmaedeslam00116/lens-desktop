@@ -559,10 +559,26 @@ export class CachedEmbeddingWrapper extends BaseEmbedding {
   async embedText(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (texts.length === 0) return [];
 
-    const expectedDimensions = this.cachedDimensions;
+    let targetDim = this.cachedDimensions;
     const { hits, misses } = await this.cache.getBatch(this.provider, this.model, texts, {
-      expectedDimensions
+      expectedDimensions: targetDim
     });
+
+    // If target dimension was not pre-set, inspect the first hit to establish expected dimension
+    if (!targetDim && hits.size > 0) {
+      targetDim = hits.values().next().value?.length;
+    }
+
+    // Revalidate all hits against targetDim; evict any mismatch to misses
+    if (targetDim) {
+      for (const [idx, vec] of hits.entries()) {
+        if (!Array.isArray(vec) || vec.length !== targetDim) {
+          hits.delete(idx);
+          misses.push({ index: idx, text: texts[idx] });
+        }
+      }
+    }
+
     if (misses.length > 0) {
       const missingTexts = misses.map(m => m.text);
       const fetched = await this.innerModel.embedText(missingTexts, signal);
@@ -577,23 +593,55 @@ export class CachedEmbeddingWrapper extends BaseEmbedding {
         );
       }
 
-      if (!this.cachedDimensions && fetched.length > 0 && fetched[0].length > 0) {
-        this.cachedDimensions = fetched[0].length;
+      // Establish target dimension from live model if not set yet
+      if (!targetDim && fetched.length > 0 && fetched[0].length > 0) {
+        targetDim = fetched[0].length;
+        // Re-check existing hits against this newly determined targetDim
+        for (const [idx, vec] of hits.entries()) {
+          if (!Array.isArray(vec) || vec.length !== targetDim) {
+            hits.delete(idx);
+            // In the rare event an existing hit doesn't match the live model, refetch it
+            const refetched = await this.innerModel.embedText([texts[idx]], signal);
+            if (Array.isArray(refetched) && refetched[0]?.length === targetDim) {
+              hits.set(idx, refetched[0]);
+            }
+          }
+        }
+      }
+
+      if (targetDim) {
+        this.cachedDimensions = targetDim;
       }
 
       const toStore: { text: string; vector: number[] }[] = [];
       misses.forEach((m, idx) => {
         const vec = fetched[idx];
-        hits.set(m.index, vec);
-        toStore.push({ text: m.text, vector: vec });
+        if (!targetDim || vec.length === targetDim) {
+          hits.set(m.index, vec);
+          toStore.push({ text: m.text, vector: vec });
+        }
       });
 
-      await this.cache.setBatch(this.provider, this.model, toStore);
-    } else if (!this.cachedDimensions && hits.size > 0) {
-      this.cachedDimensions = hits.values().next().value?.length;
+      if (toStore.length > 0) {
+        await this.cache.setBatch(this.provider, this.model, toStore);
+      }
+    } else if (targetDim) {
+      this.cachedDimensions = targetDim;
     }
 
-    return texts.map((_, i) => hits.get(i)!);
+    // Ensure all returned vectors match expected dimensions
+    const result: number[][] = [];
+    for (let i = 0; i < texts.length; i++) {
+      const vec = hits.get(i);
+      if (!vec || (targetDim && vec.length !== targetDim)) {
+        throw new Error(
+          `Failed to retrieve valid ${targetDim || 'consistent'}-dimension embedding vector for text index ${i}`
+        );
+      }
+      result.push(vec);
+    }
+
+    return result;
   }
 }
 

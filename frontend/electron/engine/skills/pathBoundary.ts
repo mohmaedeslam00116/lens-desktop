@@ -124,6 +124,13 @@ export class SkillPathBoundary {
   public async readResource(relativePath: string, encoding: BufferEncoding = 'utf8'): Promise<string> {
     const safePath = this.resolveSafePath(relativePath);
     const stats = await fs.promises.stat(safePath);
+    if (!stats.isFile()) {
+      throw new SkillError(
+        'SECURITY_ACCESS_DENIED',
+        `Skill resource is not a regular file: ${safePath}`,
+        safePath
+      );
+    }
     if (stats.size > MAX_RESOURCE_FILE_SIZE) {
       throw new SkillError(
         'SECURITY_ACCESS_DENIED',

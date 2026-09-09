@@ -1,6 +1,45 @@
 import { SearchResultItem } from './types';
 import * as cheerio from 'cheerio';
 
+async function readBoundedJson<T = any>(res: Response, maxBytes = 2 * 1024 * 1024): Promise<T> {
+  const contentLengthStr = res.headers.get('content-length');
+  if (contentLengthStr && parseInt(contentLengthStr, 10) > maxBytes) {
+    throw new Error(`Response body exceeds maximum size limit of ${maxBytes} bytes`);
+  }
+
+  if (res.body && typeof (res.body as any).getReader === 'function') {
+    const reader = (res.body as any).getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          try { await reader.cancel(); } catch {}
+          throw new Error(`Response stream exceeded maximum size limit of ${maxBytes} bytes`);
+        }
+        chunks.push(value);
+      }
+    }
+    const merged = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const text = new TextDecoder('utf-8').decode(merged);
+    return JSON.parse(text);
+  }
+
+  const text = await res.text();
+  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+    throw new Error(`Response text exceeds maximum size limit of ${maxBytes} bytes`);
+  }
+  return JSON.parse(text);
+}
+
 export class MultiSearchProvider {
   /**
    * Searches web using requested provider with automatic DuckDuckGo fallback.
@@ -220,7 +259,7 @@ export class MultiSearchProvider {
         throw new Error(`Tavily API responded with status ${res.status}`);
       }
 
-      const data = await res.json() as any;
+      const data = await readBoundedJson(res);
       return (data.results || []).map((r: any) => ({
         title: r.title || query,
         url: r.url,
@@ -265,7 +304,7 @@ export class MultiSearchProvider {
         throw new Error(`Serper API responded with status ${res.status}`);
       }
 
-      const data = await res.json() as any;
+      const data = await readBoundedJson(res);
       return (data.organic || []).map((r: any) => ({
         title: r.title || query,
         url: r.link,

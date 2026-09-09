@@ -102,8 +102,6 @@ function setCorsHeaders(res: http.ServerResponse, origin?: string) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   } else if (!origin) {
     res.setHeader('Access-Control-Allow-Origin', '*');
-  } else {
-    res.setHeader('Access-Control-Allow-Origin', 'null');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-KEY');
@@ -249,14 +247,15 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
 
     httpServer = http.createServer(async (req, res) => {
       const origin = req.headers.origin;
+      if (origin && !isAllowedLocalOrigin(origin)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Forbidden: Untrusted cross-origin request rejected' }));
+        return;
+      }
+
       setCorsHeaders(res, origin);
 
       if (req.method === 'OPTIONS') {
-        if (origin && !isAllowedLocalOrigin(origin)) {
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Forbidden: Untrusted cross-origin request rejected' }));
-          return;
-        }
         res.writeHead(204);
         res.end();
         return;
@@ -264,13 +263,6 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
 
       const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
       const pathname = parsedUrl.pathname;
-
-      const isNonGet = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
-      if (isNonGet && origin && !isAllowedLocalOrigin(origin)) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Forbidden: Untrusted cross-origin request rejected' }));
-        return;
-      }
 
       try {
         // Health check

@@ -48,6 +48,10 @@ export class DeepResearchAgent {
 
       try {
         const scraped = await PageScraper.scrape(hit.url, 7000, signal);
+        if (!scraped || !scraped.content || scraped.content.startsWith('Content unavailable from ') || scraped.content.startsWith('Error retrieving ')) {
+          console.warn(`[Agent] Scrape returned unavailable content for ${hit.url}`);
+          continue;
+        }
         scrapedSources.push(scraped);
 
         this.emitEvent({

@@ -66,13 +66,16 @@ export class PageScraper {
         });
 
         if (!res.ok) {
-          return {
-            url,
-            title: domain,
-            domain,
-            content: `Content unavailable from ${url} (HTTP ${res.status}).`,
-            credibilityScore
-          };
+          if (res.status === 429 || res.status === 503) {
+            return {
+              url,
+              title: domain,
+              domain,
+              content: `Content unavailable from ${url} (HTTP ${res.status}).`,
+              credibilityScore
+            };
+          }
+          throw new Error(`HTTP ${res.status}: Content unavailable from ${url}`);
         }
 
         const MAX_SCRAPE_BYTES = 2 * 1024 * 1024; // 2 MB safe maximum scrape size
@@ -155,13 +158,7 @@ export class PageScraper {
         credibilityScore
       };
     } catch (err: any) {
-      return {
-        url,
-        title: domain,
-        domain,
-        content: `Error retrieving ${url}: ${err.message || 'Request timed out'}`,
-        credibilityScore
-      };
+      throw new Error(`Failed to scrape ${url}: ${err.message || 'Request timed out'}`);
     }
   }
 }

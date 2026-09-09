@@ -72,9 +72,10 @@ export function parseProviderSseEvents(provider: string, payload: string): Parse
   flush();
 
   const text: string[] = [];
+  const MAX_TOOL_ARG_BYTES = 512 * 1024; // 512 KiB strict limit
   const toolCalls: ParsedSseToolCall[] = [];
-  const accumulatedOpenAICalls = new Map<number, { name?: string; args: string }>();
-  const accumulatedAnthropicCalls = new Map<number, { name?: string; args: string; initialInput?: Record<string, any> }>();
+  const accumulatedOpenAICalls = new Map<number, { name?: string; args: string; rejected?: boolean }>();
+  const accumulatedAnthropicCalls = new Map<number, { name?: string; args: string; initialInput?: Record<string, any>; rejected?: boolean }>();
   const normalizedProvider = provider.toLowerCase().trim();
 
   for (const event of events) {
@@ -114,14 +115,19 @@ export function parseProviderSseEvents(provider: string, payload: string): Parse
           text.push(data.delta.text);
         } else if (data.delta?.type === 'input_json_delta' && typeof data.delta.partial_json === 'string') {
           const current = accumulatedAnthropicCalls.get(index);
-          if (current && current.args.length < 512 * 1024) {
-            current.args += data.delta.partial_json;
+          if (current && !current.rejected) {
+            const proposed = current.args + data.delta.partial_json;
+            if (Buffer.byteLength(proposed, 'utf8') <= MAX_TOOL_ARG_BYTES) {
+              current.args = proposed;
+            } else {
+              current.rejected = true;
+            }
           }
         }
       }
       if (data.type === 'content_block_stop') {
         const current = accumulatedAnthropicCalls.get(index);
-        if (current && current.name) {
+        if (current && current.name && !current.rejected) {
           let argumentsObject: Record<string, any> = current.initialInput || {};
           if (current.args.trim().length > 0) {
             try {
@@ -131,8 +137,8 @@ export function parseProviderSseEvents(provider: string, payload: string): Parse
             }
           }
           toolCalls.push({ name: current.name, arguments: argumentsObject });
-          accumulatedAnthropicCalls.delete(index);
         }
+        accumulatedAnthropicCalls.delete(index);
       }
       continue;
     }
@@ -156,17 +162,28 @@ export function parseProviderSseEvents(provider: string, payload: string): Parse
       if (call.function?.name) {
         existing.name = call.function.name;
       }
-      if (typeof call.function?.arguments === 'string') {
-        existing.args += call.function.arguments;
-      } else if (typeof call.function?.arguments === 'object' && call.function.arguments !== null) {
-        existing.args = JSON.stringify(call.function.arguments);
+      if (!existing.rejected) {
+        let fragment = '';
+        if (typeof call.function?.arguments === 'string') {
+          fragment = call.function.arguments;
+        } else if (typeof call.function?.arguments === 'object' && call.function.arguments !== null) {
+          fragment = JSON.stringify(call.function.arguments);
+        }
+        if (fragment) {
+          const proposed = existing.args + fragment;
+          if (Buffer.byteLength(proposed, 'utf8') <= MAX_TOOL_ARG_BYTES) {
+            existing.args = proposed;
+          } else {
+            existing.rejected = true;
+          }
+        }
       }
       accumulatedOpenAICalls.set(idx, existing);
     }
   }
 
   for (const [_, call] of accumulatedAnthropicCalls) {
-    if (!call.name) continue;
+    if (!call.name || call.rejected) continue;
     let argumentsObject: Record<string, any> = call.initialInput || {};
     if (call.args.trim().length > 0) {
       try {
@@ -179,7 +196,7 @@ export function parseProviderSseEvents(provider: string, payload: string): Parse
   }
 
   for (const [_, call] of accumulatedOpenAICalls) {
-    if (!call.name) continue;
+    if (!call.name || call.rejected) continue;
     let argumentsObject: Record<string, any> = {};
     try {
       argumentsObject = call.args.trim().length > 0 ? JSON.parse(call.args) : {};

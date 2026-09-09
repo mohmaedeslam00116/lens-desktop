@@ -43,11 +43,11 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
           <div className="composer-options">
             <fieldset className="composer-select border-0 p-0 flex items-center gap-1" aria-describedby={props.researchMode === 'wide' ? 'wide-research-guidance' : undefined}>
               <legend className="sr-only">{ar ? 'وضع البحث' : 'Research mode'}</legend>
-              <label className={`cursor-pointer rounded px-2 py-1 text-xs focus-within:ring-1 focus-within:ring-line-strong focus-within:outline-none ${props.researchMode === 'standard' ? 'bg-hover text-ink' : 'text-muted'}`}>
+              <label className={`cursor-pointer rounded px-2 py-1 text-xs focus-within:ring-2 focus-within:ring-line-strong focus-within:outline-none ${props.researchMode === 'standard' ? 'bg-hover text-ink' : 'text-muted'}`}>
                 <input className="sr-only" type="radio" name="research-mode" value="standard" checked={props.researchMode === 'standard'} onChange={() => props.setResearchMode('standard')} />
                 {ar ? 'بحث قياسي' : 'Standard Research'}
               </label>
-              <label className={`cursor-pointer rounded px-2 py-1 text-xs focus-within:ring-1 focus-within:ring-line-strong focus-within:outline-none ${props.researchMode === 'wide' ? 'bg-hover text-ink' : 'text-muted'}`}>
+              <label className={`cursor-pointer rounded px-2 py-1 text-xs focus-within:ring-2 focus-within:ring-line-strong focus-within:outline-none ${props.researchMode === 'wide' ? 'bg-hover text-ink' : 'text-muted'}`}>
                 <input className="sr-only" type="radio" name="research-mode" value="wide" checked={props.researchMode === 'wide'} onChange={() => props.setResearchMode('wide')} />
                 {ar ? 'البحث الموسع' : 'Wide Research'}
               </label>

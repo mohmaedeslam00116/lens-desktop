@@ -196,6 +196,7 @@ export function App() {
     setResearchError('');
     setCurrentQuery(trimmed);
     setProposedPlan(null);
+    approvedPlanRef.current = null;
     setIsPlanModalOpen(false);
     setIsRegeneratingPlan(false);
     setActiveSessionId(null);
