@@ -223,6 +223,33 @@ Section details [Table 1] and [Figure 2] show metrics [1] vs hallucinated [99].
     assert.ok(!result.sanitizedText.includes('[99]'));
   });
 
+  it('preserves numeric markdown links [1](https://example.com) and [12](https://example.com/source) while filtering unlinked and malformed citations', () => {
+    const contract = new CitationGroundingContract();
+    contract.registerExcerpts([
+      { id: 'c1', text: 'T1', sourceUrl: 'https://nature.com' }
+    ]);
+
+    const input = `
+See documentation at [1](https://example.com) and extended reference at [12](https://example.com/source).
+Also visit ordinary link [Official Portal](https://lens.dev/docs).
+Valid citation is kept: [1].
+Ungrounded citation is filtered: [99].
+Malformed markdown with hallucinated citation: [88](
+Another ungrounded bracket: [77] (https://detached.example.com).
+`;
+
+    const result = contract.verifyAndSanitize(input);
+
+    assert.equal(result.zeroHallucinationGuaranteed, true);
+    assert.ok(result.sanitizedText.includes('[1](https://example.com)'), 'Numeric link [1](...) must be preserved');
+    assert.ok(result.sanitizedText.includes('[12](https://example.com/source)'), 'Numeric link [12](...) must be preserved');
+    assert.ok(result.sanitizedText.includes('[Official Portal](https://lens.dev/docs)'), 'Ordinary labeled link must be preserved');
+    assert.ok(result.sanitizedText.includes('Valid citation is kept: [1].'));
+    assert.ok(!result.sanitizedText.includes('[99]'));
+    assert.ok(!result.sanitizedText.includes('[88]'));
+    assert.ok(!result.sanitizedText.includes('[77]'));
+  });
+
   it('strictly preserves code blocks containing bracket array literals', () => {
     const contract = new CitationGroundingContract();
     contract.registerExcerpts([{ id: 'c1', text: 'T1', sourceUrl: 'https://u1.com' }]);

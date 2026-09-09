@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 
 import {
   createDocxBuffer,
@@ -73,6 +74,79 @@ describe('Report export artifacts', () => {
       assert.equal(docx.status, 200);
       assert.match(docx.headers.get('content-type'), /openxmlformats/);
       assert.equal(Buffer.from(await docx.arrayBuffer()).subarray(0, 2).toString(), 'PK');
+    } finally {
+      await stopEmbeddedServer();
+    }
+  });
+
+  it('enforces request body size limits returning 413 for oversized payloads', async () => {
+    const { port } = await startEmbeddedServer(0);
+    try {
+      // Valid payload below limit succeeds with 200
+      const validRes = await fetch(`http://127.0.0.1:${port}/api/export/docx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      assert.equal(validRes.status, 200);
+
+      // Oversized payload exceeding limit returns 413
+      const oversizedPayload = {
+        title: 'Oversized Document',
+        content: 'x'.repeat(2.5 * 1024 * 1024),
+        sources: ['https://example.com/item'],
+        created_at: '2026-09-08T12:00:00.000Z',
+        language: 'en',
+      };
+
+      const oversizedRes = await fetch(`http://127.0.0.1:${port}/api/export/docx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(oversizedPayload),
+      });
+      assert.equal(oversizedRes.status, 413);
+    } finally {
+      await stopEmbeddedServer();
+    }
+  });
+
+  it('enforces request body size limits and terminates chunked request without Content-Length returning 413', async () => {
+    const { port } = await startEmbeddedServer(0);
+    try {
+      const statusCodePromise = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Chunked 413 response timed out')), 4000);
+        const req = http.request({
+          hostname: '127.0.0.1',
+          port,
+          path: '/api/export/docx',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        req.on('response', (res) => {
+          clearTimeout(timer);
+          resolve(res.statusCode);
+        });
+
+        req.on('error', () => {
+          // Ignore write error after socket termination
+        });
+
+        // Write chunk 1 without Content-Length (1.2 MB)
+        req.write('{"title":"Chunked Document","content":"' + 'a'.repeat(1.2 * 1024 * 1024));
+        // Write chunk 2 (1.2 MB) to exceed 2 MB limit without Content-Length
+        setTimeout(() => {
+          try {
+            req.write('b'.repeat(1.2 * 1024 * 1024) + '"}');
+            req.end();
+          } catch {}
+        }, 50);
+      });
+
+      const status = await statusCodePromise;
+      assert.equal(status, 413);
     } finally {
       await stopEmbeddedServer();
     }

@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **In-flight scraper cancellation**:
+  - Added caller `AbortSignal` support to `PageScraper.scrape` combining caller cancellation with timeout signal to abort underlying `fetch`.
+  - Extended cancellation and timeout lifecycle across response body streaming (`res.text()`) so stalled bodies after headers are aborted promptly.
+  - Forwarded caller cancellation `sig` through `BoundedScraperPool`.
+  - Added regression test with local slow server verifying in-flight cancellation and headers-sent stalled-body cancellation.
+- **Skill import path traversal protection**:
+  - Normalized and resolved extracted paths in `SkillManagerService.importSkill`.
+  - Strictly rejected nested traversal (`nested/../../`), absolute paths, and Windows-drive paths escaping `destinationDir`.
+  - Added comprehensive security traversal tests for nested traversal, absolute paths, and Windows-drive paths.
+- **Numeric Markdown link preservation**:
+  - Preserved valid Markdown links with numeric labels (e.g. `[1](url)`, `[12](url)`) in `CitationGroundingContract` and `sanitizeCitationIndices` in Wide Research.
+  - Protected Markdown links from being stripped or deformed when source references count is smaller than link label indices.
+  - Continued robustly stripping ungrounded and malformed unlinked citation brackets.
+  - Added tests covering numeric links, ordinary links, and end-to-end Wide Research link preservation.
+- **Wide-search cancellation**:
+  - Added `AbortSignal` support through `WideResearchAgentDependencies.search`, `discoverUntilBudget`, and `MultiSearchProvider.search`.
+  - Kept signal listener active throughout response body streaming in `searchDuckDuckGo`.
+  - Added regression tests verifying prompt search abort and stalled-body cancellation.
+- **Historical report telemetry isolation**:
+  - Bound displayed telemetry in `MessageBox` to `activeReport` rather than global search state.
+  - Persisted `wideTelemetry` and `wideExpansionHistory` on historical reports, accumulating session telemetry locally and via refs to eliminate stale closure drops.
+  - Added tests selecting multiple historical reports and verifying per-report telemetry isolation and live event history accumulation.
+- **Bounded export request body size**:
+  - Added `MAX_JSON_REQUEST_SIZE` (2 MB) limit to `parseJsonBody` in embedded server.
+  - Paused chunked streams without unbounded draining upon exceeding limits and returned HTTP 413 Payload Too Large.
+  - Added test coverage for valid, oversized Content-Length, and chunked requests without Content-Length.
+
 ### Added
 - **Explicit Wide Research Completion ([#27](https://github.com/mohmaedeslam00116/lens-desktop/issues/27))**:
   - Dedicated `WideResearchAgent` with mandatory plan approval, a 100-source initial retrieval budget, evidence-gap-driven budget expansion capped at 200, hybrid evidence admission, hierarchical synthesis, and citation-grounding verification.

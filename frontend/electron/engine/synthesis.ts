@@ -429,6 +429,13 @@ export class CitationGroundingContract {
       return `${tokenPrefix}${id}${tokenSuffix}`;
     });
 
+    // Valid Markdown links e.g. [1](url), [12](url), [text](url)
+    text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\n]+|[^\s)\n]+(?:\s+["'][^"'\n]*["'])?)\)/g, (match) => {
+      const id = protectedBlocks.length;
+      protectedBlocks.push(match);
+      return `${tokenPrefix}${id}${tokenSuffix}`;
+    });
+
     // 2. Track audit metrics
     const hallucinatedIndices: number[] = [];
     const validIndices: number[] = [];
@@ -538,19 +545,8 @@ export class CitationGroundingContract {
     // Regex supporting comma, semicolon, Arabic comma, dash, AND whitespace delimiters
     const bracketContentPattern = `[\\d\\u0660-\\u0669\\u06F0-\\u06F9]+(?:\\s*(?:[,;،\\u060C\\s]|[-–—−\\u2013\\u2014\\u2212])\\s*[\\d\\u0660-\\u0669\\u06F0-\\u06F9]+)*`;
 
-    // 3. Process linked citation brackets e.g. [1](https://url)
-    const linkedBracketRegex = new RegExp(`\\[\\s*(${bracketContentPattern})\\s*\\]\\(([^)]+)\\)`, 'g');
-    text = text.replace(linkedBracketRegex, (_match, inner, url) => {
-      const numbers = parseInnerNumbers(inner);
-      const kept = processNumberList(numbers);
-      if (kept.length === 0) return '';
-      const uniqueKept = Array.from(new Set(kept));
-      return `[${uniqueKept.join(', ')}](${url})`;
-    });
-
-    // 4. Process standard unlinked citation brackets e.g. [1], [1, 99], [99 100]
-    // Negative lookahead (?!\() ensures markdown links [text](url) are never disturbed
-    const standardBracketRegex = new RegExp(`\\[\\s*(${bracketContentPattern})\\s*\\](?!\\()`, 'g');
+    // 3. Process standard unlinked citation brackets e.g. [1], [1, 99], [99 100]
+    const standardBracketRegex = new RegExp(`\\[\\s*(${bracketContentPattern})\\s*\\]`, 'g');
     text = text.replace(standardBracketRegex, (_match, inner) => {
       const numbers = parseInnerNumbers(inner);
       const kept = processNumberList(numbers);
@@ -559,12 +555,12 @@ export class CitationGroundingContract {
       return `[${uniqueKept.join(', ')}]`;
     });
 
-    // 5. Clean up artifact whitespace and punctuation left behind by stripped brackets
+    // 4. Clean up artifact whitespace and punctuation left behind by stripped brackets
     text = cleanPunctuationAndWhitespace(text);
 
-    // 6. Mandatory Second-Pass Verification Sweep (Guarantees zero hallucinated citations)
+    // 5. Mandatory Second-Pass Verification Sweep (Guarantees zero hallucinated citations)
     let remainingHallucinations = 0;
-    const secondPassRegex = new RegExp(`\\[\\s*(${bracketContentPattern})\\s*\\](?!\\()`, 'g');
+    const secondPassRegex = new RegExp(`\\[\\s*(${bracketContentPattern})\\s*\\]`, 'g');
     let checkMatch: RegExpExecArray | null;
 
     while ((checkMatch = secondPassRegex.exec(text)) !== null) {

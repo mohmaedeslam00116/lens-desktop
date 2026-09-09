@@ -62,7 +62,7 @@ export class BoundedScraperPool {
     this.maxRetries = options.maxRetries ?? 2;
     this.backoffBaseMs = options.backoffBaseMs ?? 100;
     this.maxCharsPerPage = options.maxCharsPerPage ?? 6000;
-    this.fetcher = options.customFetcher ?? ((url, timeout, sig) => PageScraper.scrape(url, timeout));
+    this.fetcher = options.customFetcher ?? ((url, timeout, sig) => PageScraper.scrape(url, timeout, sig));
     this.deduplicator = options.deduplicator ?? new DeduplicationEngine();
   }
 

@@ -64,6 +64,7 @@ export interface WideResearchAgentDependencies {
     provider: 'duckduckgo' | 'tavily' | 'serper',
     apiKeys: Record<string, string>,
     maxResults: number,
+    signal?: AbortSignal,
   ) => Promise<Array<{ url: string; title: string; snippet: string }>>;
   createPool?: () => Pool;
   rankPassages?: (sources: ScrapedPage[], milestones: PlanMilestone[]) => Promise<CandidateChunk[]>;
@@ -84,11 +85,44 @@ function isArabic(value: string | undefined): boolean {
   return value === 'ar';
 }
 
-function sanitizeCitationIndices(text: string, maxCitation: number): string {
-  return text.replace(/\[(\d+)\]/g, (match, value) => {
+export function sanitizeCitationIndices(text: string, maxCitation: number): string {
+  const protectedBlocks: string[] = [];
+  const tokenPrefix = '\x00__LENS_WIDE_PROTECTED_MD_';
+  const tokenSuffix = '__\x00';
+
+  // Protect standard Markdown links e.g. [12](https://example.com) or [text](url)
+  let sanitized = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\n]+|[^\s)\n]+(?:\s+["'][^"'\n]*["'])?)\)/g, (match) => {
+    const id = protectedBlocks.length;
+    protectedBlocks.push(match);
+    return `${tokenPrefix}${id}${tokenSuffix}`;
+  });
+
+  // Protect reference links [text][id]
+  sanitized = sanitized.replace(/\[([^\]\n]+)\]\[([^\]\n]*)\]/g, (match) => {
+    const id = protectedBlocks.length;
+    protectedBlocks.push(match);
+    return `${tokenPrefix}${id}${tokenSuffix}`;
+  });
+
+  // Protect link reference definitions ^[id]: url
+  sanitized = sanitized.replace(/^\[([^\]\n]+)\]:\s*\S+/gm, (match) => {
+    const id = protectedBlocks.length;
+    protectedBlocks.push(match);
+    return `${tokenPrefix}${id}${tokenSuffix}`;
+  });
+
+  // Purge out-of-bounds citations [x] where citation > maxCitation or <= 0
+  sanitized = sanitized.replace(/\[(\d+)\](?!\()/g, (match, value) => {
     const citation = Number(value);
     return Number.isInteger(citation) && citation > 0 && citation <= maxCitation ? match : '';
   });
+
+  // Restore protected Markdown links
+  for (let i = 0; i < protectedBlocks.length; i++) {
+    sanitized = sanitized.replace(`${tokenPrefix}${i}${tokenSuffix}`, () => protectedBlocks[i]);
+  }
+
+  return sanitized;
 }
 
 function lexicalCandidates(
@@ -153,8 +187,8 @@ export class WideResearchAgent {
       await this.activationManager.preActivateSkills(plan.suggestedSkills, this.emitEvent, { language });
     }
 
-    const search = this.dependencies.search || ((query, searchProvider, keys, maxResults) =>
-      MultiSearchProvider.search(query, searchProvider, keys, maxResults));
+    const search = this.dependencies.search || ((query, searchProvider, keys, maxResults, sig) =>
+      MultiSearchProvider.search(query, searchProvider, keys, maxResults, sig));
     const pool = this.dependencies.createPool?.() || new BoundedScraperPool();
     const discovered = new Map<string, { milestoneId: string; title: string }>();
     const pagesByUrl = new Map<string, ScrapedPage>();
@@ -180,8 +214,10 @@ export class WideResearchAgent {
         search,
         provider,
         apiKeys,
+        signal,
         onSearch: () => { searchedMilestones++; },
       });
+      if (signal?.aborted) return undefined;
 
       const urls = Array.from(discovered.keys()).slice(requestedUrlCount, activeBudget);
       if (urls.length === 0) break;
@@ -328,23 +364,31 @@ export class WideResearchAgent {
     search: NonNullable<WideResearchAgentDependencies['search']>;
     provider: 'duckduckgo' | 'tavily' | 'serper';
     apiKeys: Record<string, string>;
+    signal?: AbortSignal;
     onSearch: () => void;
   }): Promise<void> {
     const maxSearches = Math.max(input.milestones.length * 8, 16);
     let searchIndex = 0;
     while (input.discovered.size < input.target && searchIndex < maxSearches) {
+      if (input.signal?.aborted) return;
       const milestone = input.milestones[searchIndex % input.milestones.length];
       const suffix = Math.floor(searchIndex / input.milestones.length);
       const query = suffix === 0 ? milestone.query : `${milestone.query} evidence ${suffix + 1}`;
-      const hits = await input.search(query, input.provider, input.apiKeys, 25);
-      input.onSearch();
-      for (const hit of hits) {
-        if (hit.url && !input.discovered.has(hit.url)) {
-          input.discovered.set(hit.url, { milestoneId: milestone.id, title: hit.title });
+      try {
+        const hits = await input.search(query, input.provider, input.apiKeys, 25, input.signal);
+        if (input.signal?.aborted) return;
+        input.onSearch();
+        for (const hit of hits) {
+          if (hit.url && !input.discovered.has(hit.url)) {
+            input.discovered.set(hit.url, { milestoneId: milestone.id, title: hit.title });
+          }
         }
+        searchIndex++;
+        if (hits.length === 0 && searchIndex >= input.milestones.length) break;
+      } catch (err) {
+        if (input.signal?.aborted) return;
+        throw err;
       }
-      searchIndex++;
-      if (hits.length === 0 && searchIndex >= input.milestones.length) break;
     }
   }
 

@@ -322,6 +322,53 @@ describe('Tracer 9: Agent Skills Management, Non-Destructive Resolver & Launch S
       assert.ok(reSkill.content.toString('utf8').includes('name: exportable-skill'));
     });
 
+    it('rejects nested traversal, absolute paths, and Windows-style paths during import', async () => {
+      const escapeNestedFile = path.join(tempDir, 'escaped-nested.txt');
+      const escapeRootFile = path.resolve('/escaped-root.txt');
+      const escapeWinFile = 'C:\\escaped-win.txt';
+
+      const files = [
+        {
+          path: 'SKILL.md',
+          content: '---\nname: traversal-guard-skill\ndescription: Traversal security test\n---\n# Body'
+        },
+        {
+          path: 'nested/../../escaped-nested.txt',
+          content: 'malicious nested traversal'
+        },
+        {
+          path: '/escaped-root.txt',
+          content: 'malicious absolute posix path'
+        },
+        {
+          path: 'C:/escaped-win.txt',
+          content: 'malicious windows drive path'
+        },
+        {
+          path: 'references/safe.txt',
+          content: 'legitimate safe content'
+        }
+      ];
+
+      const result = await service.importSkill(files, {
+        scope: 'workspace',
+        collisionAction: 'overwrite',
+        workspaceDir: tempDir
+      });
+
+      assert.equal(result.success, true);
+      assert.equal(result.skillName, 'traversal-guard-skill');
+
+      // Verify legitimate file was written inside destinationDir
+      const safePath = path.join(result.destinationDir, 'references', 'safe.txt');
+      assert.ok(fs.existsSync(safePath), 'Legitimate file should be written');
+
+      // Verify traversal targets were rejected and never created
+      assert.equal(fs.existsSync(escapeNestedFile), false, 'Nested traversal file must not exist');
+      assert.equal(fs.existsSync(escapeRootFile), false, 'Absolute path file must not exist');
+      assert.equal(fs.existsSync(escapeWinFile), false, 'Windows-style drive path file must not exist');
+    });
+
     it('dynamically excludes disabled skills from Tier 1 catalog summaries and prevents activation', async () => {
       // 1. Register a skill
       const skillDir = path.join(tempDir, 'active-disable-test');
