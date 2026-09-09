@@ -190,54 +190,92 @@ export class MultiSearchProvider {
    * Tavily Search API
    */
   static async searchTavily(query: string, apiKey: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
-    const res = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query,
-        search_depth: 'advanced',
-        max_results: maxResults,
-        include_answer: false
-      })
-    });
-
-    if (!res.ok) {
-      throw new Error(`Tavily API responded with status ${res.status}`);
+    if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const onCallerAbort = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        signal.addEventListener('abort', onCallerAbort, { once: true });
+      }
     }
 
-    const data = await res.json() as any;
-    return (data.results || []).map((r: any) => ({
-      title: r.title || query,
-      url: r.url,
-      snippet: r.content || ''
-    }));
+    try {
+      const res = await fetch('https://api.tavily.com/search', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: apiKey,
+          query,
+          search_depth: 'advanced',
+          max_results: maxResults,
+          include_answer: false
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error(`Tavily API responded with status ${res.status}`);
+      }
+
+      const data = await res.json() as any;
+      return (data.results || []).map((r: any) => ({
+        title: r.title || query,
+        url: r.url,
+        snippet: r.content || ''
+      }));
+    } finally {
+      clearTimeout(timeoutId);
+      if (signal) {
+        signal.removeEventListener('abort', onCallerAbort);
+      }
+    }
   }
 
   /**
    * Serper Google Search API
    */
   static async searchSerper(query: string, apiKey: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
-    const res = await fetch('https://google.serper.dev/search', {
-      method: 'POST',
-      signal,
-      headers: {
-        'X-API-KEY': apiKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ q: query, num: maxResults })
-    });
-
-    if (!res.ok) {
-      throw new Error(`Serper API responded with status ${res.status}`);
+    if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const onCallerAbort = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        signal.addEventListener('abort', onCallerAbort, { once: true });
+      }
     }
 
-    const data = await res.json() as any;
-    return (data.organic || []).map((r: any) => ({
-      title: r.title || query,
-      url: r.link,
-      snippet: r.snippet || ''
-    }));
+    try {
+      const res = await fetch('https://google.serper.dev/search', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'X-API-KEY': apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ q: query, num: maxResults })
+      });
+
+      if (!res.ok) {
+        throw new Error(`Serper API responded with status ${res.status}`);
+      }
+
+      const data = await res.json() as any;
+      return (data.organic || []).map((r: any) => ({
+        title: r.title || query,
+        url: r.link,
+        snippet: r.snippet || ''
+      }));
+    } finally {
+      clearTimeout(timeoutId);
+      if (signal) {
+        signal.removeEventListener('abort', onCallerAbort);
+      }
+    }
   }
 }

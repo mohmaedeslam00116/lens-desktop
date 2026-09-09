@@ -323,7 +323,7 @@ export class WideResearchAgent {
       title: reference.title || reference.domain || reference.url,
       domain: reference.domain || '',
       snippet: reference.snippet,
-      credibilityScore: 0,
+      credibilityScore: pagesByUrl.get(reference.url)?.credibilityScore ?? 0,
       citationIndex: reference.index,
       isCited: reference.cited,
     }));
@@ -369,6 +369,7 @@ export class WideResearchAgent {
   }): Promise<void> {
     const maxSearches = Math.max(input.milestones.length * 8, 16);
     let searchIndex = 0;
+    let lastError: any = null;
     while (input.discovered.size < input.target && searchIndex < maxSearches) {
       if (input.signal?.aborted) return;
       const milestone = input.milestones[searchIndex % input.milestones.length];
@@ -387,8 +388,12 @@ export class WideResearchAgent {
         if (hits.length === 0 && searchIndex >= input.milestones.length) break;
       } catch (err) {
         if (input.signal?.aborted) return;
-        throw err;
+        lastError = err;
+        searchIndex++;
       }
+    }
+    if (input.discovered.size === 0 && lastError) {
+      throw lastError;
     }
   }
 

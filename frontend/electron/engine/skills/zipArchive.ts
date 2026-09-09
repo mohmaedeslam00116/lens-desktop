@@ -8,6 +8,9 @@
 import * as zlib from 'zlib';
 import * as path from 'path';
 
+export const MAX_ZIP_ENTRY_UNCOMPRESSED_SIZE = 10 * 1024 * 1024; // 10MB per entry
+export const MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE = 50 * 1024 * 1024; // 50MB total archive
+
 // Standard 32-bit CRC-32 calculation table
 const CRC_TABLE = new Uint32Array(256);
 for (let n = 0; n < 256; n++) {
@@ -171,6 +174,7 @@ export function readZipArchive(zipBuffer: Buffer): ZipEntry[] {
 
   const entries: ZipEntry[] = [];
   let currentCdOffset = cdOffset;
+  let cumulativeUncompressedSize = 0;
 
   for (let i = 0; i < totalEntries; i++) {
     if (currentCdOffset + 46 > zipBuffer.length) {
@@ -195,6 +199,8 @@ export function readZipArchive(zipBuffer: Buffer): ZipEntry[] {
     const normalized = path.posix.normalize(relativePath.replace(/\\/g, '/'));
     if (
       normalized.startsWith('/') ||
+      /^[a-zA-Z]:/.test(normalized) ||
+      normalized.startsWith('//') ||
       normalized.startsWith('../') ||
       normalized === '..' ||
       normalized.includes('/../')
@@ -204,6 +210,13 @@ export function readZipArchive(zipBuffer: Buffer): ZipEntry[] {
 
     // Skip directory entries (trailing slash)
     if (!normalized.endsWith('/')) {
+      if (uncompressedSize > MAX_ZIP_ENTRY_UNCOMPRESSED_SIZE) {
+        throw new Error(`SECURITY_ACCESS_DENIED: Zip entry exceeds size limit of ${MAX_ZIP_ENTRY_UNCOMPRESSED_SIZE} bytes: "${relativePath}"`);
+      }
+      if (cumulativeUncompressedSize + uncompressedSize > MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE) {
+        throw new Error(`SECURITY_ACCESS_DENIED: Cumulative uncompressed archive size exceeds limit of ${MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE} bytes`);
+      }
+
       // Read data from local file header
       if (localHeaderOffset + 30 > zipBuffer.length) {
         throw new Error('INVALID_ZIP_ARCHIVE: Corrupt local file header offset');
@@ -222,7 +235,14 @@ export function readZipArchive(zipBuffer: Buffer): ZipEntry[] {
       let content: Buffer;
 
       if (compressionMethod === 8) {
-        content = zlib.inflateRawSync(compressedChunk);
+        try {
+          content = zlib.inflateRawSync(compressedChunk, { maxOutputLength: MAX_ZIP_ENTRY_UNCOMPRESSED_SIZE });
+        } catch (err: any) {
+          if (err?.code === 'ERR_BUFFER_TOO_LARGE' || err?.message?.includes('output length')) {
+            throw new Error(`SECURITY_ACCESS_DENIED: Zip entry decompression exceeded size limit: "${relativePath}"`);
+          }
+          throw new Error(`CORRUPT_PAYLOAD: Failed to decompress zip entry "${relativePath}": ${err.message}`);
+        }
       } else if (compressionMethod === 0) {
         content = Buffer.from(compressedChunk);
       } else {
@@ -231,6 +251,11 @@ export function readZipArchive(zipBuffer: Buffer): ZipEntry[] {
 
       if (content.length !== uncompressedSize) {
         throw new Error(`CORRUPT_PAYLOAD: Uncompressed size mismatch (${content.length} vs expected ${uncompressedSize})`);
+      }
+
+      cumulativeUncompressedSize += content.length;
+      if (cumulativeUncompressedSize > MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE) {
+        throw new Error(`SECURITY_ACCESS_DENIED: Cumulative uncompressed archive size exceeds limit of ${MAX_ZIP_TOTAL_UNCOMPRESSED_SIZE} bytes`);
       }
 
       entries.push({

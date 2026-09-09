@@ -61,7 +61,8 @@ export class HostToolMapper {
       const normalized = String(tool).trim().toLowerCase();
       if (!normalized) continue;
 
-      const canonical = this.CANONICAL_CAPABILITIES[normalized];
+      const hasKey = Object.prototype.hasOwnProperty.call(this.CANONICAL_CAPABILITIES, normalized);
+      const canonical = hasKey ? this.CANONICAL_CAPABILITIES[normalized] : undefined;
       if (canonical) {
         mappedSet.add(canonical);
       } else {
@@ -80,7 +81,10 @@ export class HostToolMapper {
       unmappedTools,
       notices,
       hasCapability: (capability: string) => {
-        const canonical = this.CANONICAL_CAPABILITIES[capability.toLowerCase()] || capability.toLowerCase();
+        const norm = capability.toLowerCase();
+        const canonical = Object.prototype.hasOwnProperty.call(this.CANONICAL_CAPABILITIES, norm)
+          ? this.CANONICAL_CAPABILITIES[norm]
+          : norm;
         return mappedSet.has(canonical);
       }
     };
@@ -90,8 +94,13 @@ export class HostToolMapper {
    * Returns binding details for a native capability if recognized.
    */
   public static getCapabilityBinding(capability: string): NativeCapabilityBinding | undefined {
-    const canonical = this.CANONICAL_CAPABILITIES[capability.toLowerCase()] || capability.toLowerCase();
-    return NATIVE_CAPABILITY_BINDINGS[canonical];
+    const norm = capability.toLowerCase();
+    const canonical = Object.prototype.hasOwnProperty.call(this.CANONICAL_CAPABILITIES, norm)
+      ? this.CANONICAL_CAPABILITIES[norm]
+      : norm;
+    return Object.prototype.hasOwnProperty.call(NATIVE_CAPABILITY_BINDINGS, canonical)
+      ? NATIVE_CAPABILITY_BINDINGS[canonical]
+      : undefined;
   }
 
   /**

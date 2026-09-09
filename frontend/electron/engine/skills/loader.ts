@@ -54,6 +54,9 @@ export async function loadSkillPackage(
   return skillPackage;
 }
 
+export const MAX_SNAPSHOT_ENTRIES = 50;
+export const MAX_SNAPSHOT_ENTRY_BYTES = 512 * 1024; // 512KB per cached snapshot entry
+
 /**
  * Safely loads a secondary resource file (e.g. references, templates)
  * belonging to an installed skill package.
@@ -68,9 +71,23 @@ export async function loadSkillResource(
   }
   const boundary: SkillPathBoundary = pkg.boundary || new SkillPathBoundary(pkg.rootPath);
   const content = await boundary.readResource(relativeResourcePath, 'utf8');
-  if (!pkg.resourceSnapshot) {
-    pkg.resourceSnapshot = new Map();
+
+  // Enforce memory bounds on in-memory resource snapshot
+  const byteLength = Buffer.byteLength(content, 'utf8');
+  if (byteLength <= MAX_SNAPSHOT_ENTRY_BYTES) {
+    if (!pkg.resourceSnapshot) {
+      pkg.resourceSnapshot = new Map();
+    }
+    while (pkg.resourceSnapshot.size >= MAX_SNAPSHOT_ENTRIES) {
+      const firstKey = pkg.resourceSnapshot.keys().next().value;
+      if (firstKey) {
+        pkg.resourceSnapshot.delete(firstKey);
+      } else {
+        break;
+      }
+    }
+    pkg.resourceSnapshot.set(normalizedKey, content);
   }
-  pkg.resourceSnapshot.set(normalizedKey, content);
+
   return content;
 }

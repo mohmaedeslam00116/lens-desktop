@@ -234,7 +234,7 @@ export class SkillActivationManager {
       activatedAt: Date.now()
     };
 
-    this.activeSkills.set(pkg.name, activated);
+    this.activeSkills.set(pkg.name.toLowerCase(), activated);
 
     // Emit live event telemetry with bilingual parity
     if (emitEvent) {

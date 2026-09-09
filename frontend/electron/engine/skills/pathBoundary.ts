@@ -2,6 +2,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SkillError } from './types';
 
+export const MAX_RESOURCE_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
 /**
  * Enforces strict filesystem sandboxing for an individual skill directory.
  * Prevents directory traversal, ZipSlip escapes, null-byte injection,
@@ -121,6 +123,14 @@ export class SkillPathBoundary {
    */
   public async readResource(relativePath: string, encoding: BufferEncoding = 'utf8'): Promise<string> {
     const safePath = this.resolveSafePath(relativePath);
+    const stats = await fs.promises.stat(safePath);
+    if (stats.size > MAX_RESOURCE_FILE_SIZE) {
+      throw new SkillError(
+        'SECURITY_ACCESS_DENIED',
+        `Skill resource exceeds maximum permitted size of ${MAX_RESOURCE_FILE_SIZE} bytes: ${stats.size} bytes`,
+        safePath
+      );
+    }
     return fs.promises.readFile(safePath, { encoding });
   }
 

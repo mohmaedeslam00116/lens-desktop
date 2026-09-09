@@ -125,7 +125,7 @@ export async function regenerateResearchPlan(
   return {
     ...previousPlan,
     version: previousPlan.version + 1,
-    objective: previousPlan.objective + modifierSuffix,
+    objective: previousPlan.objective,
     milestones: refinedMilestones,
     suggestedSkills: updatedSkills,
     estimatedScope: {

@@ -46,30 +46,36 @@ export class DeepResearchAgent {
         thought: `تصفح واستخراج المحتوى الأكاديمي من: ${hit.url}`
       });
 
-      const scraped = await PageScraper.scrape(hit.url, 7000);
-      scrapedSources.push(scraped);
+      try {
+        const scraped = await PageScraper.scrape(hit.url, 7000, signal);
+        scrapedSources.push(scraped);
 
-      this.emitEvent({
-        type: 'source',
-        url: scraped.url,
-        title: scraped.title,
-        domain: scraped.domain,
-        snippet: scraped.content.slice(0, 160),
-        credibility: scraped.credibilityScore
-      });
-
-      this.emitEvent({
-        type: 'graph_node',
-        node: {
-          id: this.nextNodeId('src'),
-          label: scraped.domain,
+        this.emitEvent({
           type: 'source',
-          status: 'completed',
-          details: scraped.url,
-          credibility: scraped.credibilityScore,
-          parentId
-        }
-      });
+          url: scraped.url,
+          title: scraped.title,
+          domain: scraped.domain,
+          snippet: scraped.content.slice(0, 160),
+          credibility: scraped.credibilityScore
+        });
+
+        this.emitEvent({
+          type: 'graph_node',
+          node: {
+            id: this.nextNodeId('src'),
+            label: scraped.domain,
+            type: 'source',
+            status: 'completed',
+            details: scraped.url,
+            credibility: scraped.credibilityScore,
+            parentId
+          }
+        });
+      } catch (err) {
+        if (signal?.aborted) return;
+        console.warn(`[Agent] Failed to scrape ${hit.url}:`, err);
+        continue;
+      }
 
       if (scrapedSources.length >= maxAllowed) {
         break;
@@ -270,7 +276,13 @@ Return ONLY a valid JSON array of strings, for example:
           : `Searching web for "${subq}" via ${searchProvider}...`
       });
 
-      const searchHits = await MultiSearchProvider.search(subq, searchProvider, apiKeys, 6);
+      let searchHits: any[] = [];
+      try {
+        searchHits = await MultiSearchProvider.search(subq, searchProvider, apiKeys, 6, signal);
+      } catch (err) {
+        if (signal?.aborted) return;
+        console.warn(`[Agent] Search failed for subquery "${subq}":`, err);
+      }
       await this.ingestHits(searchHits, discoveredUrls, scrapedSources, 'persp_1', initialSourceCap, signal);
 
       if (scrapedSources.length >= initialSourceCap) {
@@ -347,7 +359,13 @@ Return ONLY a valid JSON array of strings, for example:
             : `Executing adaptive hop query (${hop + 1}/${maxAdaptiveHops}): "${targetQ}"...`
         });
 
-        const hopHits = await MultiSearchProvider.search(targetQ, searchProvider, apiKeys, 3);
+        let hopHits: any[] = [];
+        try {
+          hopHits = await MultiSearchProvider.search(targetQ, searchProvider, apiKeys, 3, signal);
+        } catch (err) {
+          if (signal?.aborted) return;
+          console.warn(`[Agent] Search failed for adaptive query "${targetQ}":`, err);
+        }
         await this.ingestHits(hopHits, discoveredUrls, scrapedSources, `reflect_${hop + 1}`, maxHopSourcesCap, signal);
 
         if (scrapedSources.length >= maxHopSourcesCap) {

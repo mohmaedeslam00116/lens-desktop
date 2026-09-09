@@ -544,13 +544,42 @@ export class CachedEmbeddingWrapper extends BaseEmbedding {
     this.model = innerModel.model || 'default';
   }
 
+  private cachedDimensions?: number;
+
+  public setExpectedDimensions(dim?: number): void {
+    if (typeof dim === 'number' && Number.isInteger(dim) && dim > 0) {
+      this.cachedDimensions = dim;
+    }
+  }
+
+  public getExpectedDimensions(): number | undefined {
+    return this.cachedDimensions;
+  }
+
   async embedText(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (texts.length === 0) return [];
 
-    const { hits, misses } = await this.cache.getBatch(this.provider, this.model, texts);
+    const expectedDimensions = this.cachedDimensions;
+    const { hits, misses } = await this.cache.getBatch(this.provider, this.model, texts, {
+      expectedDimensions
+    });
     if (misses.length > 0) {
       const missingTexts = misses.map(m => m.text);
       const fetched = await this.innerModel.embedText(missingTexts, signal);
+
+      if (
+        !Array.isArray(fetched) ||
+        fetched.length !== missingTexts.length ||
+        fetched.some(v => !Array.isArray(v) || v.length === 0)
+      ) {
+        throw new Error(
+          `Embedding model ${this.provider}/${this.model} failed to return valid vectors for all requested texts.`
+        );
+      }
+
+      if (!this.cachedDimensions && fetched.length > 0 && fetched[0].length > 0) {
+        this.cachedDimensions = fetched[0].length;
+      }
 
       const toStore: { text: string; vector: number[] }[] = [];
       misses.forEach((m, idx) => {
@@ -560,6 +589,8 @@ export class CachedEmbeddingWrapper extends BaseEmbedding {
       });
 
       await this.cache.setBatch(this.provider, this.model, toStore);
+    } else if (!this.cachedDimensions && hits.size > 0) {
+      this.cachedDimensions = hits.values().next().value?.length;
     }
 
     return texts.map((_, i) => hits.get(i)!);
@@ -973,6 +1004,10 @@ export async function rankSourcePassages(
   const qValidation = validateVectors(queryVectors, cleanQueries.length);
   if (!qValidation.valid) {
     throw new Error(`Query embedding validation failed: ${qValidation.error}`);
+  }
+
+  if (effectiveModel instanceof CachedEmbeddingWrapper && qValidation.dimensions > 0) {
+    effectiveModel.setExpectedDimensions(qValidation.dimensions);
   }
 
   // 3. Embed chunk passages using enrichedContent for maximum semantic context

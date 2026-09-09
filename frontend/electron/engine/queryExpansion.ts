@@ -333,8 +333,13 @@ export function expandQueryBilingual(
         existing.source = source;
       }
     } else {
-      termWeightMap.set(term, { weight, source });
-      expandedTerms.push({ term, weight, source });
+      const record = { weight, source };
+      termWeightMap.set(term, record);
+      expandedTerms.push({
+        term,
+        get weight() { return record.weight; },
+        get source() { return record.source; },
+      } as ExpandedTerm);
     }
   };
 

@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Full CodeRabbit Audit Remediation across Embedded Engine and Frontend**:
+  - **Embedded Engine & Network Hardening**:
+    - Guarded WebSocket connection handler and non-GET endpoints against untrusted origins (`isAllowedLocalOrigin`) and reject literal `null` origin.
+    - Automated background session retention and cleanup eviction (`scheduleSessionCleanup`).
+    - Guarded plan approval and execution states against duplicate concurrent invocations in `startAuthorizedExecution`.
+    - Buffered Anthropic streaming tool call fragments (`input_json_delta`) by block index before parsing at `content_block_stop`.
+    - Added recursion depth limits (`MAX_TOOL_RECURSION_DEPTH = 5`) across all LLM providers.
+    - Enforced bounded byte-stream chunked reader in `PageScraper` with 2MB ceiling.
+    - Enforced 10s request timeouts in `searchTavily` and `searchSerper` composed with caller cancellation signals.
+    - Narrowed rate limit detection in `scraperPool` to explicit HTTP 429/503 response markers.
+    - Bounded chunk-window overlap strictly below split distance in `chunkStructuredDocument`.
+    - Enforced vector dimension consistency and dynamic cache validation in `CachedEmbeddingWrapper` and `rankSourcePassages`.
+    - Synchronized term weights and sources between `termWeightMap` and `expandedTerms` in `queryExpansion`.
+    - Converted `EmbeddingCache` file operations to non-blocking asynchronous `fs.promises` with debounced flush.
+    - Enforced Windows drive letter, UNC path checks, cumulative (50MB) and per-entry (10MB) uncompressed size limits in PKZIP archiver.
+    - Enforced resource snapshot bounds (`MAX_SNAPSHOT_ENTRIES = 50`, `MAX_SNAPSHOT_ENTRY_BYTES = 512KB`) in `SkillLoader`.
+  - **React Frontend**:
+    - Fixed stale closure in plan approval listener in `App.tsx` and added missing `'skills'` tab key mapping.
+    - Replaced stateful regex alternation loop with non-global anchor in `EvidenceInspectionDrawer`.
+    - Added iterative batch ingestion loop for directory reading (>100 files) in `SkillsManagerView`.
+    - Added visible focus indicators for radio buttons in `EmptyChatMessageInput`.
+    - Bounded citation index lookups in `ReportRenderer`.
 - **In-flight scraper cancellation**:
   - Added caller `AbortSignal` support to `PageScraper.scrape` combining caller cancellation with timeout signal to abort underlying `fetch`.
   - Extended cancellation and timeout lifecycle across response body streaming (`res.text()`) so stalled bodies after headers are aborted promptly.

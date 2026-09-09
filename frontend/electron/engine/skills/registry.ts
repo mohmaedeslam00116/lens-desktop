@@ -195,8 +195,13 @@ export class SkillRegistry {
             this.skills.set(normalizedName, pkg);
           }
         } catch (err: any) {
-          // If directory simply lacks SKILL.md, skip silently without logging error
-          if (err instanceof SkillError && err.code === 'MISSING_FRONTMATTER') {
+          // If directory simply lacks SKILL.md, skip silently without logging error.
+          // A malformed SKILL.md must still be reported in diagnostics.
+          if (
+            err instanceof SkillError &&
+            err.code === 'MISSING_FRONTMATTER' &&
+            err.path === skillFolder
+          ) {
             continue;
           }
           this.diagnostics.push({

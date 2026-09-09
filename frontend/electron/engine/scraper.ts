@@ -75,7 +75,38 @@ export class PageScraper {
           };
         }
 
-        html = await res.text();
+        const MAX_SCRAPE_BYTES = 2 * 1024 * 1024; // 2 MB safe maximum scrape size
+        const contentLengthStr = res.headers.get('content-length');
+        if (contentLengthStr && parseInt(contentLengthStr, 10) > MAX_SCRAPE_BYTES) {
+          throw new Error(`Content length exceeds maximum limit of ${MAX_SCRAPE_BYTES} bytes`);
+        }
+
+        if (res.body && typeof (res.body as any).getReader === 'function') {
+          const reader = (res.body as any).getReader();
+          const chunks: Uint8Array[] = [];
+          let totalBytes = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              totalBytes += value.byteLength;
+              if (totalBytes > MAX_SCRAPE_BYTES) {
+                try { await reader.cancel(); } catch {}
+                throw new Error(`Stream exceeded maximum size limit of ${MAX_SCRAPE_BYTES} bytes`);
+              }
+              chunks.push(value);
+            }
+          }
+          const merged = new Uint8Array(totalBytes);
+          let offset = 0;
+          for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.byteLength;
+          }
+          html = new TextDecoder('utf-8').decode(merged);
+        } else {
+          html = await res.text();
+        }
       } finally {
         clearTimeout(timer);
         if (signal) {

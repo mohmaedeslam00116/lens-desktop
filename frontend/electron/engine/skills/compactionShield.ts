@@ -109,7 +109,7 @@ export class CompactionShield {
     const missingBlocks: string[] = [];
     for (const [placeholder, rawBlock] of placeholders.entries()) {
       if (compactedResult.includes(placeholder)) {
-        compactedResult = compactedResult.replace(placeholder, rawBlock);
+        compactedResult = compactedResult.replace(placeholder, () => rawBlock);
       } else {
         // Placeholder was discarded by summarizer; retain for appending
         missingBlocks.push(rawBlock);

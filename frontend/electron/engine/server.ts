@@ -24,6 +24,7 @@ interface ActiveSession {
   sockets: Set<WebSocket>;
   researchSession: ResearchSession;
   isCompleted: boolean;
+  executionStarted?: boolean;
 }
 
 export function normalizeResearchRequest(body: WideResearchRequest): WideResearchRequest {
@@ -62,8 +63,48 @@ export interface EmbeddedServerOptions {
   reportExportService?: ReportExportService;
 }
 
-function setCorsHeaders(res: http.ServerResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+export const DEFAULT_SESSION_RETENTION_MS = 30 * 60 * 1000; // 30 minutes retention
+const sessionCleanupTimers = new Map<string, NodeJS.Timeout>();
+
+export function scheduleSessionCleanup(sessionId: string, delayMs = DEFAULT_SESSION_RETENTION_MS) {
+  if (sessionCleanupTimers.has(sessionId)) {
+    clearTimeout(sessionCleanupTimers.get(sessionId)!);
+  }
+  const timer = setTimeout(() => {
+    sessionCleanupTimers.delete(sessionId);
+    sessions.delete(sessionId);
+    sessionManager.removeSession(sessionId);
+  }, delayMs);
+  if (timer.unref) {
+    timer.unref();
+  }
+  sessionCleanupTimers.set(sessionId, timer);
+}
+
+export function isAllowedLocalOrigin(origin?: string): boolean {
+  if (!origin) return true;
+  if (origin === 'null') return false;
+  try {
+    const url = new URL(origin);
+    return (
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.protocol === 'file:' ||
+      url.protocol === 'vscode-webview:'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function setCorsHeaders(res: http.ServerResponse, origin?: string) {
+  if (origin && isAllowedLocalOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (!origin) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', 'null');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-KEY');
 }
@@ -145,6 +186,9 @@ function extractArchivePayload(body: any): Buffer | Array<{ path: string; conten
 }
 
 function startAuthorizedExecution(session: ActiveSession, approvedPlan?: ResearchPlan) {
+  if (session.executionStarted) {
+    return;
+  }
   if (session.researchSession.state === 'awaiting_approval' || session.researchSession.state === 'planning') {
     session.researchSession.approvePlan(approvedPlan);
   }
@@ -154,6 +198,8 @@ function startAuthorizedExecution(session: ActiveSession, approvedPlan?: Researc
     console.warn(`[Server] Session ${session.id} plan is not authorized. Aborting retrieval execution.`);
     return;
   }
+
+  session.executionStarted = true;
 
   // Bind approved plan to the request to freeze retrieval trajectory
   if (approvedPlan) {
@@ -202,9 +248,15 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
     reportExportService = options.reportExportService || null;
 
     httpServer = http.createServer(async (req, res) => {
-      setCorsHeaders(res);
+      const origin = req.headers.origin;
+      setCorsHeaders(res, origin);
 
       if (req.method === 'OPTIONS') {
+        if (origin && !isAllowedLocalOrigin(origin)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden: Untrusted cross-origin request rejected' }));
+          return;
+        }
         res.writeHead(204);
         res.end();
         return;
@@ -212,6 +264,13 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
 
       const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
       const pathname = parsedUrl.pathname;
+
+      const isNonGet = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
+      if (isNonGet && origin && !isAllowedLocalOrigin(origin)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Forbidden: Untrusted cross-origin request rejected' }));
+        return;
+      }
 
       try {
         // Health check
@@ -405,6 +464,7 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
             }
             if (event.type === 'finished' || event.type === 'error' || event.type === 'cancelled') {
               session.isCompleted = true;
+              scheduleSessionCleanup(sessionId);
             }
           });
 
@@ -619,6 +679,12 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
     wss = new WebSocketServer({ server: httpServer });
 
     wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+      const origin = req.headers.origin;
+      if (origin && !isAllowedLocalOrigin(origin)) {
+        ws.close(1008, 'Untrusted origin');
+        return;
+      }
+
       const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
       const match = parsedUrl.pathname.match(/\/ws\/research\/([a-zA-Z0-9-]+)/);
       const sessionId = match ? match[1] : null;
