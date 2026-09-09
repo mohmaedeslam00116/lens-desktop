@@ -97,6 +97,7 @@ export function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const wideExpansionHistoryRef = useRef<WideResearchTelemetry[]>([]);
   const wideTelemetryRef = useRef<WideResearchTelemetry | null>(null);
+  const approvedPlanRef = useRef<ResearchPlan | null>(null);
 
   // Direction sync
   useEffect(() => {
@@ -275,6 +276,7 @@ export function App() {
 
           if (payload.type === 'plan_proposed' || payload.type === 'plan_created') {
             if (payload.plan) {
+              approvedPlanRef.current = payload.plan;
               setProposedPlan(payload.plan);
               setIsPlanModalOpen(true);
               setIsRegeneratingPlan(false);
@@ -348,7 +350,7 @@ export function App() {
               sources: formattedSources.length > 0 ? formattedSources : accumulatedSources,
               depth,
               perspective,
-              plan: payload.plan || proposedPlan || undefined,
+              plan: payload.plan || approvedPlanRef.current || proposedPlan || undefined,
               graphNodes,
               reflections: payload.reflections || reflections,
               createdAt: new Date().toISOString(),
@@ -416,6 +418,7 @@ export function App() {
   };
 
   const handleApprovePlan = async (approvedPlan: ResearchPlan) => {
+    approvedPlanRef.current = approvedPlan;
     setIsPlanModalOpen(false);
     setCurrentStatus(language === 'ar' ? 'تم اعتماد الخطة. جاري استرجاع المصادر...' : 'Plan authorized. Beginning wide retrieval...');
     await sendPlanAction('plan_approved', { plan: approvedPlan }, '/api/research/plan/approve');
@@ -516,6 +519,7 @@ export function App() {
           discover: language === 'ar' ? 'استكشف' : 'Discover',
           history: language === 'ar' ? 'المكتبة' : 'Library',
           graph: language === 'ar' ? 'خريطة المعرفة' : 'Knowledge graph',
+          skills: language === 'ar' ? 'المهارات' : 'Skills',
         })[activeTab]}</strong></div>
         <button className="command-trigger" onClick={() => setIsCommandPaletteOpen(true)} aria-label={language === 'ar' ? 'البحث في الأوامر' : 'Search commands'}><Search size={15} /><span>{language === 'ar' ? 'الأوامر' : 'Commands'}</span><kbd dir="ltr">Ctrl K</kbd></button>
       </header>

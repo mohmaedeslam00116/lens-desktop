@@ -34,8 +34,19 @@ async function readEntryTree(entry: any, currentPath = ''): Promise<Array<{ path
     });
   } else if (entry.isDirectory) {
     const reader = entry.createReader();
-    const subEntries: any[] = await new Promise((resolve) => {
-      reader.readEntries((ents: any[]) => resolve(ents || []));
+    const subEntries: any[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const readBatch = () => {
+        reader.readEntries((ents: any[]) => {
+          if (!ents || ents.length === 0) {
+            resolve();
+          } else {
+            subEntries.push(...ents);
+            readBatch();
+          }
+        }, (err: any) => reject(err));
+      };
+      readBatch();
     });
     const accumulated: Array<{ path: string; content: string }> = [];
     for (const sub of subEntries) {

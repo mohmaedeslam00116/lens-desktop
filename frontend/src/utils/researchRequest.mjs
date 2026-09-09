@@ -1,3 +1,5 @@
+export const DEFAULT_WIDE_MAX_SOURCES = 200;
+
 export function buildResearchStartPayload(input) {
   const { query, mode, depth, perspective, language, ...configuration } = input;
   const request = {
@@ -10,7 +12,7 @@ export function buildResearchStartPayload(input) {
   };
 
   if (mode === 'wide') {
-    request.maxSources = 200;
+    request.maxSources = request.maxSources ?? DEFAULT_WIDE_MAX_SOURCES;
   }
 
   return request;

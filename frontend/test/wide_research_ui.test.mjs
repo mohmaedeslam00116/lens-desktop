@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { buildResearchStartPayload } from '../src/utils/researchRequest.mjs';
+import { buildResearchStartPayload, DEFAULT_WIDE_MAX_SOURCES } from '../src/utils/researchRequest.mjs';
 import { resolveReportTelemetry } from '../src/utils/reportTelemetry.mjs';
 
 describe('Wide Research UI contract', () => {
@@ -15,8 +15,18 @@ describe('Wide Research UI contract', () => {
       language: 'en',
     });
     assert.equal(wide.mode, 'wide');
-    assert.equal(wide.maxSources, 200);
+    assert.equal(wide.maxSources, DEFAULT_WIDE_MAX_SOURCES);
     assert.equal(wide.report_type, 'deep');
+
+    const customWide = buildResearchStartPayload({
+      query: 'Custom limit wide request',
+      mode: 'wide',
+      maxSources: 150,
+      depth: 'deep',
+      perspective: 'balanced',
+      language: 'en',
+    });
+    assert.equal(customWide.maxSources, 150);
 
     const standard = buildResearchStartPayload({
       query: 'Test standard request',

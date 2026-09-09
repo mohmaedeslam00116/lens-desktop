@@ -85,13 +85,15 @@ export const ReportRenderer: React.FC<ReportRendererProps> = ({
             const start = parseInt(rangeMatch[1], 10);
             const end = parseInt(rangeMatch[2], 10);
             if (start <= end && end - start <= 100) {
+              const maxValid = sources.length > 0 ? sources.length : Infinity;
               for (let k = start; k <= end; k++) {
-                if (k > 0) numbers.push(k);
+                if (k > 0 && k <= maxValid) numbers.push(k);
               }
             }
           } else {
             const num = parseInt(s, 10);
-            if (!isNaN(num) && num > 0) {
+            const maxValid = sources.length > 0 ? sources.length : Infinity;
+            if (!isNaN(num) && num > 0 && num <= maxValid) {
               numbers.push(num);
             }
           }
