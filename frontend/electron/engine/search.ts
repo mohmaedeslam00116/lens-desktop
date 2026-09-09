@@ -50,10 +50,14 @@ export class MultiSearchProvider {
     endpoint = 'https://html.duckduckgo.com/html/'
   ): Promise<SearchResultItem[]> {
     if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
+    let timedOut = false;
     try {
       const url = `${endpoint.includes('?') ? endpoint + '&' : endpoint + '?'}q=${encodeURIComponent(query)}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 9000);
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, 9000);
 
       const onCallerAbort = () => controller.abort();
       if (signal) {
@@ -121,7 +125,8 @@ export class MultiSearchProvider {
       // Secondary fallback: DuckDuckGo Instant Answer API
       return await this.searchDuckDuckGoInstantApi(query, maxResults, signal);
     } catch (err: any) {
-      if (signal?.aborted || err?.name === 'AbortError' || err?.message?.includes('aborted')) throw err;
+      if (signal?.aborted) throw err;
+      if (!timedOut && (err?.name === 'AbortError' || err?.message?.includes('aborted'))) throw err;
       console.warn('[MultiSearch] DuckDuckGo HTML scraping error:', err);
       return await this.searchDuckDuckGoInstantApi(query, maxResults, signal);
     }

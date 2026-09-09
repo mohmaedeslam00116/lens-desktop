@@ -72,7 +72,7 @@ export const MAX_JSON_REQUEST_SIZE = 2 * 1024 * 1024; // 2 MB safe maximum reque
 
 function parseJsonBody<T>(req: http.IncomingMessage, maxBytes = MAX_JSON_REQUEST_SIZE): Promise<T> {
   return new Promise((resolve, reject) => {
-    let data = '';
+    const chunks: Buffer[] = [];
     let size = 0;
     let aborted = false;
 
@@ -98,13 +98,14 @@ function parseJsonBody<T>(req: http.IncomingMessage, maxBytes = MAX_JSON_REQUEST
         reject(err);
         return;
       }
-      data += chunk;
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
 
     req.on('end', () => {
       if (aborted) return;
       try {
-        resolve(data ? JSON.parse(data) : {} as T);
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve(raw ? JSON.parse(raw) : {} as T);
       } catch (err) {
         const parseErr: any = new Error('Invalid JSON payload');
         parseErr.statusCode = 400;
