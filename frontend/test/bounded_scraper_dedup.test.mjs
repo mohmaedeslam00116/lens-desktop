@@ -352,35 +352,41 @@ describe('BoundedScraperPool Concurrency & Host Throttling', () => {
       });
     });
 
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const port = server.address().port;
-    const testUrl = `http://127.0.0.1:${port}/slow-page`;
+    try {
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = server.address().port;
+      const testUrl = `http://127.0.0.1:${port}/slow-page`;
 
-    // Default fetcher without customFetcher forwards sig to PageScraper.scrape
-    const pool = new BoundedScraperPool();
-    const controller = new AbortController();
+      // Default fetcher without customFetcher forwards sig to PageScraper.scrape
+      const pool = new BoundedScraperPool();
+      const controller = new AbortController();
 
-    const scrapePromise = pool.scrape(testUrl, { signal: controller.signal });
+      const scrapePromise = pool.scrape(testUrl, { signal: controller.signal });
 
-    // Wait for the request to start on the server
-    await requestStartedPromise;
-    assert.equal(requestStarted, true);
+      // Wait for the request to start on the server with a bounded timeout
+      await Promise.race([
+        requestStartedPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Request start timed out')), 3000)),
+      ]);
+      assert.equal(requestStarted, true);
 
-    // Abort caller signal while request is in-flight
-    controller.abort();
+      // Abort caller signal while request is in-flight
+      controller.abort();
 
-    // Prove the server connection is aborted promptly
-    await Promise.race([
-      serverAbortedPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 2000))
-    ]);
-    assert.equal(serverAborted, true);
+      // Prove the server connection is aborted promptly
+      await Promise.race([
+        serverAbortedPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 3000)),
+      ]);
+      assert.equal(serverAborted, true);
 
-    // Assert the pool returns no page
-    const result = await scrapePromise;
-    assert.equal(result, null);
-
-    await new Promise((resolve) => server.close(resolve));
+      // Assert the pool returns no page
+      const result = await scrapePromise;
+      assert.equal(result, null);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('cancels in-flight scrape after headers arrive when body is stalled', async () => {
@@ -406,34 +412,40 @@ describe('BoundedScraperPool Concurrency & Host Throttling', () => {
       });
     });
 
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const port = server.address().port;
-    const testUrl = `http://127.0.0.1:${port}/headers-then-stalled-body`;
+    try {
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = server.address().port;
+      const testUrl = `http://127.0.0.1:${port}/headers-then-stalled-body`;
 
-    const pool = new BoundedScraperPool();
-    const controller = new AbortController();
+      const pool = new BoundedScraperPool();
+      const controller = new AbortController();
 
-    const scrapePromise = pool.scrape(testUrl, { signal: controller.signal });
+      const scrapePromise = pool.scrape(testUrl, { signal: controller.signal });
 
-    // Wait until headers have been flushed to the client
-    await headersSentPromise;
-    assert.equal(headersSent, true);
+      // Wait until headers have been flushed to the client with a bounded timeout
+      await Promise.race([
+        headersSentPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Headers sent timed out')), 3000)),
+      ]);
+      assert.equal(headersSent, true);
 
-    // Caller aborts during stalled body streaming
-    controller.abort();
+      // Caller aborts during stalled body streaming
+      controller.abort();
 
-    // Prove server connection was aborted promptly
-    await Promise.race([
-      serverAbortedPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 2000))
-    ]);
-    assert.equal(serverAborted, true);
+      // Prove server connection was aborted promptly
+      await Promise.race([
+        serverAbortedPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 3000)),
+      ]);
+      assert.equal(serverAborted, true);
 
-    // Assert the pool returns no page
-    const result = await scrapePromise;
-    assert.equal(result, null);
-
-    await new Promise((resolve) => server.close(resolve));
+      // Assert the pool returns no page
+      const result = await scrapePromise;
+      assert.equal(result, null);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 

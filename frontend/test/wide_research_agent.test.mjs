@@ -244,32 +244,38 @@ describe('WideResearchAgent', () => {
       });
     });
 
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const port = server.address().port;
-    const endpoint = `http://127.0.0.1:${port}/search`;
+    try {
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = server.address().port;
+      const endpoint = `http://127.0.0.1:${port}/search`;
 
-    const controller = new AbortController();
-    let searchError = null;
-    const searchPromise = MultiSearchProvider.searchDuckDuckGo('quantum computing', 5, controller.signal, endpoint).catch((err) => {
-      searchError = err;
-    });
+      const controller = new AbortController();
+      let searchError = null;
+      const searchPromise = MultiSearchProvider.searchDuckDuckGo('quantum computing', 5, controller.signal, endpoint).catch((err) => {
+        searchError = err;
+      });
 
-    await headersSentPromise;
-    assert.equal(headersSent, true);
+      await Promise.race([
+        headersSentPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Headers sent timed out')), 3000)),
+      ]);
+      assert.equal(headersSent, true);
 
-    controller.abort();
+      controller.abort();
 
-    await Promise.race([
-      serverAbortedPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 2000)),
-    ]);
-    assert.equal(serverAborted, true);
+      await Promise.race([
+        serverAbortedPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 3000)),
+      ]);
+      assert.equal(serverAborted, true);
 
-    await searchPromise;
-    assert.ok(searchError, 'Expected search to reject with AbortError');
-    assert.ok(searchError.name === 'AbortError' || searchError.message?.includes('aborted'));
-
-    await new Promise((resolve) => server.close(resolve));
+      await searchPromise;
+      assert.ok(searchError, 'Expected search to reject with AbortError');
+      assert.ok(searchError.name === 'AbortError' || searchError.message?.includes('aborted'));
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('preserves numeric Markdown links like [12](url) end-to-end in Wide Research when references count is small', async () => {

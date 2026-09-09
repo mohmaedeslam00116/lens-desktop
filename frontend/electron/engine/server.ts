@@ -119,6 +119,20 @@ function parseJsonBody<T>(req: http.IncomingMessage, maxBytes = MAX_JSON_REQUEST
   });
 }
 
+function sendPayloadTooLargeResponse(req: http.IncomingMessage, res: http.ServerResponse, message = 'Payload Too Large'): void {
+  res.writeHead(413, {
+    'Content-Type': 'application/json',
+    'Connection': 'close',
+  });
+  res.flushHeaders?.();
+  res.end(JSON.stringify({ error: message }));
+  res.on('finish', () => {
+    setImmediate(() => {
+      if (!req.destroyed) req.destroy();
+    });
+  });
+}
+
 function extractArchivePayload(body: any): Buffer | Array<{ path: string; content: string }> | null {
   if (body?.zipBase64) {
     return Buffer.from(body.zipBase64, 'base64');
@@ -531,21 +545,12 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           try {
             payload = validateReportExportPayload(await parseJsonBody<unknown>(req));
           } catch (err: any) {
-            const statusCode = err.statusCode === 413 ? 413 : 400;
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (statusCode === 413) {
-              headers['Connection'] = 'close';
+            if (err.statusCode === 413) {
+              sendPayloadTooLargeResponse(req, res, err.message || 'Payload Too Large');
+              return;
             }
-            res.writeHead(statusCode, headers);
-            res.flushHeaders?.();
+            res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message || 'Invalid export payload' }));
-            if (statusCode === 413) {
-              res.on('finish', () => {
-                setImmediate(() => {
-                  if (!req.destroyed) req.destroy();
-                });
-              });
-            }
             return;
           }
 
@@ -599,21 +604,13 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Endpoint not found' }));
       } catch (err: any) {
+        if (err.statusCode === 413) {
+          sendPayloadTooLargeResponse(req, res, err.message || 'Payload Too Large');
+          return;
+        }
         const statusCode = err.statusCode || 500;
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (statusCode === 413) {
-          headers['Connection'] = 'close';
-        }
-        res.writeHead(statusCode, headers);
-        res.flushHeaders?.();
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message || 'Internal server error' }));
-        if (statusCode === 413) {
-          res.on('finish', () => {
-            setImmediate(() => {
-              if (!req.destroyed) req.destroy();
-            });
-          });
-        }
       }
     });
 
