@@ -14,21 +14,14 @@ Use this helper when a skill needs thread-aware CodeRabbit PR feedback, not flat
 Get the PR number for the current branch:
 
 ```bash
-prs=$(gh pr list --head "$(git branch --show-current)" --state open --json number,title,baseRefName)
-pr_count=$(jq length <<<"$prs")
+pr_number=$(gh pr list --head "$(git branch --show-current)" --state open --json number --jq '.[0].number')
 
-if [ "$pr_count" -eq 0 ]; then
-  # no open PR for this branch -> ask to create PR
-  pr_number=""
-elif [ "$pr_count" -gt 1 ]; then
-  echo "⚠️ Multiple open PRs match the current branch. Please specify target PR number or abort." >&2
-  exit 1
-else
-  pr_number=$(jq -r '.[0].number' <<<"$prs")
+if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
+  # no open PR for this branch
 fi
 ```
 
-If no PR exists (`pr_count` is 0) and the user wants one created, derive title/body from the latest commit:
+If no PR exists and the user wants one created, derive title/body from the latest commit:
 
 ```bash
 title=$(git log -1 --pretty=format:'%s')
@@ -86,20 +79,11 @@ while :; do
     }
   }')
 
-  if [ -z "$response" ] || jq -e '.errors // empty' <<<"$response" >/dev/null 2>&1; then
-    echo "⚠️ GraphQL request failed or returned errors: $(jq -c '.errors // "empty response"' <<<"$response")" >&2
-    exit 1
-  fi
+  all_threads=$(jq -c --argjson response "$response" '
+    . + $response.data.repository.pullRequest.reviewThreads.nodes
+  ' <<<"$all_threads")
 
-  new_nodes=$(jq -e '.data.repository.pullRequest.reviewThreads.nodes // empty' <<<"$response" 2>/dev/null)
-  if [ -z "$new_nodes" ]; then
-    echo "⚠️ Failed to parse reviewThreads from GraphQL response" >&2
-    exit 1
-  fi
-
-  all_threads=$(jq -c --argjson nodes "$new_nodes" '. + $nodes' <<<"$all_threads")
-
-  has_next=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' <<<"$response")
+  has_next=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$response")
   cursor=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"$response")
   [ "$has_next" = "true" ] || break
 done
@@ -113,35 +97,26 @@ Treat only these threads as actionable:
 
 Keep each selected thread as one issue unit. Do not collapse top-level PR comments or review summaries into issue records.
 
-To detect if CodeRabbit review is currently in progress, check the latest CodeRabbit comment/review and active checks:
+To detect CodeRabbit's "Come back again in a few minutes" status message, use top-level PR comments/reviews separately:
 
 ```bash
-# Check if the latest CodeRabbit comment or review is an in-progress placeholder
-in_progress=$(gh pr view "$pr_number" --json comments,reviews --jq '
+gh pr view "$pr_number" --json comments,reviews --jq '
   [
-    (.comments[]? | select(.author.login == "coderabbitai" or .author.login == "coderabbit[bot]" or .author.login == "coderabbitai[bot]")),
-    (.reviews[]? | select(.author.login == "coderabbitai" or .author.login == "coderabbit[bot]" or .author.login == "coderabbitai[bot]"))
+    (.comments[]?
+      | select(.author.login == "coderabbitai" or .author.login == "coderabbit[bot]" or .author.login == "coderabbitai[bot]")
+      | .body // empty),
+    (.reviews[]?
+      | select(.author.login == "coderabbitai" or .author.login == "coderabbit[bot]" or .author.login == "coderabbitai[bot]")
+      | .body // empty)
   ]
-  | sort_by(.createdAt)
-  | last
-  | (.body // "")
-  | test("Come back again in a few minutes")
-')
-
-# Also check if CodeRabbit check suite is actively pending on the head commit
-check_pending=$(gh pr checks "$pr_number" 2>/dev/null | grep -i "coderabbit" | grep -i "pending" || true)
-
-if [ "$in_progress" = "true" ] || [ -n "$check_pending" ]; then
-  echo "⏳ Review in progress, try again in a few minutes"
-  exit 0
-fi
+  | map(select(test("Come back again in a few minutes")))
+  | length
+'
 ```
 
 ## 4. Post Summary Comment
 
 Use the same `pr_number` from Section 1:
-
-**If at least one fix was applied AND successfully pushed to remote:**
 
 ```bash
 gh pr comment "$pr_number" --body "$(cat <<'EOF'
@@ -156,20 +131,6 @@ Fixed <file-count> file(s) based on <issue-count> CodeRabbit feedback item(s).
 **Commit:** `<commit-sha>`
 
 The latest autofix changes are on the `<branch-name>` branch.
-
-EOF
-)"
-```
-
-**If fixes were applied locally but NOT pushed to remote:**
-Do not claim the changes are on the remote branch. Either notify the user locally or post an informational note indicating that manual push is required:
-
-```bash
-gh pr comment "$pr_number" --body "$(cat <<'EOF'
-## CodeRabbit Autofix (Local Changes Pending Push)
-
-Applied fixes locally for <issue-count> CodeRabbit feedback item(s) in commit `<commit-sha>`.
-Changes have not yet been pushed to the remote branch.
 
 EOF
 )"

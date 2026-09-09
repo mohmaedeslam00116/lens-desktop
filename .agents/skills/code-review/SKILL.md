@@ -37,7 +37,7 @@ coderabbit auth status 2>&1
 
 If the CLI is already installed, confirm it is an expected version from an official source before proceeding.
 
-> **Note:** The `--agent` flag requires CodeRabbit CLI v0.3.11 or later. If the installed version is older, ask the user to upgrade.
+> **Note:** The `--agent` flag requires CodeRabbit CLI v0.4.0 or later. If the installed version is older, ask the user to upgrade.
 
 **If CLI not installed**, tell user:
 
@@ -112,7 +112,7 @@ When user requests implementation + review:
 3. Create task list from findings
 4. Fix critical and warning issues systematically
 5. Re-run review to verify fixes
-6. Repeat until clean or only info-level issues remain, enforcing a finite maximum pass count (e.g. up to 3 passes). If findings remain when the limit is reached, stop reviewing and return the unresolved findings instead of continuing unbounded passes.
+6. Repeat until clean or only info-level issues remain
 
 ### 5. Review Specific Changes
 

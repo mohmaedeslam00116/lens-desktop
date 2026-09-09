@@ -14,6 +14,8 @@ reviews:
     base_branches:
       - "main"
   path_filters:
+    - "!.agents/**"
+    - "!skills-lock.json"
     - "!dist/**"
     - "!dist-electron/**"
     - "!dist-installer/**"

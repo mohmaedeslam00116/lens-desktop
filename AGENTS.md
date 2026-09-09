@@ -43,6 +43,11 @@ Single-context repository layout (`CONTEXT.md` at root). See `docs/agents/domain
 - Strictly adhere to `BRAND.md` and `DESIGN.md`: monochrome neutral palette (#111111 / #191919), Inter and Cairo typography, concentric lens mark, no decorative gradients or unsupported "Pro" badge.
 - Before committing UI changes, verify via `impeccable detect`.
 
+### External Agent Skills & Tooling Integrity
+- **Vendor Tooling Separation**: Files in `.agents/skills/` and agent configuration directories represent external vendor tools and agent skills, NOT project source code.
+- **No Manual Modification of External Skills**: Do not manually modify, refactor, or rewrite installed external skills unless explicitly requested by the user.
+- **Reviewer Scope Exclusion**: Automated review tools and linters (such as CodeRabbit) must exclude `.agents/**` and `skills-lock.json` from their review paths, ensuring review attention remains focused strictly on application and engine code.
+
 ### Continuous Documentation Updates
 - **Lockstep Synchronization**: Documentation (`docs/`, `CONTEXT.md`, `README.md`, `PRODUCT.md`, `BRAND.md`, `DESIGN.md`) must be kept in continuous lockstep with codebase evolution.
 - **No Orphaned Changes**: Whenever a new feature, architecture seam, or domain concept is introduced or modified, the corresponding documentation must be updated in the same PR. Stale documentation is considered a test failure.
