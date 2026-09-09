@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 
-import { WideResearchAgent } from '../dist-electron/engine/wideAgent.js';
+import { WideResearchAgent, sanitizeCitationIndices } from '../dist-electron/engine/wideAgent.js';
+import { MultiSearchProvider } from '../dist-electron/engine/search.js';
 
 const approvedPlan = {
   id: 'wide-plan-1',
@@ -218,5 +220,110 @@ describe('WideResearchAgent', () => {
     assert.equal(result, undefined);
     assert.equal(searchAborted, true);
     assert.equal(events.some(event => event.type === 'finished'), false);
+  });
+
+  it('cancels searchDuckDuckGo promptly when response body stalls after headers', async () => {
+    let headersSent = false;
+    let serverAborted = false;
+    let onHeadersSent;
+    const headersSentPromise = new Promise((resolve) => { onHeadersSent = resolve; });
+    let onServerAbort;
+    const serverAbortedPromise = new Promise((resolve) => { onServerAbort = resolve; });
+
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.write('<!DOCTYPE html><html><body><div class="result">');
+      headersSent = true;
+      onHeadersSent();
+
+      req.on('close', () => {
+        if (!res.writableEnded) {
+          serverAborted = true;
+          onServerAbort();
+        }
+      });
+    });
+
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const endpoint = `http://127.0.0.1:${port}/search`;
+
+    const controller = new AbortController();
+    let searchError = null;
+    const searchPromise = MultiSearchProvider.searchDuckDuckGo('quantum computing', 5, controller.signal, endpoint).catch((err) => {
+      searchError = err;
+    });
+
+    await headersSentPromise;
+    assert.equal(headersSent, true);
+
+    controller.abort();
+
+    await Promise.race([
+      serverAbortedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 2000)),
+    ]);
+    assert.equal(serverAborted, true);
+
+    await searchPromise;
+    assert.ok(searchError, 'Expected search to reject with AbortError');
+    assert.ok(searchError.name === 'AbortError' || searchError.message?.includes('aborted'));
+
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it('preserves numeric Markdown links like [12](url) end-to-end in Wide Research when references count is small', async () => {
+    const events = [];
+    const dependencies = {
+      search: async () => [
+        { title: 'Doc 1', url: 'https://doc1.example/page', snippet: 'Evidence 1' },
+      ],
+      createPool: () => ({
+        scrapeAll: async () => [
+          {
+            url: 'https://doc1.example/page',
+            title: 'Doc 1',
+            domain: 'doc1.example',
+            content: 'Content about architecture and benchmarks. '.repeat(10),
+            credibilityScore: 90,
+          },
+        ],
+        getDeduplicationStats: () => ({
+          totalSeen: 1,
+          canonicalUnique: 1,
+          exactDuplicates: 0,
+          nearDuplicates: 0,
+        }),
+      }),
+      synthesize: async () => ({
+        report: 'According to [12](https://example.com/source), the architecture scales. Valid citation: [1]. Out of bounds: [99]. Normal link: [Docs](https://lens.dev).',
+        references: [
+          { index: 1, url: 'https://doc1.example/page', title: 'Doc 1', domain: 'doc1.example' },
+        ],
+        groundingVerification: {
+          hallucinatedIndices: [],
+          validIndices: [1],
+          citedIndices: [1],
+          deterministicVerification: true,
+          zeroHallucinationGuaranteed: true,
+        },
+      }),
+    };
+
+    const agent = new WideResearchAgent('wide-md-links', event => events.push(event), dependencies);
+    const result = await agent.run({
+      query: 'Architecture benchmark',
+      mode: 'wide',
+      language: 'en',
+      plan: approvedPlan,
+    });
+
+    assert.ok(result);
+    // [12](https://example.com/source) must be preserved intact (not turned into (https://example.com/source))
+    assert.ok(result.report.includes('[12](https://example.com/source)'), `Expected [12](https://example.com/source) in report, got: ${result.report}`);
+    assert.ok(result.report.includes('[1]'), `Expected valid citation [1] in report, got: ${result.report}`);
+    assert.ok(result.report.includes('[Docs](https://lens.dev)'), `Expected [Docs](https://lens.dev) in report, got: ${result.report}`);
+    // Out-of-bounds unlinked [99] must be stripped
+    assert.ok(!result.report.includes('[99]'), `Expected [99] to be stripped, got: ${result.report}`);
   });
 });

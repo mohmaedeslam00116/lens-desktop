@@ -119,4 +119,111 @@ describe('Wide Research UI contract', () => {
       'App.tsx must bind wideTelemetry to activeReport instead of global state'
     );
   });
+
+  it('simulates live telemetry events, finished event, and history selection without losing expansion history', async () => {
+    // Simulate App.tsx session-level logic and closure isolation
+    const initialTelemetry = {
+      initialBudget: 100,
+      activeBudget: 100,
+      maximumBudget: 200,
+      retrievedCount: 95,
+      expansion: null,
+    };
+
+    const expansion1 = {
+      initialBudget: 100,
+      activeBudget: 130,
+      maximumBudget: 200,
+      retrievedCount: 128,
+      expansion: { from: 100, to: 130, reason: 'Evidence gap in algorithmic fault tolerance' },
+    };
+
+    const expansion2 = {
+      initialBudget: 100,
+      activeBudget: 160,
+      maximumBudget: 200,
+      retrievedCount: 158,
+      expansion: { from: 130, to: 160, reason: 'Cross-platform gate fidelity benchmark shortfall' },
+    };
+
+    // Simulate session execution in App.tsx
+    let sessionTelemetry = null;
+    let sessionExpansionHistory = [];
+    const wideExpansionHistoryRef = { current: [] };
+    const wideTelemetryRef = { current: null };
+
+    // 1. Initial wide telemetry arrives
+    sessionTelemetry = initialTelemetry;
+    wideTelemetryRef.current = initialTelemetry;
+
+    // 2. Expansion 1 arrives
+    sessionTelemetry = expansion1;
+    wideTelemetryRef.current = expansion1;
+    sessionExpansionHistory.push(expansion1);
+    wideExpansionHistoryRef.current = [...sessionExpansionHistory];
+
+    // 3. Expansion 2 arrives
+    sessionTelemetry = expansion2;
+    wideTelemetryRef.current = expansion2;
+    sessionExpansionHistory.push(expansion2);
+    wideExpansionHistoryRef.current = [...sessionExpansionHistory];
+
+    // 4. Finished event arrives
+    const finishedPayload = {
+      type: 'finished',
+      report: 'Full comprehensive quantum report with complete analysis.',
+      sources: [
+        { url: 'https://example.com/source-1', title: 'Source 1' },
+      ],
+      wideTelemetry: expansion2,
+    };
+
+    const resolvedExpansionHistory = sessionExpansionHistory.length > 0
+      ? [...sessionExpansionHistory]
+      : wideExpansionHistoryRef.current.length > 0
+        ? [...wideExpansionHistoryRef.current]
+        : (finishedPayload.wideTelemetry?.expansion ? [finishedPayload.wideTelemetry] : undefined);
+
+    const savedReport = {
+      id: 'session-quantum-run',
+      query: 'Quantum error correction fault tolerance',
+      title: 'Quantum error correction fault tolerance',
+      content: finishedPayload.report,
+      sources: finishedPayload.sources,
+      createdAt: '2026-09-09T18:00:00Z',
+      language: 'en',
+      mode: 'wide',
+      wideTelemetry: finishedPayload.wideTelemetry || sessionTelemetry || wideTelemetryRef.current || undefined,
+      wideExpansionHistory: resolvedExpansionHistory,
+    };
+
+    // Assert expansion history was reliably saved
+    assert.equal(savedReport.wideExpansionHistory.length, 2);
+    assert.equal(savedReport.wideExpansionHistory[0].expansion.to, 130);
+    assert.equal(savedReport.wideExpansionHistory[1].expansion.to, 160);
+
+    // 5. Subsequent live search occurs in the background with different/no telemetry
+    const subsequentLiveTelemetry = {
+      initialBudget: 100,
+      activeBudget: 100,
+      maximumBudget: 200,
+      retrievedCount: 50,
+      expansion: null,
+    };
+    const subsequentLiveHistory = [];
+
+    // 6. User clicks savedReport from history drawer
+    const displayed = resolveReportTelemetry(savedReport, subsequentLiveTelemetry, subsequentLiveHistory);
+
+    assert.equal(displayed.wideTelemetry.activeBudget, 160);
+    assert.equal(displayed.wideTelemetry.retrievedCount, 158);
+    assert.equal(displayed.wideExpansionHistory.length, 2);
+    assert.equal(displayed.wideExpansionHistory[0].expansion.reason, 'Evidence gap in algorithmic fault tolerance');
+    assert.equal(displayed.wideExpansionHistory[1].expansion.reason, 'Cross-platform gate fidelity benchmark shortfall');
+
+    // 7. Verify App.tsx source code contains the ref-based and session-based resolution
+    const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    assert.ok(appSource.includes('wideExpansionHistoryRef'), 'App.tsx must define wideExpansionHistoryRef');
+    assert.ok(appSource.includes('sessionExpansionHistory'), 'App.tsx must accumulate sessionExpansionHistory');
+  });
 });

@@ -382,6 +382,59 @@ describe('BoundedScraperPool Concurrency & Host Throttling', () => {
 
     await new Promise((resolve) => server.close(resolve));
   });
+
+  it('cancels in-flight scrape after headers arrive when body is stalled', async () => {
+    let headersSent = false;
+    let serverAborted = false;
+    let onHeadersSent;
+    const headersSentPromise = new Promise((resolve) => { onHeadersSent = resolve; });
+    let onServerAbort;
+    const serverAbortedPromise = new Promise((resolve) => { onServerAbort = resolve; });
+
+    const server = http.createServer((req, res) => {
+      // Send 200 OK headers immediately and start a chunk, but stall the body
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.write('<!DOCTYPE html><html><body><h1>Header Arrived</h1>');
+      headersSent = true;
+      onHeadersSent();
+
+      req.on('close', () => {
+        if (!res.writableEnded) {
+          serverAborted = true;
+          onServerAbort();
+        }
+      });
+    });
+
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const testUrl = `http://127.0.0.1:${port}/headers-then-stalled-body`;
+
+    const pool = new BoundedScraperPool();
+    const controller = new AbortController();
+
+    const scrapePromise = pool.scrape(testUrl, { signal: controller.signal });
+
+    // Wait until headers have been flushed to the client
+    await headersSentPromise;
+    assert.equal(headersSent, true);
+
+    // Caller aborts during stalled body streaming
+    controller.abort();
+
+    // Prove server connection was aborted promptly
+    await Promise.race([
+      serverAbortedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Server abort timed out')), 2000))
+    ]);
+    assert.equal(serverAborted, true);
+
+    // Assert the pool returns no page
+    const result = await scrapePromise;
+    assert.equal(result, null);
+
+    await new Promise((resolve) => server.close(resolve));
+  });
 });
 
 describe('200-Source Scale & Memory Bounds Verification', () => {

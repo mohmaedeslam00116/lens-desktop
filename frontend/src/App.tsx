@@ -95,6 +95,8 @@ export function App() {
   const [settings, setSettings] = useState<ApiSettings>(DEFAULT_SETTINGS);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const wideExpansionHistoryRef = useRef<WideResearchTelemetry[]>([]);
+  const wideTelemetryRef = useRef<WideResearchTelemetry | null>(null);
 
   // Direction sync
   useEffect(() => {
@@ -207,6 +209,8 @@ export function App() {
     setGraphNodes([]);
     setWideTelemetry(null);
     setWideExpansionHistory([]);
+    wideTelemetryRef.current = null;
+    wideExpansionHistoryRef.current = [];
 
     // Map optimization mode to depth & perspective
     let depth: ResearchDepth = 'deep';
@@ -262,6 +266,8 @@ export function App() {
       wsRef.current = ws;
 
       let accumulatedSources: SourceItem[] = [];
+      let sessionTelemetry: WideResearchTelemetry | null = null;
+      let sessionExpansionHistory: WideResearchTelemetry[] = [];
 
       ws.onmessage = (event) => {
         try {
@@ -306,23 +312,33 @@ export function App() {
               setGraphNodes((prev) => [...prev, payload.node]);
             }
           } else if (payload.type === 'wide_telemetry' && payload.wideTelemetry) {
+            sessionTelemetry = payload.wideTelemetry;
+            wideTelemetryRef.current = payload.wideTelemetry;
             setWideTelemetry(payload.wideTelemetry);
             if (payload.wideTelemetry.expansion) {
-              setWideExpansionHistory((previous) => {
-                const expansion = payload.wideTelemetry.expansion;
-                const alreadyRecorded = previous.some((item) =>
-                  item.expansion?.from === expansion.from
-                  && item.expansion?.to === expansion.to
-                  && item.expansion?.reason === expansion.reason,
-                );
-                return alreadyRecorded ? previous : [...previous, payload.wideTelemetry];
-              });
+              const expansion = payload.wideTelemetry.expansion;
+              const alreadyRecorded = sessionExpansionHistory.some((item) =>
+                item.expansion?.from === expansion.from
+                && item.expansion?.to === expansion.to
+                && item.expansion?.reason === expansion.reason,
+              );
+              if (!alreadyRecorded) {
+                sessionExpansionHistory.push(payload.wideTelemetry);
+                wideExpansionHistoryRef.current = [...sessionExpansionHistory];
+              }
+              setWideExpansionHistory([...sessionExpansionHistory]);
             }
           } else if (payload.type === 'finished') {
             const formattedSources = (payload.sources || []).map((s: any) => {
               if (typeof s === 'string') return { url: s, title: s, credibilityScore: 85 };
               return s;
             });
+
+            const resolvedExpansionHistory = sessionExpansionHistory.length > 0
+              ? [...sessionExpansionHistory]
+              : wideExpansionHistoryRef.current.length > 0
+                ? [...wideExpansionHistoryRef.current]
+                : (payload.wideTelemetry?.expansion ? [payload.wideTelemetry] : undefined);
 
             const finalReport: ReportData = {
               id: sessionId,
@@ -339,10 +355,8 @@ export function App() {
               costs: payload.costs || 0.0,
               language,
               mode: researchMode,
-              wideTelemetry: payload.wideTelemetry || wideTelemetry || undefined,
-              wideExpansionHistory: (wideExpansionHistory.length > 0
-                ? wideExpansionHistory
-                : (payload.wideTelemetry?.expansion ? [payload.wideTelemetry] : undefined)),
+              wideTelemetry: payload.wideTelemetry || sessionTelemetry || wideTelemetryRef.current || wideTelemetry || undefined,
+              wideExpansionHistory: resolvedExpansionHistory,
             };
 
             setActiveReport(finalReport);

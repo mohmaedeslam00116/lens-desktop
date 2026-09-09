@@ -95,7 +95,6 @@ function parseJsonBody<T>(req: http.IncomingMessage, maxBytes = MAX_JSON_REQUEST
         const err: any = new Error('Payload Too Large');
         err.statusCode = 413;
         req.pause();
-        req.resume();
         reject(err);
         return;
       }
@@ -533,8 +532,20 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
             payload = validateReportExportPayload(await parseJsonBody<unknown>(req));
           } catch (err: any) {
             const statusCode = err.statusCode === 413 ? 413 : 400;
-            res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (statusCode === 413) {
+              headers['Connection'] = 'close';
+            }
+            res.writeHead(statusCode, headers);
+            res.flushHeaders?.();
             res.end(JSON.stringify({ error: err.message || 'Invalid export payload' }));
+            if (statusCode === 413) {
+              res.on('finish', () => {
+                setImmediate(() => {
+                  if (!req.destroyed) req.destroy();
+                });
+              });
+            }
             return;
           }
 
@@ -589,8 +600,20 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
         res.end(JSON.stringify({ error: 'Endpoint not found' }));
       } catch (err: any) {
         const statusCode = err.statusCode || 500;
-        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (statusCode === 413) {
+          headers['Connection'] = 'close';
+        }
+        res.writeHead(statusCode, headers);
+        res.flushHeaders?.();
         res.end(JSON.stringify({ error: err.message || 'Internal server error' }));
+        if (statusCode === 413) {
+          res.on('finish', () => {
+            setImmediate(() => {
+              if (!req.destroyed) req.destroy();
+            });
+          });
+        }
       }
     });
 
@@ -699,11 +722,20 @@ export function stopEmbeddedServer(): Promise<void> {
       wss = null;
     }
     if (httpServer) {
-      httpServer.close(() => {
-        httpServer = null;
-        reportExportService = null;
-        resolve();
-      });
+      if (typeof (httpServer as any).closeAllConnections === 'function') {
+        (httpServer as any).closeAllConnections();
+      }
+      let settled = false;
+      const done = () => {
+        if (!settled) {
+          settled = true;
+          httpServer = null;
+          reportExportService = null;
+          resolve();
+        }
+      };
+      httpServer.close(done);
+      setTimeout(done, 500).unref?.();
     } else {
       resolve();
     }

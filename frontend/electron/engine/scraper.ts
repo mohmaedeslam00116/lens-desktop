@@ -54,9 +54,9 @@ export class PageScraper {
         }
       }
 
-      let res: Response;
+      let html = '';
       try {
-        res = await fetch(url, {
+        const res = await fetch(url, {
           signal: controller.signal,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -64,6 +64,18 @@ export class PageScraper {
             'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
           }
         });
+
+        if (!res.ok) {
+          return {
+            url,
+            title: domain,
+            domain,
+            content: `Content unavailable from ${url} (HTTP ${res.status}).`,
+            credibilityScore
+          };
+        }
+
+        html = await res.text();
       } finally {
         clearTimeout(timer);
         if (signal) {
@@ -71,17 +83,6 @@ export class PageScraper {
         }
       }
 
-      if (!res.ok) {
-        return {
-          url,
-          title: domain,
-          domain,
-          content: `Content unavailable from ${url} (HTTP ${res.status}).`,
-          credibilityScore
-        };
-      }
-
-      const html = await res.text();
       const $ = cheerio.load(html);
 
       // Strip non-content and noise elements

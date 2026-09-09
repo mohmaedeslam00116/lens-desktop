@@ -85,11 +85,44 @@ function isArabic(value: string | undefined): boolean {
   return value === 'ar';
 }
 
-function sanitizeCitationIndices(text: string, maxCitation: number): string {
-  return text.replace(/\[(\d+)\]/g, (match, value) => {
+export function sanitizeCitationIndices(text: string, maxCitation: number): string {
+  const protectedBlocks: string[] = [];
+  const tokenPrefix = '\x00__LENS_WIDE_PROTECTED_MD_';
+  const tokenSuffix = '__\x00';
+
+  // Protect standard Markdown links e.g. [12](https://example.com) or [text](url)
+  let sanitized = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\n]+|[^\s)\n]+(?:\s+["'][^"'\n]*["'])?)\)/g, (match) => {
+    const id = protectedBlocks.length;
+    protectedBlocks.push(match);
+    return `${tokenPrefix}${id}${tokenSuffix}`;
+  });
+
+  // Protect reference links [text][id]
+  sanitized = sanitized.replace(/\[([^\]\n]+)\]\[([^\]\n]*)\]/g, (match) => {
+    const id = protectedBlocks.length;
+    protectedBlocks.push(match);
+    return `${tokenPrefix}${id}${tokenSuffix}`;
+  });
+
+  // Protect link reference definitions ^[id]: url
+  sanitized = sanitized.replace(/^\[([^\]\n]+)\]:\s*\S+/gm, (match) => {
+    const id = protectedBlocks.length;
+    protectedBlocks.push(match);
+    return `${tokenPrefix}${id}${tokenSuffix}`;
+  });
+
+  // Purge out-of-bounds citations [x] where citation > maxCitation or <= 0
+  sanitized = sanitized.replace(/\[(\d+)\](?!\()/g, (match, value) => {
     const citation = Number(value);
     return Number.isInteger(citation) && citation > 0 && citation <= maxCitation ? match : '';
   });
+
+  // Restore protected Markdown links
+  for (let i = 0; i < protectedBlocks.length; i++) {
+    sanitized = sanitized.replace(`${tokenPrefix}${i}${tokenSuffix}`, () => protectedBlocks[i]);
+  }
+
+  return sanitized;
 }
 
 function lexicalCandidates(

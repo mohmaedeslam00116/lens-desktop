@@ -43,10 +43,15 @@ export class MultiSearchProvider {
   /**
    * DuckDuckGo free search without API keys.
    */
-  static async searchDuckDuckGo(query: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
+  static async searchDuckDuckGo(
+    query: string,
+    maxResults = 8,
+    signal?: AbortSignal,
+    endpoint = 'https://html.duckduckgo.com/html/'
+  ): Promise<SearchResultItem[]> {
     if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
     try {
-      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const url = `${endpoint.includes('?') ? endpoint + '&' : endpoint + '?'}q=${encodeURIComponent(query)}`;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 9000);
 
@@ -55,9 +60,9 @@ export class MultiSearchProvider {
         signal.addEventListener('abort', onCallerAbort, { once: true });
       }
 
-      let res: Response;
+      let html = '';
       try {
-        res = await fetch(url, {
+        const res = await fetch(url, {
           signal: controller.signal,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -65,6 +70,12 @@ export class MultiSearchProvider {
             'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
           }
         });
+
+        if (!res.ok) {
+          throw new Error(`DuckDuckGo returned HTTP ${res.status}`);
+        }
+
+        html = await res.text();
       } finally {
         clearTimeout(timeoutId);
         if (signal) {
@@ -72,11 +83,6 @@ export class MultiSearchProvider {
         }
       }
 
-      if (!res.ok) {
-        throw new Error(`DuckDuckGo returned HTTP ${res.status}`);
-      }
-
-      const html = await res.text();
       const $ = cheerio.load(html);
       const results: SearchResultItem[] = [];
 
@@ -115,7 +121,7 @@ export class MultiSearchProvider {
       // Secondary fallback: DuckDuckGo Instant Answer API
       return await this.searchDuckDuckGoInstantApi(query, maxResults, signal);
     } catch (err: any) {
-      if (signal?.aborted) throw err;
+      if (signal?.aborted || err?.name === 'AbortError' || err?.message?.includes('aborted')) throw err;
       console.warn('[MultiSearch] DuckDuckGo HTML scraping error:', err);
       return await this.searchDuckDuckGoInstantApi(query, maxResults, signal);
     }
