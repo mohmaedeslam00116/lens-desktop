@@ -61,3 +61,4 @@ Single-context repository layout (`CONTEXT.md` at root). See `docs/agents/domain
 ### Pull Request & Review Workflow
 - **Pull Request Requirement**: After any specification (`/to-spec`) or issue implementation is completed and verified against the test suite, a Pull Request (PR) must be created (using `gh pr create`) instead of pushing directly to `main`.
 - **Review Before Merge**: Every PR must undergo review (Standards Reviewer and Spec Reviewer) and have all tests pass green before it is merged into the project (`main`). Direct merges without PR review are prohibited.
+- **CodeRabbit Review Enforcement**: No PR may be merged until CodeRabbit completes its review on GitHub. Agents and maintainers must inspect CodeRabbit's review comments and walkthrough, address or resolve all findings (security, correctness, or performance), and verify that all review threads are resolved before merging into `main`.
