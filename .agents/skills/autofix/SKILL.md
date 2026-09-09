@@ -55,27 +55,39 @@ Check: `git status` + check for unpushed commits
 
 **If uncommitted changes:**
 - Warn: "⚠️ Uncommitted changes won't be in CodeRabbit review"
-- Ask: "Commit and push first?" → If yes: wait for user action, then continue
+- Ask: "Commit and push first?"
+  - If yes: wait for user action (commit and push). If successful, re-verify working directory is clean and up to date before proceeding. If user action fails or working directory is still dirty: inform user and EXIT skill.
+  - If no: inform user that review cannot run on uncommitted state and EXIT skill.
 
 **If unpushed commits:**
 - Warn: "⚠️ N unpushed commits. CodeRabbit hasn't reviewed them"
-- Ask: "Push now?" → If yes: `git push`, inform "CodeRabbit will review in ~5 min", EXIT skill
+- Ask: "Push now?"
+  - If yes: attempt `git push`. If push succeeds: inform "CodeRabbit will review in ~5 min", EXIT skill. If push fails: inform user of the push error and EXIT skill.
+  - If no: inform user that unpushed commits must be pushed before running autofix and EXIT skill.
 
-**Otherwise:** Proceed to Step 2
+**Otherwise (working tree clean, no unpushed commits):** Proceed to Step 2.
 
 ### Step 2: Resolve Current PR
 
 Resolve `pr_number`:
 
 ```bash
-pr_number=$(gh pr list --head "$(git branch --show-current)" --state open --json number --jq '.[0].number')
+prs=$(gh pr list --head "$(git branch --show-current)" --state open --json number,title,baseRefName)
+pr_count=$(jq length <<<"$prs")
 
-if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
-  # no open PR for this branch
+if [ "$pr_count" -eq 0 ]; then
+  # no open PR for this branch -> ask to create PR
+  pr_number=""
+elif [ "$pr_count" -gt 1 ]; then
+  echo "⚠️ Multiple open PRs match the current branch. Please specify target PR number or abort." >&2
+  # Prompt user for explicit PR number or exit cleanly
+  exit 1
+else
+  pr_number=$(jq -r '.[0].number' <<<"$prs")
 fi
 ```
 
-**If no PR:** If the check above indicates no PR, ask "Create PR?" → If yes, create the PR with:
+**If no PR:** If `pr_count` is 0, ask "Create PR?" → If yes, create the PR with:
 
 ```bash
 title=$(git log -1 --pretty=format:'%s')
@@ -137,34 +149,48 @@ while :; do
     }
   }')
 
-  all_threads=$(jq -c --argjson response "$response" '
-    . + $response.data.repository.pullRequest.reviewThreads.nodes
-  ' <<<"$all_threads")
+  if [ -z "$response" ] || jq -e '.errors // empty' <<<"$response" >/dev/null 2>&1; then
+    echo "⚠️ GraphQL request failed or returned errors: $(jq -c '.errors // "empty response"' <<<"$response")" >&2
+    exit 1
+  fi
 
-  has_next=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$response")
+  new_nodes=$(jq -e '.data.repository.pullRequest.reviewThreads.nodes // empty' <<<"$response" 2>/dev/null)
+  if [ -z "$new_nodes" ]; then
+    echo "⚠️ Failed to parse reviewThreads from GraphQL response" >&2
+    exit 1
+  fi
+
+  all_threads=$(jq -c --argjson nodes "$new_nodes" '. + $nodes' <<<"$all_threads")
+
+  has_next=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage // false' <<<"$response")
   cursor=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // empty' <<<"$response")
   [ "$has_next" = "true" ] || break
 done
 ```
 
-Check top-level PR comments and review bodies for the CodeRabbit in-progress message:
+Check the most recent CodeRabbit activity or pending status checks to ensure review is not in progress:
 
 ```bash
-gh pr view "$pr_number" --json comments,reviews --jq '
+# Check if the latest CodeRabbit comment or review is an in-progress placeholder
+in_progress=$(gh pr view "$pr_number" --json comments,reviews --jq '
   [
-    (.comments[]?
-      | select(.author.login == "coderabbitai" or .author.login == "coderabbit[bot]" or .author.login == "coderabbitai[bot]")
-      | .body // empty),
-    (.reviews[]?
-      | select(.author.login == "coderabbitai" or .author.login == "coderabbit[bot]" or .author.login == "coderabbitai[bot]")
-      | .body // empty)
+    (.comments[]? | select(.author.login == "coderabbitai" or .author.login == "coderabbit[bot]" or .author.login == "coderabbitai[bot]")),
+    (.reviews[]? | select(.author.login == "coderabbitai" or .author.login == "coderabbit[bot]" or .author.login == "coderabbitai[bot]"))
   ]
-  | map(select(test("Come back again in a few minutes")))
-  | length
-'
-```
+  | sort_by(.createdAt)
+  | last
+  | (.body // "")
+  | test("Come back again in a few minutes")
+')
 
-**If the count is greater than 0:** Inform "⏳ Review in progress, try again in a few minutes", EXIT
+# Also check if CodeRabbit check suite is actively pending on the head commit
+check_pending=$(gh pr checks "$pr_number" 2>/dev/null | grep -i "coderabbit" | grep -i "pending" || true)
+
+if [ "$in_progress" = "true" ] || [ -n "$check_pending" ]; then
+  echo "⏳ Review in progress, try again in a few minutes"
+  exit 0
+fi
+```
 
 **If no actionable CodeRabbit threads are found:** Inform "No unresolved current CodeRabbit review threads found", EXIT
 
@@ -282,13 +308,15 @@ If a consolidated commit was created:
 ### Step 9: Push Changes
 
 If a consolidated commit was created:
-- Ask: "Push changes?" → If yes: `git push`
+- Ask: "Push changes?"
+  - If yes: attempt `git push`. If push succeeds, record `push_succeeded=true`. If push fails, warn user: "⚠️ Failed to push changes to remote", record `push_succeeded=false`.
+  - If no: record `push_succeeded=false`, inform user: "Changes committed locally but not pushed to remote branch."
 
-If all deferred (no commit): Skip this step.
+If all deferred (no commit): Skip this step (`push_succeeded=false`).
 
 ### Step 10: Post Summary
 
-**If at least one fix was applied:** Post one success summary comment on the PR:
+**If at least one fix was applied AND pushed to remote (`push_succeeded=true`):** Post one success summary comment on the PR:
 
 ```bash
 gh pr comment "$pr_number" --body "$(cat <<'EOF'
@@ -303,6 +331,19 @@ Fixed <file-count> file(s) based on <issue-count> CodeRabbit feedback item(s).
 **Commit:** `<commit-sha>`
 
 The latest autofix changes are on the `<branch-name>` branch.
+
+EOF
+)"
+```
+
+**If fixes were applied but NOT pushed to remote (`push_succeeded=false`):** Do not post a comment stating changes are on the branch. Either inform the user locally that fixes were committed locally only, or post an informational note indicating that manual push is required:
+
+```bash
+gh pr comment "$pr_number" --body "$(cat <<'EOF'
+## CodeRabbit Autofix (Local Changes Pending Push)
+
+Applied fixes locally for <issue-count> CodeRabbit feedback item(s) in commit `<commit-sha>`.
+Changes have not yet been pushed to the remote branch.
 
 EOF
 )"

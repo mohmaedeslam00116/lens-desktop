@@ -135,10 +135,19 @@ export class MultiSearchProvider {
   /**
    * DuckDuckGo Instant Answer JSON API fallback
    */
-  static async searchDuckDuckGoInstantApi(query: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
+  static async searchDuckDuckGoInstantApi(query: string, maxResults = 8, signal?: AbortSignal, timeoutMs = 6000): Promise<SearchResultItem[]> {
+    if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    const onCallerAbort = () => controller.abort();
+    if (signal) {
+      signal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+
     try {
       const apiUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const res = await fetch(apiUrl, { signal });
+      const res = await fetch(apiUrl, { signal: controller.signal });
       if (!res.ok) return [];
 
       const data = await res.json() as any;
@@ -169,6 +178,11 @@ export class MultiSearchProvider {
     } catch (err: any) {
       if (signal?.aborted) throw err;
       return [];
+    } finally {
+      clearTimeout(timeoutId);
+      if (signal) {
+        signal.removeEventListener('abort', onCallerAbort);
+      }
     }
   }
 
