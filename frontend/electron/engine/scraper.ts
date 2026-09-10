@@ -66,16 +66,51 @@ export class PageScraper {
         });
 
         if (!res.ok) {
-          return {
-            url,
-            title: domain,
-            domain,
-            content: `Content unavailable from ${url} (HTTP ${res.status}).`,
-            credibilityScore
-          };
+          if (res.status === 429 || res.status === 503) {
+            return {
+              url,
+              title: domain,
+              domain,
+              content: `Content unavailable from ${url} (HTTP ${res.status}).`,
+              credibilityScore
+            };
+          }
+          throw new Error(`HTTP ${res.status}: Content unavailable from ${url}`);
         }
 
-        html = await res.text();
+        const MAX_SCRAPE_BYTES = 2 * 1024 * 1024; // 2 MB safe maximum scrape size
+        const contentLengthStr = res.headers.get('content-length');
+        if (contentLengthStr && parseInt(contentLengthStr, 10) > MAX_SCRAPE_BYTES) {
+          try { await res.body?.cancel(); } catch {}
+          throw new Error(`Content length exceeds maximum limit of ${MAX_SCRAPE_BYTES} bytes`);
+        }
+
+        if (res.body && typeof (res.body as any).getReader === 'function') {
+          const reader = (res.body as any).getReader();
+          const chunks: Uint8Array[] = [];
+          let totalBytes = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              totalBytes += value.byteLength;
+              if (totalBytes > MAX_SCRAPE_BYTES) {
+                try { await reader.cancel(); } catch {}
+                throw new Error(`Stream exceeded maximum size limit of ${MAX_SCRAPE_BYTES} bytes`);
+              }
+              chunks.push(value);
+            }
+          }
+          const merged = new Uint8Array(totalBytes);
+          let offset = 0;
+          for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.byteLength;
+          }
+          html = new TextDecoder('utf-8').decode(merged);
+        } else {
+          html = await res.text();
+        }
       } finally {
         clearTimeout(timer);
         if (signal) {
@@ -124,13 +159,7 @@ export class PageScraper {
         credibilityScore
       };
     } catch (err: any) {
-      return {
-        url,
-        title: domain,
-        domain,
-        content: `Error retrieving ${url}: ${err.message || 'Request timed out'}`,
-        credibilityScore
-      };
+      throw new Error(`Failed to scrape ${url}: ${err.message || 'Request timed out'}`);
     }
   }
 }

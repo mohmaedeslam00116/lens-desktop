@@ -72,7 +72,10 @@ export function parseProviderSseEvents(provider: string, payload: string): Parse
   flush();
 
   const text: string[] = [];
+  const MAX_TOOL_ARG_BYTES = 512 * 1024; // 512 KiB strict limit
   const toolCalls: ParsedSseToolCall[] = [];
+  const accumulatedOpenAICalls = new Map<number, { name?: string; args: string; rejected?: boolean }>();
+  const accumulatedAnthropicCalls = new Map<number, { name?: string; args: string; initialInput?: Record<string, any>; rejected?: boolean }>();
   const normalizedProvider = provider.toLowerCase().trim();
 
   for (const event of events) {
@@ -96,12 +99,46 @@ export function parseProviderSseEvents(provider: string, payload: string): Parse
     }
 
     if (normalizedProvider === 'anthropic') {
-      const block = data.content_block;
-      if (block?.type === 'tool_use' && block.name) {
-        toolCalls.push({ name: block.name, arguments: block.input || {} });
+      const index = typeof data.index === 'number' ? data.index : 0;
+      if (data.type === 'content_block_start' || data.content_block) {
+        const block = data.content_block;
+        if (block?.type === 'tool_use' && block.name) {
+          accumulatedAnthropicCalls.set(index, {
+            name: block.name,
+            args: '',
+            initialInput: block.input && typeof block.input === 'object' ? block.input : undefined
+          });
+        }
       }
-      if (data.delta?.type === 'text_delta' && data.delta.text) {
-        text.push(data.delta.text);
+      if (data.type === 'content_block_delta' || data.delta) {
+        if (data.delta?.type === 'text_delta' && data.delta.text) {
+          text.push(data.delta.text);
+        } else if (data.delta?.type === 'input_json_delta' && typeof data.delta.partial_json === 'string') {
+          const current = accumulatedAnthropicCalls.get(index);
+          if (current && !current.rejected) {
+            const proposed = current.args + data.delta.partial_json;
+            if (Buffer.byteLength(proposed, 'utf8') <= MAX_TOOL_ARG_BYTES) {
+              current.args = proposed;
+            } else {
+              current.rejected = true;
+            }
+          }
+        }
+      }
+      if (data.type === 'content_block_stop') {
+        const current = accumulatedAnthropicCalls.get(index);
+        if (current && current.name && !current.rejected) {
+          let argumentsObject: Record<string, any> = current.initialInput || {};
+          if (current.args.trim().length > 0) {
+            try {
+              argumentsObject = JSON.parse(current.args);
+            } catch {
+              argumentsObject = current.initialInput || {};
+            }
+          }
+          toolCalls.push({ name: current.name, arguments: argumentsObject });
+        }
+        accumulatedAnthropicCalls.delete(index);
       }
       continue;
     }
@@ -120,21 +157,59 @@ export function parseProviderSseEvents(provider: string, payload: string): Parse
     const delta = data.choices?.[0]?.delta || data.choices?.[0]?.message;
     if (delta?.content) text.push(delta.content);
     for (const call of delta?.tool_calls || []) {
-      if (!call.function?.name) continue;
-      let argumentsObject: Record<string, any> = {};
-      try {
-        argumentsObject = typeof call.function.arguments === 'string'
-          ? JSON.parse(call.function.arguments)
-          : call.function.arguments || {};
-      } catch {
-        continue;
+      const idx = typeof call.index === 'number' ? call.index : accumulatedOpenAICalls.size;
+      const existing = accumulatedOpenAICalls.get(idx) || { args: '' };
+      if (call.function?.name) {
+        existing.name = call.function.name;
       }
-      toolCalls.push({ name: call.function.name, arguments: argumentsObject });
+      if (!existing.rejected) {
+        let fragment = '';
+        if (typeof call.function?.arguments === 'string') {
+          fragment = call.function.arguments;
+        } else if (typeof call.function?.arguments === 'object' && call.function.arguments !== null) {
+          fragment = JSON.stringify(call.function.arguments);
+        }
+        if (fragment) {
+          const proposed = existing.args + fragment;
+          if (Buffer.byteLength(proposed, 'utf8') <= MAX_TOOL_ARG_BYTES) {
+            existing.args = proposed;
+          } else {
+            existing.rejected = true;
+          }
+        }
+      }
+      accumulatedOpenAICalls.set(idx, existing);
     }
+  }
+
+  for (const [_, call] of accumulatedAnthropicCalls) {
+    if (!call.name || call.rejected) continue;
+    let argumentsObject: Record<string, any> = call.initialInput || {};
+    if (call.args.trim().length > 0) {
+      try {
+        argumentsObject = JSON.parse(call.args);
+      } catch {
+        argumentsObject = call.initialInput || {};
+      }
+    }
+    toolCalls.push({ name: call.name, arguments: argumentsObject });
+  }
+
+  for (const [_, call] of accumulatedOpenAICalls) {
+    if (!call.name || call.rejected) continue;
+    let argumentsObject: Record<string, any> = {};
+    try {
+      argumentsObject = call.args.trim().length > 0 ? JSON.parse(call.args) : {};
+    } catch {
+      argumentsObject = {};
+    }
+    toolCalls.push({ name: call.name, arguments: argumentsObject });
   }
 
   return { text: text.join(''), toolCalls };
 }
+
+export const MAX_TOOL_RECURSION_DEPTH = 5;
 
 export class ModelClient {
   /**
@@ -489,7 +564,7 @@ export class ModelClient {
     }
   }
 
-  private static async generateGemini(options: LLMRequestOptions): Promise<string> {
+  private static async generateGemini(options: LLMRequestOptions, depth = 0): Promise<string> {
     const model = options.model || 'gemini-2.0-flash';
     const key = options.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     if (!key) throw new Error('Google Gemini API key is missing. Please add it in settings.');
@@ -538,6 +613,11 @@ export class ModelClient {
     const funcCallPart = parts.find((p: any) => p.functionCall);
 
     if (funcCallPart && options.toolHandler) {
+      if (depth >= MAX_TOOL_RECURSION_DEPTH) {
+        console.warn(`[ModelClient] Max tool recursion depth (${MAX_TOOL_RECURSION_DEPTH}) reached for Gemini. Terminating tool loop.`);
+        return parts.map((p: any) => p.text || '').join('') || 'Max tool recursion depth reached.';
+      }
+
       const toolCallResult = await options.toolHandler({
         name: funcCallPart.functionCall.name,
         arguments: funcCallPart.functionCall.args || {}
@@ -558,7 +638,7 @@ export class ModelClient {
       return await this.generateGemini({
         ...options,
         messages: nextMessages
-      });
+      }, depth + 1);
     }
 
     const text = parts.map((p: any) => p.text || '').join('');
@@ -570,7 +650,7 @@ export class ModelClient {
     return text;
   }
 
-  private static async generateAnthropic(options: LLMRequestOptions): Promise<string> {
+  private static async generateAnthropic(options: LLMRequestOptions, depth = 0): Promise<string> {
     const model = options.model || 'claude-3-7-sonnet-20250219';
     const key = options.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!key) throw new Error('Anthropic API key is missing. Please add it in settings.');
@@ -610,6 +690,11 @@ export class ModelClient {
     const data = await res.json() as any;
     const toolUseBlock = data.content?.find((c: any) => c.type === 'tool_use');
     if (toolUseBlock && options.toolHandler) {
+      if (depth >= MAX_TOOL_RECURSION_DEPTH) {
+        console.warn(`[ModelClient] Max tool recursion depth (${MAX_TOOL_RECURSION_DEPTH}) reached for Anthropic. Terminating tool loop.`);
+        return data.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') || 'Max tool recursion depth reached.';
+      }
+
       const toolResult = await options.toolHandler({
         name: toolUseBlock.name,
         arguments: toolUseBlock.input || {}
@@ -630,7 +715,7 @@ export class ModelClient {
       return await this.generateAnthropic({
         ...options,
         messages: nextMessages
-      });
+      }, depth + 1);
     }
 
     const text = data.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') || '';
@@ -638,7 +723,7 @@ export class ModelClient {
     return text;
   }
 
-  private static async generateOpenAICompatible(options: LLMRequestOptions): Promise<string> {
+  private static async generateOpenAICompatible(options: LLMRequestOptions, depth = 0): Promise<string> {
     const provider = options.provider.toLowerCase().trim();
 
     let baseUrl = 'https://api.openai.com/v1';
@@ -702,6 +787,11 @@ export class ModelClient {
     const choice = data.choices?.[0];
     const toolCalls = choice?.message?.tool_calls;
     if (toolCalls && toolCalls.length > 0 && options.toolHandler) {
+      if (depth >= MAX_TOOL_RECURSION_DEPTH) {
+        console.warn(`[ModelClient] Max tool recursion depth (${MAX_TOOL_RECURSION_DEPTH}) reached for ${provider}. Terminating tool loop.`);
+        return choice?.message?.content || 'Max tool recursion depth reached.';
+      }
+
       const firstCall = toolCalls[0];
       let parsedArgs: Record<string, any> = {};
       try {
@@ -730,7 +820,7 @@ export class ModelClient {
       return await this.generateOpenAICompatible({
         ...options,
         messages: nextMessages
-      });
+      }, depth + 1);
     }
 
     const text = choice?.message?.content || '';

@@ -133,6 +133,17 @@ export class ResearchSession {
   }
 
   /**
+   * Checks whether transitioning to nextState is permitted from the current state.
+   */
+  public canTransitionTo(nextState: SessionState): boolean {
+    if (this.state === nextState) {
+      return true;
+    }
+    const permitted = VALID_TRANSITIONS[this.state];
+    return Boolean(permitted && permitted.includes(nextState));
+  }
+
+  /**
    * Safely transitions session to a new state according to valid state machine rules.
    * Throws an error if an invalid transition is attempted.
    */
@@ -230,6 +241,9 @@ export class ResearchSession {
    * the session to 'running' to begin parallel retrieval. Freezes the retrieval trajectory.
    */
   public approvePlan(approvedPlan?: ResearchPlan): void {
+    if (!this.canTransitionTo('running')) {
+      return;
+    }
     const target = approvedPlan || this.plan;
     if (target) {
       this.plan = {
@@ -372,7 +386,7 @@ export class ResearchSession {
     result?: { report?: string; sources?: SourceItem[]; metrics?: any },
     options: { emitFinished?: boolean } = {},
   ): void {
-    if (this.isTerminal()) {
+    if (this.isTerminal() || !this.canTransitionTo('completed')) {
       return;
     }
 
@@ -405,7 +419,7 @@ export class ResearchSession {
    * Marks the session as failed upon unrecoverable error.
    */
   public fail(error: Error | string): void {
-    if (this.isTerminal()) {
+    if (this.isTerminal() || !this.canTransitionTo('failed')) {
       return;
     }
 

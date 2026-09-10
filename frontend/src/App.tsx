@@ -97,6 +97,8 @@ export function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const wideExpansionHistoryRef = useRef<WideResearchTelemetry[]>([]);
   const wideTelemetryRef = useRef<WideResearchTelemetry | null>(null);
+  const approvedPlanRef = useRef<ResearchPlan | null>(null);
+  const sessionGenerationRef = useRef(0);
 
   // Direction sync
   useEffect(() => {
@@ -163,7 +165,15 @@ export function App() {
   };
 
   const handleNewResearch = () => {
+    sessionGenerationRef.current += 1;
+    const previousSocket = wsRef.current;
+    wsRef.current = null;
+    if (previousSocket && previousSocket.readyState !== WebSocket.CLOSED) {
+      previousSocket.close();
+    }
+    approvedPlanRef.current = null;
     setResearchError('');
+    setIsSearching(false);
     setActiveReport(null);
     setCurrentQuery('');
     setQuery('');
@@ -185,6 +195,8 @@ export function App() {
   const handleStartResearch = async (searchQuery: string) => {
     if (!searchQuery.trim() || isSearching) return;
 
+    const sessionGeneration = sessionGenerationRef.current;
+
     const activeKey = (settings.keys[settings.llm_provider as keyof typeof settings.keys] || '').trim();
     if (settings.llm_provider !== 'ollama' && !activeKey) {
       setIsSettingsOpen(true);
@@ -195,6 +207,7 @@ export function App() {
     setResearchError('');
     setCurrentQuery(trimmed);
     setProposedPlan(null);
+    approvedPlanRef.current = null;
     setIsPlanModalOpen(false);
     setIsRegeneratingPlan(false);
     setActiveSessionId(null);
@@ -259,6 +272,7 @@ export function App() {
 
       if (!response.ok) throw new Error(`Server returned ${response.status}`);
       const data = await response.json();
+      if (sessionGeneration !== sessionGenerationRef.current) return;
       const sessionId = data.session_id;
       setActiveSessionId(sessionId);
 
@@ -270,11 +284,13 @@ export function App() {
       let sessionExpansionHistory: WideResearchTelemetry[] = [];
 
       ws.onmessage = (event) => {
+        if (sessionGeneration !== sessionGenerationRef.current) return;
         try {
           const payload = JSON.parse(event.data);
 
           if (payload.type === 'plan_proposed' || payload.type === 'plan_created') {
             if (payload.plan) {
+              approvedPlanRef.current = payload.plan;
               setProposedPlan(payload.plan);
               setIsPlanModalOpen(true);
               setIsRegeneratingPlan(false);
@@ -348,7 +364,7 @@ export function App() {
               sources: formattedSources.length > 0 ? formattedSources : accumulatedSources,
               depth,
               perspective,
-              plan: payload.plan || proposedPlan || undefined,
+              plan: payload.plan || approvedPlanRef.current || proposedPlan || undefined,
               graphNodes,
               reflections: payload.reflections || reflections,
               createdAt: new Date().toISOString(),
@@ -381,11 +397,13 @@ export function App() {
       };
 
       ws.onerror = (err) => {
+        if (sessionGeneration !== sessionGenerationRef.current) return;
         console.error('WebSocket error:', err);
         setResearchError(language === 'ar' ? 'انقطع اتصال البحث. تحقق من تشغيل التطبيق ثم أعد المحاولة.' : 'Research connection lost. Check that the desktop app is running, then try again.');
         setIsSearching(false);
       };
     } catch (err: any) {
+      if (sessionGeneration !== sessionGenerationRef.current) return;
       console.error('Failed to start research:', err);
       setResearchError(language === 'ar' ? 'تعذر بدء البحث. تأكد من تشغيل تطبيق سطح المكتب وإعداد النموذج ثم أعد المحاولة. سؤالك محفوظ أدناه.' : 'Could not start research. Check the desktop app and model setup, then try again. Your question is preserved below.');
       setIsSearching(false);
@@ -416,6 +434,7 @@ export function App() {
   };
 
   const handleApprovePlan = async (approvedPlan: ResearchPlan) => {
+    approvedPlanRef.current = approvedPlan;
     setIsPlanModalOpen(false);
     setCurrentStatus(language === 'ar' ? 'تم اعتماد الخطة. جاري استرجاع المصادر...' : 'Plan authorized. Beginning wide retrieval...');
     await sendPlanAction('plan_approved', { plan: approvedPlan }, '/api/research/plan/approve');
@@ -516,6 +535,7 @@ export function App() {
           discover: language === 'ar' ? 'استكشف' : 'Discover',
           history: language === 'ar' ? 'المكتبة' : 'Library',
           graph: language === 'ar' ? 'خريطة المعرفة' : 'Knowledge graph',
+          skills: language === 'ar' ? 'المهارات' : 'Skills',
         })[activeTab]}</strong></div>
         <button className="command-trigger" onClick={() => setIsCommandPaletteOpen(true)} aria-label={language === 'ar' ? 'البحث في الأوامر' : 'Search commands'}><Search size={15} /><span>{language === 'ar' ? 'الأوامر' : 'Commands'}</span><kbd dir="ltr">Ctrl K</kbd></button>
       </header>

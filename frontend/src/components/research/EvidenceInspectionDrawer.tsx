@@ -43,11 +43,12 @@ function highlightVerbatimPassage(passage: string, claim?: string): React.ReactN
   if (words.length === 0) return passage;
 
   const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const pattern = new RegExp(`(${escaped.join('|')})`, 'giu');
-  const parts = passage.split(pattern);
+  const splitPattern = new RegExp(`(${escaped.join('|')})`, 'giu');
+  const matchPattern = new RegExp(`^(?:${escaped.join('|')})$`, 'iu');
+  const parts = passage.split(splitPattern);
 
   return parts.map((part, i) => {
-    if (pattern.test(part)) {
+    if (matchPattern.test(part)) {
       return (
         <mark key={i} className="bg-line-strong/60 text-ink px-0.5 rounded font-semibold">
           {part}

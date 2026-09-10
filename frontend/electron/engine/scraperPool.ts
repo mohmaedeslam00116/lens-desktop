@@ -168,7 +168,11 @@ export class BoundedScraperPool {
 
     const onCallerAbort = () => controller.abort();
     if (signal) {
-      signal.addEventListener('abort', onCallerAbort, { once: true });
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        signal.addEventListener('abort', onCallerAbort, { once: true });
+      }
     }
 
     try {
@@ -267,8 +271,7 @@ export class BoundedScraperPool {
       // Check if page indicates rate limit response (e.g. from PageScraper fallback text)
       const isRateLimitedPage = page?.content &&
         (page.content.includes('(HTTP 429)') ||
-         page.content.includes('(HTTP 503)') ||
-         /rate limit|too many requests/i.test(page.content));
+         page.content.includes('(HTTP 503)'));
 
       if (isRateLimitedPage) {
         throw { status: 429, message: page.content };

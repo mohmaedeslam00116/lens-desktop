@@ -79,6 +79,8 @@ export class EmbeddingCache {
   private hits = 0;
   private misses = 0;
   private initialized = false;
+  private isDirty = false;
+  private flushTimeout: NodeJS.Timeout | null = null;
 
   constructor(options: EmbeddingCacheOptions = {}) {
     this.cacheDir = options.cacheDir || getDefaultCacheDir();
@@ -86,6 +88,19 @@ export class EmbeddingCache {
     this.disabled = !!options.disabled;
     this.indexFile = path.join(this.cacheDir, 'index.json');
     this.entriesDir = path.join(this.cacheDir, 'entries');
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimeout) return;
+    this.flushTimeout = setTimeout(() => {
+      this.flushTimeout = null;
+      if (this.isDirty) {
+        this.persistIndex();
+      }
+    }, 2000);
+    if (this.flushTimeout.unref) {
+      this.flushTimeout.unref();
+    }
   }
 
   /**
@@ -190,7 +205,7 @@ export class EmbeddingCache {
         return null;
       }
 
-      const raw = fs.readFileSync(filePath, 'utf8');
+      const raw = await fs.promises.readFile(filePath, 'utf8');
       const entry = JSON.parse(raw) as CachedVectorEntry;
 
       if (!Array.isArray(entry.vector) || entry.vector.length === 0) {
@@ -209,6 +224,8 @@ export class EmbeddingCache {
       const now = Date.now();
       indexEntry.lastAccessedAt = now;
       entry.lastAccessedAt = now;
+      this.isDirty = true;
+      this.scheduleFlush();
       this.hits++;
 
       return entry.vector;
@@ -254,7 +271,7 @@ export class EmbeddingCache {
 
     try {
       const data = JSON.stringify(entry);
-      fs.writeFileSync(filePath, data, 'utf8');
+      await fs.promises.writeFile(filePath, data, 'utf8');
 
       this.index.set(hash, {
         hash,
@@ -300,13 +317,16 @@ export class EmbeddingCache {
 
     if (!this.initialized) await this.init();
 
-    for (let i = 0; i < texts.length; i++) {
-      const text = texts[i];
-      const vec = await this.get(provider, model, text, options);
+    const results = await Promise.all(
+      texts.map(text => this.get(provider, model, text, options))
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const vec = results[i];
       if (vec) {
         hits.set(i, vec);
       } else {
-        misses.push({ index: i, text });
+        misses.push({ index: i, text: texts[i] });
       }
     }
 
@@ -351,7 +371,7 @@ export class EmbeddingCache {
 
       try {
         const data = JSON.stringify(entry);
-        fs.writeFileSync(filePath, data, 'utf8');
+        await fs.promises.writeFile(filePath, data, 'utf8');
 
         this.index.set(hash, {
           hash,
@@ -441,6 +461,10 @@ export class EmbeddingCache {
    * Saves the manifest to index.json.
    */
   private persistIndex(): void {
+    if (this.flushTimeout) {
+      clearTimeout(this.flushTimeout);
+      this.flushTimeout = null;
+    }
     try {
       const entriesObj: Record<string, CacheIndexEntry> = {};
       for (const [k, v] of this.index.entries()) {
@@ -451,7 +475,10 @@ export class EmbeddingCache {
         JSON.stringify({ version: 1, entries: entriesObj }, null, 2),
         'utf8'
       );
+      this.isDirty = false;
     } catch (err) {
+      this.isDirty = true;
+      this.scheduleFlush();
       console.warn('[EmbeddingCache] Failed to persist index.json:', err);
     }
   }

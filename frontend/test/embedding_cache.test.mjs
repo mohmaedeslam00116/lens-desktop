@@ -163,6 +163,30 @@ describe('Local Disk LRU Embedding Cache & Versioned Space Index', () => {
     assert.deepStrictEqual(loaded, [0.77, 0.88, 0.99]);
   });
 
+  test('Retries a failed index flush without losing newly written batch entries', async () => {
+    const { EmbeddingCache } = cacheModule || {};
+    assert.ok(EmbeddingCache);
+
+    const cache = new EmbeddingCache({ cacheDir: tempCacheDir });
+    await cache.init();
+
+    const indexPath = path.join(tempCacheDir, 'index.json');
+    fs.mkdirSync(indexPath);
+    await cache.setBatch('openai', 'retry-model', [
+      { text: 'Persist me after a transient manifest failure', vector: [0.25, 0.75] }
+    ]);
+    fs.rmdirSync(indexPath);
+
+    const deadline = Date.now() + 3500;
+    while (!fs.existsSync(indexPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    assert.equal(fs.existsSync(indexPath), true, 'Expected the failed manifest write to be retried');
+    const manifest = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    assert.equal(Object.keys(manifest.entries).length, 1);
+  });
+
   test('Model dimension migration invalidates stale vector entries', async () => {
     const { EmbeddingCache } = cacheModule || {};
     assert.ok(EmbeddingCache);

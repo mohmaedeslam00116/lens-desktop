@@ -587,7 +587,8 @@ export class CitationGroundingContract {
     }
 
     // 7. Restore protected blocks
-    for (let i = 0; i < protectedBlocks.length; i++) {
+    // Iterate in reverse: a later block may embed a placeholder from an earlier pass.
+    for (let i = protectedBlocks.length - 1; i >= 0; i--) {
       const placeholder = `${tokenPrefix}${i}${tokenSuffix}`;
       text = text.replace(placeholder, () => protectedBlocks[i]);
     }
@@ -787,6 +788,7 @@ export function detectMetricContradictions(excerpts: GroundedExcerpt[]): Detecte
     }
 
     // Look for divergent pairs from different domains
+    pairSearch:
     for (let i = 0; i < hits.length; i++) {
       for (let j = i + 1; j < hits.length; j++) {
         const a = hits[i];
@@ -813,7 +815,7 @@ export function detectMetricContradictions(excerpts: GroundedExcerpt[]): Detecte
               },
               suggestedExplanation: `Source [${a.excerpt.index}] (${a.excerpt.sourceDomain}) reports ${a.matchStr}, whereas Source [${b.excerpt.index}] (${b.excerpt.sourceDomain}) reports ${b.matchStr}. Difference likely stems from distinct testing regimes or workload configurations.`
             });
-            break; // One contradiction per metric keyword is sufficient
+            break pairSearch; // One contradiction per metric keyword is sufficient
           }
         }
       }

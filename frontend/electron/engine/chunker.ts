@@ -316,7 +316,10 @@ export function chunkStructuredDocument(
         });
       }
 
-      startIndex = Math.max(startIndex + 1, splitPoint - chunkOverlap);
+      const splitDistance = splitPoint - startIndex;
+      const minAdvance = Math.min(splitDistance, Math.max(16, Math.floor(splitDistance * 0.2)));
+      const boundedOverlap = Math.min(chunkOverlap, Math.max(0, splitDistance - minAdvance));
+      startIndex = splitPoint - boundedOverlap;
     }
   }
 
