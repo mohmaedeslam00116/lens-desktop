@@ -81,6 +81,7 @@ export class PageScraper {
         const MAX_SCRAPE_BYTES = 2 * 1024 * 1024; // 2 MB safe maximum scrape size
         const contentLengthStr = res.headers.get('content-length');
         if (contentLengthStr && parseInt(contentLengthStr, 10) > MAX_SCRAPE_BYTES) {
+          try { await res.body?.cancel(); } catch {}
           throw new Error(`Content length exceeds maximum limit of ${MAX_SCRAPE_BYTES} bytes`);
         }
 

@@ -12,6 +12,62 @@ import {
 } from '../dist-electron/engine/dedup.js';
 
 import { BoundedScraperPool } from '../dist-electron/engine/scraperPool.js';
+import { PageScraper } from '../dist-electron/engine/scraper.js';
+import { MultiSearchProvider } from '../dist-electron/engine/search.js';
+
+describe('Declared response size rejection', () => {
+  it('cancels an oversized search body and preserves the size-limit error when cancellation fails', async () => {
+    const originalFetch = globalThis.fetch;
+    let cancelled = false;
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-length': String(3 * 1024 * 1024) }),
+      body: {
+        cancel: async () => {
+          cancelled = true;
+          throw new Error('Cancellation failed');
+        }
+      }
+    });
+
+    try {
+      await assert.rejects(
+        MultiSearchProvider.searchTavily('bounded response', 'test-key'),
+        /Response body exceeds maximum size limit/
+      );
+      assert.equal(cancelled, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('cancels an oversized scrape body and preserves the size-limit error when cancellation fails', async () => {
+    const originalFetch = globalThis.fetch;
+    let cancelled = false;
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-length': String(3 * 1024 * 1024) }),
+      body: {
+        cancel: async () => {
+          cancelled = true;
+          throw new Error('Cancellation failed');
+        }
+      }
+    });
+
+    try {
+      await assert.rejects(
+        PageScraper.scrape('https://example.com/oversized'),
+        /Content length exceeds maximum limit/
+      );
+      assert.equal(cancelled, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
 
 describe('Level 1: Canonical URL Normalization', () => {
   it('strips tracking parameters, fragments, and trailing slashes', () => {

@@ -71,9 +71,20 @@ export function scheduleSessionCleanup(sessionId: string, delayMs = DEFAULT_SESS
     clearTimeout(sessionCleanupTimers.get(sessionId)!);
   }
   const timer = setTimeout(() => {
-    sessionCleanupTimers.delete(sessionId);
-    sessions.delete(sessionId);
+    const session = sessions.get(sessionId);
+    if (session) {
+      for (const socket of session.sockets) {
+        try {
+          socket.terminate();
+        } catch {
+          // Continue terminating the remaining retained sockets.
+        }
+      }
+      session.sockets.clear();
+    }
     sessionManager.removeSession(sessionId);
+    sessions.delete(sessionId);
+    sessionCleanupTimers.delete(sessionId);
   }, delayMs);
   if (timer.unref) {
     timer.unref();

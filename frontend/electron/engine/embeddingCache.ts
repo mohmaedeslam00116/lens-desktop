@@ -465,7 +465,6 @@ export class EmbeddingCache {
       clearTimeout(this.flushTimeout);
       this.flushTimeout = null;
     }
-    this.isDirty = false;
     try {
       const entriesObj: Record<string, CacheIndexEntry> = {};
       for (const [k, v] of this.index.entries()) {
@@ -476,7 +475,10 @@ export class EmbeddingCache {
         JSON.stringify({ version: 1, entries: entriesObj }, null, 2),
         'utf8'
       );
+      this.isDirty = false;
     } catch (err) {
+      this.isDirty = true;
+      this.scheduleFlush();
       console.warn('[EmbeddingCache] Failed to persist index.json:', err);
     }
   }

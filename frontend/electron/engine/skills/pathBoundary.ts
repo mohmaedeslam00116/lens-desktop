@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { SkillError } from './types';
 
 export const MAX_RESOURCE_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const RESOURCE_READ_BUFFER_SIZE = 64 * 1024;
 
 /**
  * Enforces strict filesystem sandboxing for an individual skill directory.
@@ -121,24 +122,53 @@ export class SkillPathBoundary {
   /**
    * Safely reads a file within the skill directory boundary.
    */
-  public async readResource(relativePath: string, encoding: BufferEncoding = 'utf8'): Promise<string> {
+  public async readResource(
+    relativePath: string,
+    encoding: BufferEncoding = 'utf8',
+    signal?: AbortSignal
+  ): Promise<string> {
     const safePath = this.resolveSafePath(relativePath);
-    const stats = await fs.promises.stat(safePath);
-    if (!stats.isFile()) {
-      throw new SkillError(
-        'SECURITY_ACCESS_DENIED',
-        `Skill resource is not a regular file: ${safePath}`,
-        safePath
-      );
+    const flags = process.platform === 'win32'
+      ? fs.constants.O_RDONLY
+      : fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+    const fileHandle = await fs.promises.open(safePath, flags);
+
+    try {
+      const stats = await fileHandle.stat();
+      if (!stats.isFile()) {
+        throw new SkillError(
+          'SECURITY_ACCESS_DENIED',
+          `Skill resource is not a regular file: ${safePath}`,
+          safePath
+        );
+      }
+      if (stats.size > MAX_RESOURCE_FILE_SIZE) {
+        throw new SkillError(
+          'SECURITY_ACCESS_DENIED',
+          `Skill resource exceeds maximum permitted size of ${MAX_RESOURCE_FILE_SIZE} bytes: ${stats.size} bytes`,
+          safePath
+        );
+      }
+
+      signal?.throwIfAborted();
+      if (stats.size === 0) return '';
+
+      const chunks: string[] = [];
+      const stream = fileHandle.createReadStream({
+        autoClose: false,
+        encoding,
+        start: 0,
+        end: stats.size - 1,
+        highWaterMark: RESOURCE_READ_BUFFER_SIZE,
+        signal,
+      });
+      for await (const chunk of stream) {
+        chunks.push(typeof chunk === 'string' ? chunk : chunk.toString(encoding));
+      }
+      return chunks.join('');
+    } finally {
+      await fileHandle.close();
     }
-    if (stats.size > MAX_RESOURCE_FILE_SIZE) {
-      throw new SkillError(
-        'SECURITY_ACCESS_DENIED',
-        `Skill resource exceeds maximum permitted size of ${MAX_RESOURCE_FILE_SIZE} bytes: ${stats.size} bytes`,
-        safePath
-      );
-    }
-    return fs.promises.readFile(safePath, { encoding });
   }
 
   /**

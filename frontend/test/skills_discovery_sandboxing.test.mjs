@@ -210,6 +210,26 @@ description: Missing closing fence
       assert.equal(content, '# Reference Guide');
     });
 
+    it('preserves UTF-8 characters split across bounded read chunks', async () => {
+      const boundary = new SkillPathBoundary(skillDir);
+      const expected = `${'a'.repeat(64 * 1024 - 1)}🙂`;
+      fs.writeFileSync(path.join(skillDir, 'references', 'chunked.md'), expected);
+
+      const content = await boundary.readResource('references/chunked.md');
+      assert.equal(content, expected);
+    });
+
+    it('forwards an AbortSignal while reading a resource', async () => {
+      const boundary = new SkillPathBoundary(skillDir);
+      const controller = new AbortController();
+      controller.abort();
+
+      await assert.rejects(
+        boundary.readResource('references/guide.md', 'utf8', controller.signal),
+        (err) => err?.name === 'AbortError'
+      );
+    });
+
     it('throws SECURITY_ACCESS_DENIED on relative directory traversal (../../)', () => {
       const boundary = new SkillPathBoundary(skillDir);
 

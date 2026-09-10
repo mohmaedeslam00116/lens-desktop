@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio';
 async function readBoundedJson<T = any>(res: Response, maxBytes = 2 * 1024 * 1024): Promise<T> {
   const contentLengthStr = res.headers.get('content-length');
   if (contentLengthStr && parseInt(contentLengthStr, 10) > maxBytes) {
+    try { await res.body?.cancel(); } catch {}
     throw new Error(`Response body exceeds maximum size limit of ${maxBytes} bytes`);
   }
 

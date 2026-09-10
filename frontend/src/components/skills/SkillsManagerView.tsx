@@ -19,43 +19,75 @@ import { Language } from '../../types';
 import { translations } from '../../i18n/translations';
 import { useDialogFocus } from '../../hooks/useDialogFocus';
 
-async function readEntryTree(entry: any, currentPath = ''): Promise<Array<{ path: string; content: string }>> {
+const MAX_DROPPED_DIRECTORY_ENTRIES = 1000;
+const MAX_DROPPED_DIRECTORY_CONTENT_BYTES = 50 * 1024 * 1024;
+
+interface DroppedDirectoryTraversal {
+  entriesVisited: number;
+  contentBytes: number;
+  files: Array<{ path: string; content: string }>;
+}
+
+async function walkEntryTree(entry: any, currentPath: string, traversal: DroppedDirectoryTraversal): Promise<void> {
+  traversal.entriesVisited += 1;
+  if (traversal.entriesVisited > MAX_DROPPED_DIRECTORY_ENTRIES) {
+    throw new Error(`Dropped folder exceeds the ${MAX_DROPPED_DIRECTORY_ENTRIES}-entry import limit`);
+  }
+
   if (entry.isFile) {
-    return new Promise((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       entry.file((file: File) => {
+        if (traversal.contentBytes + file.size > MAX_DROPPED_DIRECTORY_CONTENT_BYTES) {
+          reject(new Error(`Dropped folder exceeds the ${MAX_DROPPED_DIRECTORY_CONTENT_BYTES}-byte content limit`));
+          return;
+        }
         const reader = new FileReader();
         reader.onload = () => {
           const text = (reader.result as string) || '';
-          resolve([{ path: currentPath ? `${currentPath}/${entry.name}` : entry.name, content: text }]);
+          const contentBytes = new TextEncoder().encode(text).byteLength;
+          if (traversal.contentBytes + contentBytes > MAX_DROPPED_DIRECTORY_CONTENT_BYTES) {
+            reject(new Error(`Dropped folder exceeds the ${MAX_DROPPED_DIRECTORY_CONTENT_BYTES}-byte content limit`));
+            return;
+          }
+          traversal.contentBytes += contentBytes;
+          traversal.files.push({
+            path: currentPath ? `${currentPath}/${entry.name}` : entry.name,
+            content: text,
+          });
+          resolve();
         };
-        reader.onerror = () => resolve([]);
+        reader.onerror = () => resolve();
         reader.readAsText(file);
-      });
+      }, reject);
     });
   } else if (entry.isDirectory) {
     const reader = entry.createReader();
-    const subEntries: any[] = [];
-    await new Promise<void>((resolve, reject) => {
-      const readBatch = () => {
-        reader.readEntries((ents: any[]) => {
-          if (!ents || ents.length === 0) {
-            resolve();
-          } else {
-            subEntries.push(...ents);
-            readBatch();
-          }
-        }, (err: any) => reject(err));
-      };
-      readBatch();
-    });
-    const accumulated: Array<{ path: string; content: string }> = [];
-    for (const sub of subEntries) {
-      const results = await readEntryTree(sub, currentPath ? `${currentPath}/${entry.name}` : entry.name);
-      accumulated.push(...results);
+    const childPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+    while (true) {
+      const subEntries = await new Promise<any[]>((resolve, reject) => {
+        reader.readEntries(resolve, reject);
+      });
+      if (!subEntries || subEntries.length === 0) break;
+      for (const sub of subEntries) {
+        await walkEntryTree(sub, childPath, traversal);
+      }
     }
-    return accumulated;
   }
-  return [];
+}
+
+async function readEntryTree(entry: any): Promise<Array<{ path: string; content: string }>> {
+  const traversal: DroppedDirectoryTraversal = {
+    entriesVisited: 0,
+    contentBytes: 0,
+    files: [],
+  };
+  try {
+    await walkEntryTree(entry, '', traversal);
+    return traversal.files;
+  } catch (error) {
+    traversal.files.length = 0;
+    throw error;
+  }
 }
 
 export type SkillScope = 'workspace' | 'user' | 'builtin';

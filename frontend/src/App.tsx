@@ -98,6 +98,7 @@ export function App() {
   const wideExpansionHistoryRef = useRef<WideResearchTelemetry[]>([]);
   const wideTelemetryRef = useRef<WideResearchTelemetry | null>(null);
   const approvedPlanRef = useRef<ResearchPlan | null>(null);
+  const sessionGenerationRef = useRef(0);
 
   // Direction sync
   useEffect(() => {
@@ -164,7 +165,15 @@ export function App() {
   };
 
   const handleNewResearch = () => {
+    sessionGenerationRef.current += 1;
+    const previousSocket = wsRef.current;
+    wsRef.current = null;
+    if (previousSocket && previousSocket.readyState !== WebSocket.CLOSED) {
+      previousSocket.close();
+    }
+    approvedPlanRef.current = null;
     setResearchError('');
+    setIsSearching(false);
     setActiveReport(null);
     setCurrentQuery('');
     setQuery('');
@@ -185,6 +194,8 @@ export function App() {
 
   const handleStartResearch = async (searchQuery: string) => {
     if (!searchQuery.trim() || isSearching) return;
+
+    const sessionGeneration = sessionGenerationRef.current;
 
     const activeKey = (settings.keys[settings.llm_provider as keyof typeof settings.keys] || '').trim();
     if (settings.llm_provider !== 'ollama' && !activeKey) {
@@ -261,6 +272,7 @@ export function App() {
 
       if (!response.ok) throw new Error(`Server returned ${response.status}`);
       const data = await response.json();
+      if (sessionGeneration !== sessionGenerationRef.current) return;
       const sessionId = data.session_id;
       setActiveSessionId(sessionId);
 
@@ -272,6 +284,7 @@ export function App() {
       let sessionExpansionHistory: WideResearchTelemetry[] = [];
 
       ws.onmessage = (event) => {
+        if (sessionGeneration !== sessionGenerationRef.current) return;
         try {
           const payload = JSON.parse(event.data);
 
@@ -384,11 +397,13 @@ export function App() {
       };
 
       ws.onerror = (err) => {
+        if (sessionGeneration !== sessionGenerationRef.current) return;
         console.error('WebSocket error:', err);
         setResearchError(language === 'ar' ? 'انقطع اتصال البحث. تحقق من تشغيل التطبيق ثم أعد المحاولة.' : 'Research connection lost. Check that the desktop app is running, then try again.');
         setIsSearching(false);
       };
     } catch (err: any) {
+      if (sessionGeneration !== sessionGenerationRef.current) return;
       console.error('Failed to start research:', err);
       setResearchError(language === 'ar' ? 'تعذر بدء البحث. تأكد من تشغيل تطبيق سطح المكتب وإعداد النموذج ثم أعد المحاولة. سؤالك محفوظ أدناه.' : 'Could not start research. Check the desktop app and model setup, then try again. Your question is preserved below.');
       setIsSearching(false);
