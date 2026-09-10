@@ -177,3 +177,19 @@ An interoperability verification standard requiring imported Agent Skills packag
 
 ### FourPillarAcceptanceGate
 The comprehensive release qualification standard enforcing 100% compliance across four critical dimensions: Format Compliance (`agentskills.io`), Security & Path Boundary Defense, Triggering Precision (0% false positives), and Grounded Citation Fidelity (0% hallucinated citations).
+
+### EvidenceBundle
+An immutable, versioned data artifact produced by the research loop that encapsulates verified technical claims, SHA-256 content hashes, excerpt character offsets, source citations, and an explicit security classification (`contentIsUntrusted: true`). It serves as the trusted, injection-shielded boundary for downstream coding agents.
+
+### DualLoopOrchestrator
+The execution coordinator governing the transition between open-ended technical research (crawling official documentation, GitHub repositories, and RFCs) and deterministic code modification (proposing atomic diffs, executing scoped tests, and recovering from failures) in a single unified session.
+
+### RepoSnapshotHash
+A deterministic cryptographic fingerprint of the local workspace (combining git HEAD commit and SHA-256 hashes of tracked uncommitted files) computed at code-plan time to detect external workspace drift and prevent stale-plan merge collisions.
+
+### ProjectSession
+A composite workspace session entity located under `<workspace>/.lens/sessions/` that binds an overarching engineering effort to one or more versioned `ResearchSession` instances and multiple branching `CodingSession` tasks, allowing research evidence to be reused across multiple code modifications.
+
+### RepoInspectionPort
+A privileged, read-only interface mediating all agent interactions with the local filesystem during planning and research, strictly enforcing canonical workspace root containment, symlink/junction escape prevention, and exclusion filters for ignored and binary files.
+
