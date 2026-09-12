@@ -116,4 +116,26 @@ describe('Standard research loop on the pi core (ticket 05)', () => {
     const finished = emitted.find((e) => e.type === 'finished');
     assert.ok(finished, 'loop should still settle (report fallback) after abort');
   });
+
+  it('forwards the per-request session signal from the gateway without touching global defaults', async () => {
+    const ai = await pi();
+    const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
+    faux.setResponses([ai.fauxAssistantMessage('never')]);
+    // Global defaults carry NO signal here: forwarding happens per request.
+    setActiveCore('pi', { overrideFactory: async () => faux.provider });
+    const { generate: gatewayGenerate, getActiveCore: coreOf } = await import('../dist-electron/engine/modelGateway.js');
+    assert.equal(coreOf(), 'pi');
+    const aborted = AbortSignal.abort('test-abort');
+    let message = '';
+    try {
+      await gatewayGenerate(
+        { provider: 'openai', model: 'test-model', messages: [{ role: 'user', content: 'hi' }] },
+        { signal: aborted }
+      );
+    } catch (err) {
+      message = String(err);
+    }
+    assert.ok(message.includes('aborted'), `expected abort, got: ${message}`);
+    assert.ok(faux.state.callCount === 0, `no model request should have started, got ${faux.state.callCount}`);
+  });
 });

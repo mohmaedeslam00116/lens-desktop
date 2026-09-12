@@ -31,10 +31,21 @@ export function resetActiveCore(): void {
   activePiOptions = undefined;
 }
 
-/** Loop-facing generation entry point: routes to the active AgentCore. */
-export async function generate(request: LLMRequestOptions): Promise<string> {
+/** Per-request adapter options (currently the session AbortSignal). */
+export interface GatewayGenerateOptions {
+  signal?: AbortSignal;
+}
+
+/**
+ * Loop-facing generation entry point: routes to the active AgentCore.
+ * Per-request options (e.g. the session's AbortSignal) are merged over the
+ * global defaults so each research session forwards its own cancellation
+ * signal without mutating or sharing global abort state.
+ */
+export async function generate(request: LLMRequestOptions, perRequest?: GatewayGenerateOptions): Promise<string> {
   if (activeCore === 'pi') {
-    return await PiAdapter.generate(request, activePiOptions);
+    const adapterOptions = { ...(activePiOptions || {}), ...(perRequest || {}) };
+    return await PiAdapter.generate(request, adapterOptions);
   }
   return await ModelClient.generate(request);
 }

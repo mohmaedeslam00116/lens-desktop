@@ -219,7 +219,7 @@ Return ONLY a valid JSON array of strings, for example:
           ...llmBaseOpts,
           messages: [{ role: 'user', content: subqueryPrompt }],
           temperature: 0.2
-        });
+        }, { signal });
 
         const jsonMatch = subqueryResponse.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
@@ -548,7 +548,7 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
             chunk
           });
         }
-      });
+      }, { signal });
     } catch (err: any) {
       report = `# تقرير البحث: ${query}\n\nعذراً، حدث خطأ أثناء صياغة التقرير عبر مزود الذكاء الاصطناعي: ${err.message}\n\nالمصادر المكتشفة مسجلة في قائمة المراجع أدناه.`;
     }

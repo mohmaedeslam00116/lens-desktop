@@ -40,7 +40,6 @@ describe('Wide research synthesis on the pi core (ticket 06)', () => {
         provider: 'openai',
         model: 'test-model',
         apiKey: 'test-key',
-        onChunk: (chunk) => deltas.push(chunk),
       },
     });
 
