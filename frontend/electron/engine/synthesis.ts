@@ -13,7 +13,8 @@ import {
   SearchDepth,
   SourceItem
 } from './types';
-import { ModelClient, LLMRequestOptions } from './models';
+import { LLMRequestOptions } from './models';
+import { generate } from './modelGateway';
 import { AdmittedChunk, CandidateChunk } from './admission';
 import { CompactionShield } from './skills';
 
@@ -1104,7 +1105,7 @@ Synthesize the detailed analytical section now, starting with heading "### ${mil
       }
     } else if (this.options.llmOptions) {
       try {
-        rawContent = await ModelClient.generate({
+        rawContent = await generate({
           ...this.options.llmOptions,
           messages: [
             { role: 'system', content: systemPrompt },
@@ -1217,7 +1218,7 @@ Synthesize the overarching Executive Summary, Comparative Matrix, and Strategic 
       }
     } else if (this.options.llmOptions) {
       try {
-        rawContent = await ModelClient.generate({
+        rawContent = await generate({
           ...this.options.llmOptions,
           messages: [
             { role: 'system', content: systemPrompt },

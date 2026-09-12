@@ -1,7 +1,8 @@
 import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem, WideResearchRequest, PlanMilestone } from './types';
 import { MultiSearchProvider } from './search';
 import { PageScraper, ScrapedPage } from './scraper';
-import { ModelClient, LLMRequestOptions, ToolCallHandler } from './models';
+import { LLMRequestOptions, ToolCallHandler } from './models';
+import { generate } from './modelGateway';
 import { createEmbeddingModel, rankSourcePassages, fallbackEvidence, EmbeddingProvider } from './embeddings';
 import { auditEvidenceCoverage, generateAdaptiveHopPlan, formatAuditReflections } from './evidenceCoverage';
 import { SkillActivationManager, CompactionShield } from './skills';
@@ -214,7 +215,7 @@ Generate 3 to 4 distinct, high-impact search queries to investigate this topic t
 Return ONLY a valid JSON array of strings, for example:
 ["query 1", "query 2", "query 3"]`;
 
-        const subqueryResponse = await ModelClient.generate({
+        const subqueryResponse = await generate({
           ...llmBaseOpts,
           messages: [{ role: 'user', content: subqueryPrompt }],
           temperature: 0.2
@@ -534,7 +535,7 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
 
     let report = '';
     try {
-      report = await ModelClient.generate({
+      report = await generate({
         ...llmBaseOpts,
         messages: [
           { role: 'system', content: systemPrompt },
@@ -609,7 +610,7 @@ Cite relevant sections or sources where applicable.`;
     ];
 
     try {
-      return await ModelClient.generate({
+      return await generate({
         provider: options.provider as any,
         model: options.model,
         apiKey: options.apiKey,
