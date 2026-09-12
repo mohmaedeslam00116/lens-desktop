@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Engine decision (ADR-0009)**: adopted the **pi agent SDK** (`@earendil-works/pi-ai` + `@earendil-works/pi-agent-core`, MIT) as the LENS engine agent core, replacing the hand-rolled multi-provider `ModelClient` and orchestration plumbing; locked criteria require an Electron upgrade to a Node 22.19 line (>= 36.9.0) as a prerequisite. No runtime code changes yet — this entry locks the architecture decision (PATCH-class documentation).
+
 ## [1.1.0] - 2026-09-10
 
 ### Fixed

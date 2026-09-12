@@ -132,6 +132,8 @@ A standardized empirical disagreement alert formatted as a GitHub Flavored Markd
 
 ### EvidenceInspectionDrawer
 An interactive slide-over inspector component (`frontend/src/components/research/EvidenceInspectionDrawer.tsx`) that surfaces the verbatim source passage, relevance score and tier, credibility score, source domain badge with favicon, canonical URL, assigned milestone facet, sequential citation stepper navigation, and side-by-side bilingual claim-to-excerpt alignment whenever a user clicks any citation badge `[x]` in the living report or source shelf, preserving the reading flow without context loss.
+### AgentCore
+The replaceable seam of agent plumbing inside the embedded research engine: the multi-provider `ModelClient` (LLM requests, streaming, tool calling) and the agent-loop runtime. LENS owns the loop and the domain pipeline (retrieval, citation grounding, skills, `LiveEvent`); the AgentCore seam is implemented by an external agent SDK (ADR-0009: the pi agent SDK).
 
 ### FacetGroupedShelf
 A structured evidence explorer view (`frontend/src/components/research/FacetGroupedShelf.tsx`) that organizes the 100–200 ingested research sources into distinct sections corresponding to approved research plan milestones (`ResearchPlan.milestones`), backed by `frontend/electron/engine/evidenceShelf.ts`. Provides 5-dimensional filtering (milestone facet, citation status, relevance tier, source domain, and instant keyword search), real-time aggregate telemetry counters, and 1-click evidence inspection.
