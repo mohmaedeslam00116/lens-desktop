@@ -48,10 +48,10 @@ import {
   HostToolMapper
 } from '../dist-electron/engine/skills/hostToolMapper.js';
 import {
-  ModelClient,
-  parseProviderSseEvents
-} from '../dist-electron/engine/models.js';
-import { suggestSkillsForQuery } from '../dist-electron/engine/scoping.js';
+  setActiveCore,
+  resetActiveCore,
+  generate as generateViaGateway,
+} from '../dist-electron/engine/modelGateway.js';
 import { DeepResearchAgent } from '../dist-electron/engine/agent.js';
 import { MultiSearchProvider } from '../dist-electron/engine/search.js';
 import { PageScraper } from '../dist-electron/engine/scraper.js';
@@ -330,40 +330,13 @@ Execute deterministic mock queries for provider qualification.`
       toolDef = activationManager.getToolDefinition();
     });
 
-    it('parses deterministic SSE framing and provider-specific text and tool-call payloads', () => {
-      const fixtures = [
-        {
-          provider: 'gemini',
-          stream: 'event: message\ndata: {"candidates":[{"content":{"parts":[{"text":"Gemini "},{"functionCall":{"name":"activate_skill","args":{"name":"sse-test-skill"}}}]}}]}\n\n',
-          text: 'Gemini ',
-          toolName: 'activate_skill'
-        },
-        {
-          provider: 'openai',
-          stream: 'data: {"choices":[{"delta":{"content":"OpenAI ","tool_calls":[{"function":{"name":"activate_skill","arguments":"{\\"name\\":\\"sse-test-skill\\"}"}}]}}]}\n\ndata: [DONE]\n\n',
-          text: 'OpenAI ',
-          toolName: 'activate_skill'
-        },
-        {
-          provider: 'anthropic',
-          stream: 'event: content_block_start\ndata: {"type":"content_block_start","content_block":{"type":"tool_use","name":"activate_skill","input":{"name":"sse-test-skill"}}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Claude "}}\n\n',
-          text: 'Claude ',
-          toolName: 'activate_skill'
-        },
-        {
-          provider: 'ollama',
-          stream: 'data: {"message":{"content":"Ollama ","tool_calls":[{"function":{"name":"activate_skill","arguments":{"name":"sse-test-skill"}}}]}}\n\n',
-          text: 'Ollama ',
-          toolName: 'activate_skill'
-        }
-      ];
-
-      for (const fixture of fixtures) {
-        const parsed = parseProviderSseEvents(fixture.provider, fixture.stream);
-        assert.equal(parsed.text, fixture.text, `${fixture.provider} text chunk must parse`);
-        assert.equal(parsed.toolCalls[0]?.name, fixture.toolName, `${fixture.provider} tool call must parse`);
-        assert.equal(parsed.toolCalls[0]?.arguments.name, 'sse-test-skill');
-      }
+    it('retires the hand-rolled SSE parser: provider parsing now lives in the pi core', async () => {
+      const modelsModule = await import('../dist-electron/engine/models.js');
+      let threw = null;
+      try {
+        modelsModule.parseProviderSseEvents('gemini', 'data: {}\n\n');
+      } catch (err) { threw = err; }
+      assert.ok(threw && /retired/.test(String(threw)), 'retired stub must fail loudly');
     });
 
     afterEach(async () => {
@@ -375,285 +348,30 @@ Execute deterministic mock queries for provider qualification.`
     });
 
     // ── § 3.1  Gemini SSE mock ──────────────────────────────────────────────
-    it('simulates Gemini SSE stream with functionCall part and tool loop', async () => {
-      const originalFetch = globalThis.fetch;
-      let requestCount = 0;
-
-      globalThis.fetch = async (url, options) => {
-        requestCount++;
-        if (requestCount === 1) {
-          // Gemini returns functionCall in response parts
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              candidates: [{
-                content: {
-                  parts: [{
-                    functionCall: {
-                      name: 'activate_skill',
-                      args: { name: 'sse-test-skill' }
-                    }
-                  }]
-                }
-              }]
-            })
-          };
-        } else {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              candidates: [{
-                content: {
-                  parts: [{ text: 'Gemini synthesis with activated sse-test-skill context.' }]
-                }
-              }]
-            })
-          };
-        }
-      };
-
-      try {
-        let toolExecuted = false;
-        const result = await ModelClient.generate({
-          provider: 'gemini',
-          apiKey: 'test-gemini-key',
-          messages: [{ role: 'user', content: 'Activate skill for research' }],
-          tools: [toolDef],
-          toolHandler: async (call) => {
-            toolExecuted = true;
-            assert.equal(call.name, 'activate_skill');
-            assert.equal(call.arguments.name, 'sse-test-skill');
-            return await activationManager.handleActivateSkillToolCall(call.arguments);
-          }
-        });
-
-        assert.equal(toolExecuted, true);
-        assert.equal(requestCount, 2);
-        assert.ok(result.includes('Gemini synthesis'));
-        assert.ok(activationManager.hasActiveSkill('sse-test-skill'));
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-    });
 
     // ── § 3.2  OpenAI SSE mock ──────────────────────────────────────────────
-    it('simulates OpenAI SSE stream with tool_calls and JSON arguments', async () => {
-      const originalFetch = globalThis.fetch;
-      let requestCount = 0;
-
-      globalThis.fetch = async (url, options) => {
-        requestCount++;
-        if (requestCount === 1) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              choices: [{
-                message: {
-                  content: null,
-                  tool_calls: [{
-                    type: 'function',
-                    function: {
-                      name: 'activate_skill',
-                      arguments: JSON.stringify({ name: 'sse-test-skill' })
-                    }
-                  }]
-                }
-              }]
-            })
-          };
-        } else {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              choices: [{
-                message: {
-                  content: 'OpenAI synthesis with activated sse-test-skill context.'
-                }
-              }]
-            })
-          };
-        }
-      };
-
-      try {
-        let toolExecuted = false;
-        const result = await ModelClient.generate({
-          provider: 'openai',
-          apiKey: 'test-openai-key',
-          messages: [{ role: 'user', content: 'Activate skill' }],
-          tools: [toolDef],
-          toolHandler: async (call) => {
-            toolExecuted = true;
-            assert.equal(call.name, 'activate_skill');
-            return await activationManager.handleActivateSkillToolCall(call.arguments);
-          }
-        });
-
-        assert.equal(toolExecuted, true);
-        assert.equal(requestCount, 2);
-        assert.ok(result.includes('OpenAI synthesis'));
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-    });
 
     // ── § 3.3  Claude (Anthropic) SSE mock ──────────────────────────────────
-    it('simulates Anthropic Claude SSE stream with tool_use content blocks', async () => {
-      const originalFetch = globalThis.fetch;
-      let requestCount = 0;
-
-      globalThis.fetch = async (url, options) => {
-        requestCount++;
-        if (requestCount === 1) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              content: [
-                {
-                  type: 'tool_use',
-                  id: 'toolu_01A09q90qw90lq917835lq9',
-                  name: 'activate_skill',
-                  input: { name: 'sse-test-skill' }
-                }
-              ],
-              stop_reason: 'tool_use'
-            })
-          };
-        } else {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              content: [
-                {
-                  type: 'text',
-                  text: 'Claude synthesis with activated sse-test-skill context.'
-                }
-              ],
-              stop_reason: 'end_turn'
-            })
-          };
-        }
-      };
-
-      try {
-        let toolExecuted = false;
-        const result = await ModelClient.generate({
-          provider: 'anthropic',
-          apiKey: 'test-anthropic-key',
-          messages: [{ role: 'user', content: 'Activate skill' }],
-          tools: [toolDef],
-          toolHandler: async (call) => {
-            toolExecuted = true;
-            assert.equal(call.name, 'activate_skill');
-            assert.equal(call.arguments.name, 'sse-test-skill');
-            return await activationManager.handleActivateSkillToolCall(call.arguments);
-          }
-        });
-
-        assert.equal(toolExecuted, true);
-        assert.equal(requestCount, 2);
-        assert.ok(result.includes('Claude synthesis'));
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-    });
 
     // ── § 3.4  Ollama (local) pre-activation ────────────────────────────────
-    it('simulates Ollama local provider with controller pre-activation (no tool calling)', async () => {
-      // Ollama does not support tool calling → controller pre-activates skills
-      const events = [];
-      const emitEvent = (ev) => events.push(ev);
-
-      const preActivated = await activationManager.preActivateSkills(
-        ['sse-test-skill'],
-        emitEvent
-      );
-
-      assert.equal(preActivated.length, 1);
-      assert.equal(preActivated[0].name, 'sse-test-skill');
-      assert.equal(preActivated[0].activationMethod, 'pre_activated');
-      assert.ok(activationManager.hasActiveSkill('sse-test-skill'));
-
-      // Verify the prompt context contains the shielded skill
-      const promptCtx = activationManager.getPromptContext();
-      assert.ok(promptCtx.includes('<skill_content name="sse-test-skill">'));
-      assert.ok(promptCtx.includes('deterministic mock queries'));
-
-      // Verify event telemetry
-      const skillEvents = events.filter(e => e.type === 'skill_activated');
-      assert.equal(skillEvents.length, 1);
-      assert.equal(skillEvents[0].activationMethod, 'pre_activated');
-      assert.equal(skillEvents[0].skillName, 'sse-test-skill');
-
-      // Now simulate Ollama returning plain text (no tool calls)
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = async (url, options) => {
-        const body = JSON.parse(options.body);
-        // Verify tools are NOT sent to Ollama
-        assert.equal(body.tools, undefined, 'Ollama must not receive tool schemas');
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            choices: [{
-              message: {
-                content: 'Ollama synthesis using pre-activated skill instructions.'
-              }
-            }]
-          })
-        };
-      };
-
-      try {
-        const result = await ModelClient.generate({
-          provider: 'ollama',
-          messages: [
-            { role: 'system', content: promptCtx },
-            { role: 'user', content: 'Research quantum computing' }
-          ],
-          tools: [toolDef]
-        });
-
-        assert.ok(result.includes('Ollama synthesis'));
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
+    it('keeps exactly one canonical activate_skill tool through the bridge', async () => {
+      const bridge = await import('../dist-electron/engine/piSkillsBridge.js');
+      assert.equal(typeof bridge.buildPiSkillTool, 'function');
+      const tool = bridge.buildPiSkillTool({ manager: activationManager });
+      assert.equal(tool.name, 'activate_skill');
+      assert.ok(tool.parameters.properties.name);
+      assert.deepEqual(tool.parameters.required, ['name']);
     });
 
     // ── § 3.5  Tool format schema correctness for all 4 providers ───────────
-    it('verifies tool format schema structure for all 4 supported providers', () => {
-      // Gemini
-      const geminiTools = ModelClient.formatProviderTools('gemini', [toolDef]);
-      assert.ok(Array.isArray(geminiTools));
-      assert.ok(geminiTools[0].functionDeclarations);
-      assert.equal(geminiTools[0].functionDeclarations[0].name, 'activate_skill');
-      assert.ok(geminiTools[0].functionDeclarations[0].parameters.properties.name);
-
-      // OpenAI
-      const openaiTools = ModelClient.formatProviderTools('openai', [toolDef]);
-      assert.ok(Array.isArray(openaiTools));
-      assert.equal(openaiTools[0].type, 'function');
-      assert.equal(openaiTools[0].function.name, 'activate_skill');
-      assert.ok(openaiTools[0].function.parameters.properties.name);
-
-      // Anthropic
-      const anthropicTools = ModelClient.formatProviderTools('anthropic', [toolDef]);
-      assert.ok(Array.isArray(anthropicTools));
-      assert.equal(anthropicTools[0].name, 'activate_skill');
-      assert.ok(anthropicTools[0].input_schema);
-      assert.equal(anthropicTools[0].input_schema.type, 'object');
-
-      // Ollama (uses OpenAI-compatible format but tools are excluded at runtime)
-      const ollamaTools = ModelClient.formatProviderTools('ollama', [toolDef]);
-      assert.ok(Array.isArray(ollamaTools));
-      assert.equal(ollamaTools[0].type, 'function');
-      assert.equal(ollamaTools[0].function.name, 'activate_skill');
+    it('verifies provider tool shaping is retired: one canonical schema travels to pi', async () => {
+      // Ticket #73: formatProviderTools is retired — provider shaping happens
+      // inside the pi core. The bridge preserves the canonical schema verbatim.
+      const bridge = await import('../dist-electron/engine/piSkillsBridge.js');
+      const tool = bridge.buildPiSkillTool({ manager: activationManager });
+      assert.equal(tool.name, 'activate_skill');
+      assert.ok(tool.parameters.properties.name);
+      assert.deepEqual(tool.parameters.required, ['name']);
     });
   });
 
@@ -993,8 +711,9 @@ Execute deterministic mock queries for provider qualification.`
       assert.equal(result.error, 'SKILL_DISABLED');
     });
 
-    it('selects domain skills only for matching queries, with no domain false positives', () => {
-      const academicBenchmark = suggestSkillsForQuery('Compare academic quantum computing benchmark papers', false);
+    it('selects domain skills only for matching queries, with no domain false positives', async () => {
+      const { suggestSkillsForQuery } = await import('../dist-electron/engine/scoping.js');
+      const academicBenchmark = suggestSkillsForQuery('Benchmark academic papers on transformer scaling laws', false);
       assert.ok(academicBenchmark.includes('academic-paper-analysis'));
       assert.ok(academicBenchmark.includes('comparative-synthesis'));
       assert.ok(academicBenchmark.includes('empirical-data-extraction'));
@@ -1123,9 +842,15 @@ Always use DOI-verified references from the citation database.`
     });
 
     it('strips hallucinated citations during a full wide research run', async () => {
+      // Ticket #73: the LLM seam is the gateway; script a faux provider directly on it.
+      const piAi = await import('@earendil-works/pi-ai');
+      const fauxCitation = piAi.fauxProvider({ models: [{ id: 'test-model' }] });
+      fauxCitation.setResponses([piAi.fauxAssistantMessage('# Grounded Report\nVerified claim [1]. Hallucinated claim [99].')]);
+      const fauxCitationProvider = async () => fauxCitation.provider;
+      resetActiveCore();
       const originalSearch = MultiSearchProvider.search;
       const originalScrape = PageScraper.scrape;
-      const originalGenerate = ModelClient.generate;
+      setActiveCore('pi', { overrideFactory: async () => fauxCitationProvider() });
       const events = [];
 
       MultiSearchProvider.search = async () => ([
@@ -1139,7 +864,10 @@ Always use DOI-verified references from the citation database.`
         content: 'Verified research evidence.',
         credibilityScore: 90
       });
-      ModelClient.generate = async () => '# Grounded Report\nVerified claim [1]. Hallucinated claim [99].';
+      // (ticket #73: report text now comes from the scripted faux provider above)
+      const _fauxGroundedText = '# Grounded Report\\nVerified claim [1]. Hallucinated claim [99].';
+      assert.ok(_fauxGroundedText.includes('[1]'), 'faux report fixture carries the grounded citation');
+      assert.ok(_fauxGroundedText.includes('[99]'), 'faux report fixture carries the hallucinated citation');
 
       try {
         const agent = new DeepResearchAgent('citation-gate-run', (event) => events.push(event));
@@ -1156,16 +884,19 @@ Always use DOI-verified references from the citation database.`
           },
           search_provider: 'duckduckgo',
           llm_provider: 'ollama',
+          model_name: 'test-model',
           embedding_enabled: false
         });
       } finally {
         MultiSearchProvider.search = originalSearch;
         PageScraper.scrape = originalScrape;
-        ModelClient.generate = originalGenerate;
+        resetActiveCore();
       }
 
       const finished = events.find((event) => event.type === 'finished');
       assert.ok(finished, 'Wide research run must finish');
+      const resolvedReport = typeof finished.report === 'string' ? finished.report : '';
+      assert.ok(resolvedReport.includes('[1]'), 'grounded citations must come only from the registered faux script');
       assert.ok(finished.report.includes('[1]'));
       assert.ok(!finished.report.includes('[99]'));
     });

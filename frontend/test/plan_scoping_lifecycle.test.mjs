@@ -1,5 +1,8 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 import {
   generateResearchPlan,
@@ -291,11 +294,12 @@ describe('Collaborative Research Plan Scoping & Approval (Tracer 4)', () => {
       // Mock dependencies
       const origSearch = MultiSearchProvider.search;
       const origScrape = PageScraper.scrape;
-      const origGenerate = ModelClient.generate;
+      const gatewayModule = require('../dist-electron/engine/modelGateway.js');
+      const origGenerate = gatewayModule.generate;
 
       MultiSearchProvider.search = async () => [];
       PageScraper.scrape = async () => null;
-      ModelClient.generate = async () => 'Test summary report';
+      gatewayModule.generate = async () => 'Test summary report';
 
       try {
         await agent.run({
@@ -318,7 +322,7 @@ describe('Collaborative Research Plan Scoping & Approval (Tracer 4)', () => {
       } finally {
         MultiSearchProvider.search = origSearch;
         PageScraper.scrape = origScrape;
-        ModelClient.generate = origGenerate;
+        gatewayModule.generate = origGenerate;
       }
     });
   });
