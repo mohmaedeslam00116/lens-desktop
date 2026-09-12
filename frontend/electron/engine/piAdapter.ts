@@ -130,9 +130,9 @@ async function buildProvider(
   const spec = NATIVE_FACTORIES[providerId];
   if (spec) {
     const shim = await importPiAi();
-    const factory = shim[spec.factory] || shim.default;
+    const factory = shim[spec.factory];
     if (typeof factory !== 'function') {
-      throw new Error(`[PiAdapter] No factory '${spec.factory}' in pi provider module '${spec.module}'`);
+      throw new Error(`[PiAdapter] pi shim exports no provider factory '${spec.factory}' for provider '${providerId}'`);
     }
     return factory();
   }
@@ -188,6 +188,15 @@ function toolCallsOf(message: any): Array<{ id: string; name: string; arguments:
     }
   }
   return calls;
+}
+
+/** Maps a tool-handler result to the text returned to the model (success → result, failure → error). */
+export function piToolResultText(result: { success: boolean; result?: any; error?: any }): string {
+  const value = result.success ? result.result : result.error;
+  if (value === undefined || value === null || value === '') {
+    return result.success ? 'ok' : 'error';
+  }
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 async function readStream(
@@ -291,7 +300,7 @@ export async function generateWithPi(
         role: 'toolResult',
         toolCallId: call.id,
         toolName: call.name,
-        content: [{ type: 'text', text: result.error || result.result || (result.success ? 'ok' : 'error') }],
+        content: [{ type: 'text', text: piToolResultText(result) }],
         isError: !result.success,
         timestamp: Date.now(),
       });

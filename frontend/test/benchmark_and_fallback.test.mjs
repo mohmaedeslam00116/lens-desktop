@@ -56,11 +56,11 @@ describe('Fallback Mechanism Under 5 Failure Conditions', () => {
     // Mock search and scraper to return pre-scraped sources immediately
     const searchModule = require('../dist-electron/engine/search.js');
     const scraperModule = require('../dist-electron/engine/scraper.js');
-    const modelsModule = require('../dist-electron/engine/models.js');
+    const gatewayModule = require('../dist-electron/engine/modelGateway.js');
 
     const origSearch = searchModule.MultiSearchProvider.search;
     const origScrape = scraperModule.PageScraper.scrape;
-    const origGenerate = modelsModule.ModelClient.generate;
+    const origGenerate = gatewayModule.generate;
 
     let scrapeIndex = 0;
     searchModule.MultiSearchProvider.search = async () => [
@@ -71,7 +71,7 @@ describe('Fallback Mechanism Under 5 Failure Conditions', () => {
       const src = mockScraped.find(s => s.url === url) || mockScraped[scrapeIndex++ % mockScraped.length];
       return src;
     };
-    modelsModule.ModelClient.generate = async (opts) => {
+    gatewayModule.generate = async (opts) => {
       if (opts.messages?.[0]?.content?.includes('Principal Research Architect')) {
         return '["subquery 1", "subquery 2"]';
       }
@@ -90,7 +90,7 @@ describe('Fallback Mechanism Under 5 Failure Conditions', () => {
     } finally {
       searchModule.MultiSearchProvider.search = origSearch;
       scraperModule.PageScraper.scrape = origScrape;
-      modelsModule.ModelClient.generate = origGenerate;
+      gatewayModule.generate = origGenerate;
     }
 
     return events;

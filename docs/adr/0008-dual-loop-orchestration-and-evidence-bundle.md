@@ -15,8 +15,8 @@ We establish a four-part dual-loop orchestration contract:
    - The policy engine enforces that no text within an `EvidenceBundle` can create or expand capability grants.
 
 2. **Pre-Execution Workspace Fingerprinting (`RepoSnapshotHash`)**:
-   - When generating a code plan, LENS records `repoSnapshotHash` (combining git HEAD commit and SHA-256 hashes of tracked uncommitted files).
-   - Before proposing diffs or executing tests, the engine re-checks the fingerprint. If files were modified externally, it halts and prompts for re-verification to prevent stale-plan collisions.
+   - When generating a code plan, LENS records `repoSnapshotHash` combining the git HEAD commit, SHA-256 hashes of tracked uncommitted files, **and SHA-256 hashes of untracked files that exist at any planned output path** (generated directories such as `.git` and `.lens` are excluded). Untracked paths are included because a stale plan must never overwrite a file that appeared after fingerprinting — a tracked-only fingerprint would miss exactly that case.
+   - Before proposing diffs or executing tests, the engine re-checks the fingerprint. If files (tracked or untracked-at-planned-paths) were modified externally, it halts and prompts for re-verification to prevent stale-plan collisions.
 
 3. **Composite Workspace Session Model**:
    - We separate `ResearchSession` from `CodingSession`.
