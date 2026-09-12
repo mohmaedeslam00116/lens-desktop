@@ -107,4 +107,31 @@ describe('Pi event adapter: pi agent events to LiveEvent (ticket 03)', () => {
     assert.equal(emitted[1].type, 'thought');
     assert.equal(emitted[2].type, 'session_state');
   });
+
+  it('wirePiEvents invokes the SDK disposer and stops forwarding after unsubscribe', async () => {
+    const { ctx: c, emitted } = ctx();
+    let disposed = 0;
+    let listener;
+    const fakeAgent = { subscribe: (l) => { listener = l; return () => { disposed += 1; }; } };
+    const unsubscribe = wirePiEvents(fakeAgent, c);
+    await listener({ type: 'agent_start' });
+    assert.equal(emitted.length, 1);
+    unsubscribe();
+    unsubscribe(); // idempotent: a second call must not re-dispose
+    assert.equal(disposed, 1);
+    await listener({ type: 'agent_end' });
+    assert.equal(emitted.length, 1, 'no events forwarded after unsubscribe');
+  });
+
+  it('wirePiEvents tolerates a subscribe that returns no disposer', async () => {
+    const { ctx: c, emitted } = ctx();
+    const listeners = [];
+    const fakeAgent = { subscribe: (l) => { listeners.push(l); return undefined; } };
+    const unsubscribe = wirePiEvents(fakeAgent, c);
+    await listeners[0]({ type: 'agent_start' });
+    assert.equal(emitted.length, 1);
+    unsubscribe(); // must not throw when no disposer is available
+    await listeners[0]({ type: 'agent_end' });
+    assert.equal(emitted.length, 1, 'emissions stay guarded after unsubscribe even without a disposer');
+  });
 });

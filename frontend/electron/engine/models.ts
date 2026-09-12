@@ -337,15 +337,20 @@ export class ModelClient {
 
       // Quick ping query to verify API key — routed through the AgentCore
       // gateway so the legacy hand-rolled client stays retired (ticket #73).
+      // The gateway call carries a bounded timeout so a silent provider cannot
+      // hang the settings connection test indefinitely.
       const { generate } = await import('./modelGateway');
-      const response = await generate({
-        provider: norm as LLMProvider,
-        model: modelName || (norm === 'gemini' ? 'gemini-2.0-flash' : 'gpt-4o-mini'),
-        apiKey,
-        endpoint,
-        messages: [{ role: 'user', content: 'Say OK' }],
-        temperature: 0.1
-      });
+      const response = await generate(
+        {
+          provider: norm as LLMProvider,
+          model: modelName || (norm === 'gemini' ? 'gemini-2.0-flash' : 'gpt-4o-mini'),
+          apiKey,
+          endpoint,
+          messages: [{ role: 'user', content: 'Say OK' }],
+          temperature: 0.1
+        },
+        { signal: AbortSignal.timeout(10000) }
+      );
 
       if (!response) throw new Error('Received empty response from provider.');
 
