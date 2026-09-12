@@ -1,6 +1,6 @@
 # Research: pi-ecosystem package fact-sheet
 
-**Issue**: [#81](https://github.com/mohmaedeslam00116/lens-desktop/issues/81) · **Labels**: `wayfinder:research` · **As of**: 2026-09-13
+**Issue**: [#81](https://github.com/mohmaedeslam00116/lens-desktop/issues/81) · **Labels**: `wayfinder:research` · **As of**: 2026-09-13 (+03:00 local; registry publish timestamps below are UTC)
 **Method**: npm registry metadata + package tarball sources (downloaded and inspected, versions pinned below) + LENS engine source. Every claim below traces to one of those three primary sources; no secondary blogs or summaries were used.
 
 ## Verdicts at a glance
