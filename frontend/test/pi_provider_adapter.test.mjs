@@ -98,9 +98,18 @@ describe('Pi provider adapter (dormant behind the model seam, ticket 02)', () =>
     assert.equal(typeof p.streamSimple, 'function');
   });
 
-  it('is dormant: wiring nothing and leaving the existing model client untouched', async () => {
-    // This module is only imported by tests today; no agent loop should reference it yet.
-    const { ModelClient } = await import('../dist-electron/engine/models.js');
-    assert.ok(typeof ModelClient.generate === 'function');
+  it('confirms the hand-rolled client is retired and the gateway defaults to the pi core', async () => {
+    // Ticket #73: ModelClient.generate and the SSE parser are retired.
+    const models = await import('../dist-electron/engine/models.js');
+    assert.equal(typeof models.ModelClient.generate, 'undefined');
+    let threw = null;
+    try {
+      models.parseProviderSseEvents('gemini', 'data: {}\n\n');
+    } catch (err) {
+      threw = err;
+    }
+    assert.ok(threw && /retired/.test(String(threw)), 'retired SSE parser must fail loudly');
+    const { getActiveCore } = await import('../dist-electron/engine/modelGateway.js');
+    assert.equal(getActiveCore(), 'pi');
   });
 });

@@ -19,9 +19,6 @@ import {
 import {
   DeepResearchAgent
 } from '../dist-electron/engine/agent.js';
-import {
-  ModelClient
-} from '../dist-electron/engine/models.js';
 
 describe('Tracer 6: Dual-Path Skill Activation, Model Routing & Compaction Shield', () => {
   describe('CompactionShield: Context Compaction Protection', () => {
@@ -448,31 +445,21 @@ Always compute TAM, SAM, and SOM figures.`
       }
     });
 
-    it('formats activate_skill tool schema for Google Gemini', () => {
-      const formatted = ModelClient.formatProviderTools('gemini', [toolDef]);
-      assert.ok(Array.isArray(formatted));
-      assert.equal(formatted.length, 1);
-      assert.ok(Array.isArray(formatted[0].functionDeclarations));
-      assert.equal(formatted[0].functionDeclarations[0].name, 'activate_skill');
-      assert.ok(formatted[0].functionDeclarations[0].parameters.properties.name);
-    });
-
-    it('formats activate_skill tool schema for Anthropic Claude', () => {
-      const formatted = ModelClient.formatProviderTools('anthropic', [toolDef]);
-      assert.ok(Array.isArray(formatted));
-      assert.equal(formatted.length, 1);
-      assert.equal(formatted[0].name, 'activate_skill');
-      assert.ok(formatted[0].input_schema);
-      assert.equal(formatted[0].input_schema.type, 'object');
+    it('produces a single canonical activate_skill tool through the pi skills bridge', async () => {
+      const bridge = await import('../dist-electron/engine/piSkillsBridge.js');
+      const tool = bridge.buildPiSkillTool({ manager: activationManager });
+      assert.equal(tool.name, 'activate_skill');
+      assert.ok(tool.parameters.properties.name);
+      assert.deepEqual(tool.parameters.required, ['name']);
     });
 
     it('formats activate_skill tool schema for OpenAI & OpenAI-compatible providers', () => {
-      const formatted = ModelClient.formatProviderTools('openai', [toolDef]);
-      assert.ok(Array.isArray(formatted));
-      assert.equal(formatted.length, 1);
-      assert.equal(formatted[0].type, 'function');
-      assert.equal(formatted[0].function.name, 'activate_skill');
-      assert.ok(formatted[0].function.parameters.properties.name);
+      // Ticket #73: formatProviderTools is retired — provider tool shaping now
+      // lives inside the pi core; the bridge carries the canonical schema only.
+      const schema = toolDef.parameters;
+      assert.equal(schema.type, 'object');
+      assert.ok(schema.properties.name);
+      assert.deepEqual(schema.required, ['name']);
     });
 
     it('simulates handling Gemini tool call for skill activation', async () => {
@@ -518,72 +505,38 @@ Always compute TAM, SAM, and SOM figures.`
       assert.equal(result.name, 'market-dossier');
     });
 
-    it('executes full tool call loop in ModelClient.generate when provider triggers activate_skill', async () => {
-      const originalFetch = globalThis.fetch;
-      let requestCount = 0;
-
-      // Mock fetch: Request 1 returns OpenAI tool_calls, Request 2 returns synthesized text
-      globalThis.fetch = async (url, options) => {
-        requestCount++;
-        if (requestCount === 1) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              choices: [
-                {
-                  message: {
-                    content: null,
-                    tool_calls: [
-                      {
-                        type: 'function',
-                        function: {
-                          name: 'activate_skill',
-                          arguments: JSON.stringify({ name: 'market-dossier' })
-                        }
-                      }
-                    ]
-                  }
-                }
-              ]
-            })
-          };
-        } else {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              choices: [
-                {
-                  message: {
-                    content: 'Dossier generated using activated market-dossier skill instructions.'
-                  }
-                }
-              ]
-            })
-          };
-        }
-      };
-
+    it('executes the activate_skill tool loop through the pi core gateway (retired hand-rolled client)', async () => {
+      const ai = await import('@earendil-works/pi-ai');
+      const gateway = await import('../dist-electron/engine/modelGateway.js');
+      const faux = ai.fauxProvider({ models: [{ id: 'gateway-skill-model' }] });
+      faux.setResponses([
+        ai.fauxAssistantMessage([ai.fauxToolCall('activate_skill', { name: 'market-dossier' })]),
+        ai.fauxAssistantMessage('Dossier generated using activated market-dossier skill instructions.'),
+      ]);
+      gateway.setActiveCore('pi', { overrideFactory: async () => faux.provider });
       try {
         let toolExecuted = false;
-        const result = await ModelClient.generate({
-          provider: 'openai',
-          apiKey: 'test-key',
-          messages: [{ role: 'user', content: 'Generate market dossier' }],
-          tools: [toolDef],
-          toolHandler: async (call) => {
-            toolExecuted = true;
-            assert.equal(call.name, 'activate_skill');
-            return await activationManager.handleActivateSkillToolCall(call.arguments);
-          }
-        });
-
+        let result = '';
+        try {
+          result = await gateway.generate({
+            provider: 'openai',
+            model: 'gateway-skill-model',
+            apiKey: 'test-key',
+            messages: [{ role: 'user', content: 'Generate market dossier' }],
+            tools: [toolDef],
+            toolHandler: async (call) => {
+              toolExecuted = true;
+              assert.equal(call.name, 'activate_skill');
+              return await activationManager.handleActivateSkillToolCall(call.arguments);
+            },
+          });
+        } finally {
+          gateway.resetActiveCore();
+        }
         assert.equal(toolExecuted, true);
-        assert.equal(requestCount, 2);
-        assert.ok(result.includes('Dossier generated using activated market-dossier skill'));
+        assert.ok(result.includes('Dossier generated using activated market-dossier skill'), result.slice(0, 80));
       } finally {
-        globalThis.fetch = originalFetch;
+        gateway.resetActiveCore();
       }
     });
   });
