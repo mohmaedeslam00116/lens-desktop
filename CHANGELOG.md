@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Runtime (ADR-0009 prerequisite)**: upgraded Electron `29.4.6` → `38.8.6` (bundled Node `20.x` → `22.22.0`; ADR floor >= 22.19.0), `electron-builder` `24.13.3` → `26.15.3`, and `@types/node` `20.x` → `22.x`. Full existing suite green on the new runtime (342/342) — infrastructure-only, no behaviour change (ticket #67).
+- **Engine (ADR-0009, dormant seam work)**: added the pi-ai provider adapter implementing the existing model request contract (`LLMRequestOptions`) — 7 native cloud providers + Ollama via a custom OpenAI-compatible provider, token streaming, depth-capped tool loop, abort support — plus the pi-agent→`LiveEvent` event adapter mapping. Both are dormant behind the seam: no agent loop uses them yet; an ESM shim bridges the ESM-only pi packages into the CJS engine build. Full suite green (357/357) (tickets #68, #69).
 
 ## [1.1.0] - 2026-09-10
 
