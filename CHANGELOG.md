@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Research (issue #81)**: pi-ecosystem package fact-sheet (`docs/research/pi-ecosystem-fact-sheet.md`) — verified per-package facts for `pi-web-access@0.29.0`, `pi-subagents@0.67.0`, `@juicesharp/rpiv-todo@2.10.0`, and `billion-context@0.1.107` (API, runtime shape, LENS integration path, license, risks) with per-package verdicts against the "no external agent runtime" hard rule.
+- **Research (issue #82)**: LENS responsibility mapping to Pi SDK / packages / LENS-must-remain (`docs/research/responsibility-mapping.md`) — 20-responsibility mapping table (modelGateway/Agent/loops/admission/coverage/grounding/LiveEvent grounded in the post-migration engine) plus the must-remain gaps list feeding the architecture decision ticket.
 
 ### Changed
 - **Runtime (ADR-0009 prerequisite)**: upgraded Electron `29.4.6` → `44.3.0` (bundled Node `20.x` → `24.20.0`; ADR floor >= 22.19.0), `electron-builder` `24.13.3` → `26.15.3`, and `@types/node` `20.x` → `22.x` — infrastructure-only, no behaviour change (ticket #67).
