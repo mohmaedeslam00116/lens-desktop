@@ -133,18 +133,28 @@ export function mapPiEventToLiveEvents(
 
 /**
  * Subscribes to a pi Agent (pi-agent-core) and forwards mapped LiveEvents to
- * the provided emitter. Returns an unsubscribe function.
+ * the provided emitter. Returns a working unsubscribe function: the agent's
+ * own disposer is invoked and emissions are guarded by an active flag, so a
+ * closed/rewired session emitter never receives late events.
  */
 export function wirePiEvents(
-  piAgent: { subscribe?: (listener: (event: PiAgentEventLike) => Promise<void> | void) => void },
+  piAgent: {
+    subscribe?: (listener: (event: PiAgentEventLike) => Promise<void> | void) => (() => void) | void;
+  },
   ctx: PiEventBridgeContext
 ): () => void {
   if (typeof piAgent?.subscribe !== 'function') return () => {};
+  let active = true;
   const listener = (event: PiAgentEventLike) => {
+    if (!active) return;
     for (const live of mapPiEventToLiveEvents(event, ctx)) {
       ctx.emit(live);
     }
   };
-  piAgent.subscribe(listener);
-  return () => {};
+  const disposer = piAgent.subscribe(listener);
+  return () => {
+    if (!active) return;
+    active = false;
+    if (typeof disposer === 'function') disposer();
+  };
 }

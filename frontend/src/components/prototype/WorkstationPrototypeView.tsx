@@ -128,7 +128,7 @@ export function WorkstationPrototypeView({ language, onClose }: WorkstationProto
   };
 
   return (
-    <div className={`fixed inset-0 z-50 bg-[#111111] text-[#E0E0E0] flex flex-col font-sans select-none ${isAr ? 'rtl' : 'ltr'}`}>
+    <div dir={isAr ? 'rtl' : 'ltr'} className="fixed inset-0 z-50 bg-[#111111] text-[#E0E0E0] flex flex-col font-sans select-none">
       {/* Top Navbar */}
       <header className="h-11 border-b border-[#262626] bg-[#161616] px-4 flex items-center justify-between text-xs">
         <div className="flex items-center gap-3">
