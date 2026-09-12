@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Runtime (ADR-0009 prerequisite)**: upgraded Electron `29.4.6` → `38.8.6` (bundled Node `20.x` → `22.22.0`; ADR floor >= 22.19.0), `electron-builder` `24.13.3` → `26.15.3`, and `@types/node` `20.x` → `22.x`. Full existing suite green on the new runtime (342/342) — infrastructure-only, no behaviour change (ticket #67).
+
 ## [1.1.0] - 2026-09-10
 
 ### Fixed
