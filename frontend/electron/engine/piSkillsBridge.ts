@@ -103,9 +103,20 @@ export async function generateWithSkills(
 ): Promise<string> {
   const { PiAdapter } = await import('./piAdapter');
   const { tool, handler } = wireSkillsBridge(bridge);
-  const tools = [...(request.tools || []), { name: tool.name, description: tool.description, parameters: tool.parameters } as LLMToolDefinition];
+  // The bridge owns the single activate_skill definition: drop any duplicate that
+  // the caller may already have registered, then append the canonical one.
+  const tools = [
+    ...(request.tools || []).filter((t) => t.name !== tool.name),
+    { name: tool.name, description: tool.description, parameters: tool.parameters } as LLMToolDefinition,
+  ];
+  const previous = request.toolHandler;
+  const composed: ToolCallHandler = async (call) => {
+    if (call.name === tool.name) return await handler(call);
+    if (previous) return await previous(call);
+    return { success: false, error: `Unsupported tool: ${call.name}` };
+  };
   return await PiAdapter.generate(
-    { ...request, tools, toolHandler: handler },
+    { ...request, tools, toolHandler: composed },
     adapterOptions
   );
 }
