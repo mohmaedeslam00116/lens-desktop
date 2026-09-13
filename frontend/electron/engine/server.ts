@@ -191,11 +191,13 @@ function sendPayloadTooLargeResponse(req: http.IncomingMessage, res: http.Server
   });
   res.flushHeaders?.();
   res.end(JSON.stringify({ error: message }));
-  res.on('finish', () => {
-    setImmediate(() => {
-      if (!req.destroyed) req.destroy();
-    });
-  });
+  // Half-close gracefully: the client must be able to READ the 413 response
+  // even while it is still sending the oversized body. Destroying the request
+  // socket here sends RST ahead of the response bytes under load — clients
+  // then observe ECONNRESET instead of the rejection (real-world robustness
+  // gap surfaced by the report-export 413 test under parallel CPU load).
+  // 'Connection: close' plus draining to end releases the socket normally.
+  req.resume();
 }
 
 function extractArchivePayload(body: any): Buffer | Array<{ path: string; content: string }> | null {
