@@ -193,3 +193,42 @@ A composite workspace session entity located under `<workspace>/.lens/sessions/`
 ### RepoInspectionPort
 A privileged, read-only interface mediating all agent interactions with the local filesystem during planning and research, strictly enforcing canonical workspace root containment, symlink/junction escape prevention, and exclusion filters for ignored and binary files.
 
+### Parent Research Agent
+The orchestrator role of Agency Mode: owns facet decomposition into assignments, researcher concurrency and budget enforcement, evidence-auditor invocation, and the final synthesis. The parent never performs raw retrieval itself — subagents research only.
+
+### Researcher
+A specialized in-process subagent that investigates exactly one Research Facet through the retrieval plane and produces findings for evidence admission. A researcher owns no synthesis, no other facets, and cannot write the research plan.
+
+### Research Facet
+One assigned slice of the approved research plan (initially a 1:1 mapping onto an approved plan milestone) handed to exactly one Researcher. Facets never overlap across concurrently running researchers.
+
+### Researcher Brief
+The immutable tasking envelope the Parent Research Agent hands to a Researcher: its facet, selected role, budget share, and output contract. The brief's shape mirrors the pi-subagents delegation contract so a future host-based swap stays mechanical.
+
+### Agency Mode
+The flag-gated execution mode in which a research run is driven by the Parent Research Agent orchestrating parallel Researchers, as opposed to the legacy single-loop research path. Unflagged runs always execute the legacy path.
+
+### Dual Retrieval Plane
+The researcher retrieval architecture in which LENS-native search providers and scraping remain the primary, cost-controlled plane (keys and budgets owned by LENS settings), while the pi-web-access toolset attaches supplementarily for its specialized modes (answer-mode fetch, source verification).
+
+### Evidence Auditor
+A verification stage that runs after researcher fan-out and checks that every important claim maps to retrieved sources, producing structured verdicts. Verdicts annotate admission by default; gating admission is a settings-gated escalation proven safe by the parity harness.
+
+### Supervised Compression Proxy
+The out-of-process localhost subprocess (supervised, bound to the engine lifetime) through which long-context model traffic may route for compression. Compression shrinks model-bound context only — it never removes admitted evidence from the evidence bundle.
+
+### Researcher Role Catalog
+The closed five-role set (primary/web, technical/deep-dive, opposing/independent, recent-news, source-verifier) from which the Parent Research Agent deterministically assigns exactly one role to each Researcher.
+
+### Deficit-Driven Respecialization
+The bounded mechanism by which the Parent Research Agent spawns additional role-tagged Researchers in response to coverage-audit gaps, always constrained by the remaining session evidence budget so it cannot loop.
+
+### ResearcherTelemetry
+The additive live-event projection (`researcher_telemetry`, following the `wide_telemetry` precedent) carrying researcher lifecycle and progress — identity, role, facet, phase, and running counts. Evidence found by researchers flows as ordinary source events, never inside telemetry.
+
+### Todo Plan Projection
+The read-only engine→renderer view of the parent-owned research plan, delivered exclusively inside agency telemetry events. The renderer never reads the todo store directly, and only the Parent Research Agent writes plan state.
+
+### Evidence Verdict
+The structured outcome an Evidence Auditor produces for each important claim (supported vs. unverified against retrieved sources). Verdicts annotate admission and coverage telemetry by default; gating admission is a settings-gated escalation proven safe by the parity harness.
+
