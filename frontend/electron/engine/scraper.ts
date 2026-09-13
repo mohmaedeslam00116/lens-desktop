@@ -6,6 +6,10 @@ export interface ScrapedPage {
   domain: string;
   content: string;
   credibilityScore: number;
+  /** Research-facet provenance (ADR-0010 phase 2, ticket #89): set on pages
+   * retrieved by a researcher subagent for its assigned facet. */
+  milestoneId?: string;
+  milestoneTitle?: string;
 }
 
 export function calculateCredibilityScore(url: string): number {

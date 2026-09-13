@@ -139,11 +139,15 @@ export interface LiveEvent {
   node?: ResearchGraphNode;
   reflections?: string[];
   wideTelemetry?: WideResearchTelemetry;
+  /** Research-facet provenance on `source` events emitted by researcher
+   * subagents (ADR-0010 phase 2, ticket #89). */
+  milestoneId?: string;
+  milestoneTitle?: string;
   researcherTelemetry?: {
     researcherId: string;
     role: string;
     facet: string;
-    phase: 'started' | 'completed';
+    phase: 'started' | 'completed' | 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity';
     counts: { facetIndex: number; facetCount: number };
     todoProjection?: Array<{
       id: number;

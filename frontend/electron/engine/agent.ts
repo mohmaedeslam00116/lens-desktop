@@ -318,6 +318,19 @@ Return ONLY a valid JSON array of strings, for example:
       }
     }
 
+    // ADR-0010 phase 2 (#89): researcher subagents (researcher_mode) may seed
+    // the evidence pool with findings already tagged with per-facet milestone
+    // provenance. They were streamed live as `source` events by the
+    // researchers, so they join the pool without re-emission; registering
+    // their URLs keeps the dedupe contract (one fetch feeds every consumer).
+    const seededSources = ((request as { scraped_sources?: ScrapedPage[] }).scraped_sources ?? []) as ScrapedPage[];
+    for (const page of seededSources) {
+      if (page?.url && !discoveredUrls.has(page.url)) {
+        discoveredUrls.add(page.url);
+        scrapedSources.push(page);
+      }
+    }
+
     // 5. Evidence Coverage Audit & Adaptive Multi-Hop Retrieval
     const reflectionsList: string[] = [];
     const maxAdaptiveHops = depth === 'quick' ? 0 : depth === 'storm' ? 2 : 1;
@@ -594,7 +607,11 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
       title: s.title,
       domain: s.domain,
       snippet: s.content.slice(0, 160),
-      credibilityScore: s.credibilityScore
+      credibilityScore: s.credibilityScore,
+      // Per-facet provenance (ADR-0010 phase 2, #89): present on researcher
+      // subagent findings; undefined for legacy-loop retrievals.
+      ...(s.milestoneId ? { milestoneId: s.milestoneId } : {}),
+      ...(s.milestoneTitle ? { milestoneTitle: s.milestoneTitle } : {})
     }));
 
     this.emitEvent({

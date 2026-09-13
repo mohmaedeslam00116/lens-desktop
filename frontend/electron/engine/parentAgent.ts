@@ -1,7 +1,16 @@
 import { LiveEvent, ResearchPlan, ResearchRequest } from './types';
 import { DeepResearchAgent } from './agent';
+import { ResearcherAgent, ResearcherOptions, ResearcherRunResult } from './researcherAgent';
 import { SkillActivationManager } from './skills';
 import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
+
+/** Researcher construction seam (pi-subagents-shaped): the default factory
+ * builds in-process researchers; tests and later phases can supply
+ * specialized constructions without changing the orchestration flow. */
+export type ResearcherFactory = (sessionId: string, emitEvent: (event: LiveEvent) => void, options: ResearcherOptions) => ResearcherAgent;
+
+const defaultResearcherFactory: ResearcherFactory =
+  (sessionId, emitEvent, options) => new ResearcherAgent(sessionId, emitEvent, options);
 
 /**
  * parentAgent.ts — Parent Research Agent orchestration seam (ADR-0010 phase 1,
@@ -30,6 +39,26 @@ import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
  * projection carried per telemetry event is capped; truncation is flagged
  * additively so consumers can detect it. */
 const MAX_PROJECTION_TASKS = 50;
+
+/** Session-wide researcher-execution caps (ADR-0010 decision 8: researchers
+ * draw from the single session evidence budget — no second pool). Bounded so
+ * a large approved plan cannot fan out unbounded external calls or memory.
+ * Counters live at SESSION scope (module map keyed by sessionId, evicted on
+ * session teardown) — repeated runs for one session share the allowance. */
+const MAX_RESEARCHERS_PER_SESSION = 8;
+const MAX_RESEARCHER_FINDINGS_PER_SESSION = 48;
+
+interface ResearcherBudget {
+  researchersLaunched: number;
+  findingsAdmitted: number;
+}
+
+const researcherBudgets = new Map<string, ResearcherBudget>();
+
+/** Clears one session's researcher allowance — call on session teardown. */
+export function resetResearcherBudget(sessionId: string): void {
+  researcherBudgets.delete(sessionId);
+}
 
 /** One derived facet assignment: which facet (query) runs, in what order. */
 export interface FacetAssignment {
@@ -62,14 +91,18 @@ export class ParentResearchAgent {
   private emitEvent: (event: LiveEvent) => void;
   private activationManager?: SkillActivationManager;
 
+  private researcherFactory: ResearcherFactory;
+
   constructor(
     sessionId: string,
     emitEvent: (event: LiveEvent) => void,
-    activationManager?: SkillActivationManager
+    activationManager?: SkillActivationManager,
+    researcherFactory: ResearcherFactory = defaultResearcherFactory
   ) {
     this.sessionId = sessionId;
     this.emitEvent = emitEvent;
     this.activationManager = activationManager;
+    this.researcherFactory = researcherFactory;
   }
 
   /** Emits one researcher_telemetry lifecycle event with the (optional,
@@ -208,11 +241,81 @@ export class ParentResearchAgent {
         step: 'planning',
       });
 
+      // ADR-0010 phase 2 (ticket #89): with researcher_mode, each facet executes
+      // inside an in-process researcher subagent — a scoped pi-core run using
+      // the pi-web-access toolset (supplementary plane) over the LENS retrieval
+      // backbone — and its findings flow into the delegated loop's evidence
+      // pool pre-tagged with the facet's milestone provenance. Evidence
+      // admission, dedupe, and the single session budget stay authoritative.
+      const researcherMode = (request as { researcher_mode?: boolean }).researcher_mode === true;
+      if (researcherMode) {
+        const seed: ResearcherRunResult[] = [];
+        const budget = researcherBudgets.get(this.sessionId) ?? { researchersLaunched: 0, findingsAdmitted: 0 };
+        researcherBudgets.set(this.sessionId, budget);
+        for (const a of assignments) {
+          if (signal?.aborted) break;
+          // Session-wide caps: stop launching researchers once the session has
+          // used its researcher or source allowance (single session budget,
+          // ADR-0010 decision 8).
+          if (budget.researchersLaunched >= MAX_RESEARCHERS_PER_SESSION) {
+            console.warn(`[ParentResearchAgent] researcher cap (${MAX_RESEARCHERS_PER_SESSION}) reached; remaining facets stay with the delegated loop.`);
+            break;
+          }
+          if (budget.findingsAdmitted >= MAX_RESEARCHER_FINDINGS_PER_SESSION) {
+            console.warn(`[ParentResearchAgent] researcher source cap (${MAX_RESEARCHER_FINDINGS_PER_SESSION}) reached; remaining facets stay with the delegated loop.`);
+            break;
+          }
+          budget.researchersLaunched += 1;
+          const researcher = this.researcherFactory(this.sessionId, this.emitEvent, {
+            researcherId: researcherId(this.sessionId, a.facetIndex),
+            facetIndex: a.facetIndex,
+            facet: a.facet,
+            facetCount,
+            milestoneId: approvedPlan.milestones[a.facetIndex]?.id || `m${a.facetIndex + 1}`,
+            milestoneTitle: approvedPlan.milestones[a.facetIndex]?.query || a.facet,
+            toolPackages: true,
+            activationManager: this.activationManager,
+            searchProvider: request.search_provider,
+          });
+          // A transient researcher failure must not prevent the delegated
+          // retrieval/synthesis path from running: contain it and continue
+          // with the remaining facets (the facet falls back to the delegated
+          // loop's own retrieval). On abort, leave through the cleanup path.
+          let result: ResearcherRunResult;
+          try {
+            result = await researcher.run(request, signal);
+          } catch (err) {
+            if (signal?.aborted) break;
+            console.warn(
+              `[ParentResearchAgent] researcher failed for facet ${a.facetIndex}; delegating without its findings:`,
+              err
+            );
+            continue;
+          }
+          if (signal?.aborted) break;
+          // Admit only the remaining session allowance — one researcher's
+          // result can never overshoot the stated session-wide cap.
+          const remaining = MAX_RESEARCHER_FINDINGS_PER_SESSION - budget.findingsAdmitted;
+          const admitted = result.findings.slice(0, Math.max(0, remaining));
+          if (admitted.length < result.findings.length) {
+            console.warn(`[ParentResearchAgent] researcher findings truncated to the session allowance (${admitted.length}/${result.findings.length} admitted).`);
+          }
+          budget.findingsAdmitted += admitted.length;
+          seed.push({ ...result, findings: admitted });
+        }
+        // Findings enter the delegated loop's evidence pool with per-facet
+        // provenance; admission/coverage keep enforcing the LENS contracts.
+        (request as { scraped_sources?: unknown[] }).scraped_sources = [
+          ...((request as { scraped_sources?: unknown[] }).scraped_sources ?? []),
+          ...seed.flatMap((r) => r.findings),
+        ];
+      }
+
       // Delegate retrieval + synthesis verbatim to the legacy loop. The request
       // already carries the approved plan (trajectory freeze), so the delegated
       // run executes the identical fixture path and the final report is
-      // byte-equivalent by construction. #89 replaces this delegation with a
-      // real in-process researcher behind the same seams.
+      // byte-equivalent by construction. Later phases replace this delegation
+      // with real parallel researchers behind the same seams.
       const delegate = new DeepResearchAgent(this.sessionId, interceptingEmit, this.activationManager);
       await delegate.run(request, signal);
 
