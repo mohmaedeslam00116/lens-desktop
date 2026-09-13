@@ -1,7 +1,7 @@
 import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem, WideResearchRequest, PlanMilestone } from './types';
 import { MultiSearchProvider } from './search';
 import { PageScraper, ScrapedPage } from './scraper';
-import { LLMRequestOptions, ToolCallHandler } from './models';
+import { LLMRequestOptions, LLMToolDefinition, ToolCallHandler } from './models';
 import { generate } from './modelGateway';
 import { createEmbeddingModel, rankSourcePassages, fallbackEvidence, EmbeddingProvider } from './embeddings';
 import { auditEvidenceCoverage, generateAdaptiveHopPlan, formatAuditReflections } from './evidenceCoverage';
@@ -115,8 +115,31 @@ export class DeepResearchAgent {
           { language }
         );
       }
+      if (packageHandler && this.activationManager) {
+        return await packageHandler(call);
+      }
       return { success: false, error: `Unsupported tool: ${call.name}` };
     };
+
+    // Opt-in: attach the vendored pi ecosystem research tools (pi-web-access +
+    // rpiv-todo) so the model can drive web search/content fetch + task tracking
+    // in-process during a research run (request.tool_packages, default off).
+    let packageTools: LLMToolDefinition[] = [];
+    let packageHandler: ToolCallHandler | undefined;
+    if (request.tool_packages === true) {
+      const { buildResearchPackageTools } = await import('./piResearchTools');
+      const built = await buildResearchPackageTools(
+        {
+          sessionId: this.sessionId,
+          cwd: process.cwd(),
+          language: language === 'ar' ? 'ar' : 'en',
+          timeoutMs: 5 * 60 * 1000,
+        },
+        signal
+      );
+      packageTools = built.tools;
+      packageHandler = built.handler;
+    }
 
     const llmBaseOpts: Omit<LLMRequestOptions, 'messages'> = {
       provider: llmProvider,
@@ -125,7 +148,7 @@ export class DeepResearchAgent {
       endpoint: ollamaEndpoint,
       tools:
         llmProvider !== 'ollama' && this.activationManager
-          ? [this.activationManager.getToolDefinition()]
+          ? [this.activationManager.getToolDefinition(), ...packageTools]
           : undefined,
       toolHandler:
         llmProvider !== 'ollama' && this.activationManager
