@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Architecture (ADR-0010, issue #83)**: locked the Research Agency target architecture — Parent/Researcher orchestration via LENS-native in-process loops behind pi-subagents-shaped seams, the supervised compression proxy for long-context context, a Dual Retrieval Plane designed as the first phase of an expand–contract toward Pi Agent extensions as the long-term researcher/tooling layer, an advisory-then-gated Evidence Auditor, a closed 5-role Researcher Role Catalog with budget-bounded Deficit-Driven Respecialization, additive `researcher_telemetry` LiveEvents, parent-only todo-plan writes with read-only projections, and fan-out constants reusing the existing budget/scraper-pool/dedupe seams — plus the incremental migration spec (phases = tickets #88–#95) and parity gates. Domain glossary extended in `CONTEXT.md`.
 - **Research (issue #81)**: pi-ecosystem package fact-sheet (`docs/research/pi-ecosystem-fact-sheet.md`) — verified per-package facts for `pi-web-access@0.29.0`, `pi-subagents@0.67.0`, `@juicesharp/rpiv-todo@2.10.0`, and `billion-context@0.1.107` (API, runtime shape, LENS integration path, license, risks) with per-package verdicts against the "no external agent runtime" hard rule.
 
 ### Changed
