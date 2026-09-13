@@ -40,6 +40,47 @@ async function readBoundedJson<T = any>(res: Response, maxBytes = 2 * 1024 * 102
   return JSON.parse(text);
 }
 
+/** Reads at most `maxBytes` of a (typically error) response body, cancelling
+ * the stream beyond the cap — an error path must never buffer an unbounded
+ * body just to quote its first 200 characters. */
+async function readBoundedText(res: Response, maxBytes = 4096): Promise<string> {
+  const contentLengthStr = res.headers.get('content-length');
+  if (contentLengthStr && parseInt(contentLengthStr, 10) > maxBytes) {
+    try { await res.body?.cancel(); } catch {}
+    return '';
+  }
+  if (res.body && typeof (res.body as any).getReader === 'function') {
+    const reader = (res.body as any).getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          try { await reader.cancel(); } catch {}
+          break;
+        }
+        chunks.push(value);
+      }
+    }
+    const merged = new Uint8Array(Math.min(totalBytes, maxBytes));
+    let offset = 0;
+    for (const chunk of chunks) {
+      if (offset + chunk.byteLength > maxBytes) {
+        merged.set(chunk.subarray(0, maxBytes - offset), offset);
+        break;
+      }
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder('utf-8').decode(merged);
+  }
+  const text = await res.text();
+  return text.length > maxBytes ? text.slice(0, maxBytes) : text;
+}
+
 export class MultiSearchProvider {
   /**
    * Native keyed-provider search path (ADR-0013 contract state, ticket #110).
@@ -125,7 +166,7 @@ export class MultiSearchProvider {
       });
 
       if (!res.ok) {
-        const body = await res.text().catch(() => '');
+        const body = await readBoundedText(res, 4096).catch(() => '');
         throw new Error(`Tavily returned HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
       }
 
@@ -174,7 +215,7 @@ export class MultiSearchProvider {
       });
 
       if (!res.ok) {
-        const body = await res.text().catch(() => '');
+        const body = await readBoundedText(res, 4096).catch(() => '');
         throw new Error(`Serper returned HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
       }
 
