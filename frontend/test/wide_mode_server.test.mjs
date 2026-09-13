@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { normalizeResearchRequest, createResearchAgent } from '../dist-electron/engine/server.js';
+import { ParentResearchAgent } from '../dist-electron/engine/parentAgent.js';
 import { DeepResearchAgent } from '../dist-electron/engine/agent.js';
 import { WideResearchAgent } from '../dist-electron/engine/wideAgent.js';
 
@@ -13,15 +14,12 @@ describe('Explicit Wide Research server routing', () => {
     assert.ok(createResearchAgent(request, 'wide-session', () => {}) instanceof WideResearchAgent);
   });
 
-  it('keeps legacy storm depth on the standard direct agent path (legacy_mode escape hatch)', () => {
+  it('keeps storm depth on the agency path; wide routing is unaffected by the closure', () => {
     const request = normalizeResearchRequest({ query: 'Fast deep report', report_type: 'storm' });
     assert.equal(request.mode, 'standard');
-    // ADR-0012 default flip: the standard loop routes to the agency path by
-    // default; the legacy single-loop needs the explicit escape flag.
-    const legacyRequest = { ...request, legacy_mode: true };
-    assert.ok(
-      createResearchAgent(legacyRequest, 'storm-session', () => {}) instanceof DeepResearchAgent
-    );
+    // ADR-0010 closure (#104): storm depth is just another standard run —
+    // it routes through the agency path like every standard request.
+    assert.ok(createResearchAgent(request, 'storm-session', () => {}) instanceof ParentResearchAgent);
   });
 
   it('normalizes missing and invalid modes to standard', () => {

@@ -22,7 +22,9 @@ for the standard loop only.
 2. **Escape flag = `legacy_mode: true`** on the request. Resolution order:
    request flag > settings default. Any non-`false` value of the engine
    default keeps the agency path; `legacy_mode: true` restores the legacy
-   single-loop exactly as before the flip.
+   single-loop exactly as before the flip. *(Amended by #104: the flag and
+   its settings surface were removed after the soak waiver — see the
+   amendment below.)*
 3. **Authorization stays strictly gated — no plan-less fallback.** The agency
    path requires an approved plan, period. With the flip, the session
    lifecycle remains the owner of the plan-less UX: runs stop at the approval
@@ -49,6 +51,31 @@ for the standard loop only.
 - The authorization invariant is unchanged by the flip: retrieval is strictly
   gated until `isPlanAuthorized()` is satisfied, at both the session gate and
   the parent's engine guard.
+
+## Amendment — escape flag removed (ticket #104, 2026-09-13)
+
+The expand–contract closure completed sooner than the original soak framing
+assumed. The soak criterion was **waived by the repository operator** (recorded
+on #104): LENS has no field-telemetry channel — the desktop engine reports no
+usage metrics upstream — so `legacy_mode` usage and fallback rates were
+unmeasurable as written. In their place the removal is gated on the always-on
+CI contract surfaces: the #94 parity harness green after retiring its legacy
+leg, and the full offline suite green.
+
+As a result, decision 2's escape flag no longer exists:
+
+- The `legacy_mode` request flag and `legacyMode` settings surface are
+  **removed**; `researchDefaults.ts` is deleted.
+- **Requests still carrying `legacy_mode` have it silently dropped** — the
+  engine performs no request-schema validation and unknown fields are ignored;
+  a deprecation error would break clients with prebuilt payloads.
+- `DeepResearchAgent` survives only as the parent's delegated implementation
+  (plus the stateless followup-Q&A static and the agent-level parity test that
+  pins the #88 byte-equivalence contract); it is no longer a standard-loop
+  route.
+- The #94 harness runs two agency legs (delegation baseline vs fan-out); the
+  legacy-vs-delegation byte-equivalence stays pinned at the agent level by the
+  #88 contract test.
 
 ## Alternatives considered
 

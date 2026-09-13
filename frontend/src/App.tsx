@@ -256,7 +256,6 @@ export function App() {
           perspective,
           language,
           search_provider: settings.search_provider,
-          legacy_mode: settings.legacyMode === true,
           llm_provider: settings.llm_provider,
           model_name: settings.custom_model_name || settings.model_name || undefined,
           api_keys: settings.keys,

@@ -1167,26 +1167,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   )}
 
-                  {/* Research pipeline (ADR-0012): agency default + legacy escape hatch */}
-                  <div className="p-4 rounded-xl bg-surface border border-white/5 flex items-center justify-between gap-3">
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-200">{isArabic ? 'مسار البحث' : 'Research Pipeline'}</h4>
-                      <p className="text-[10px] text-slate-400 leading-relaxed mt-0.5">
-                        {isArabic
-                          ? 'يعمل البحث افتراضيًا عبر مسار الوكالة متعدد الباحثين. فعّل هذا الخيار للعودة إلى الحلقة الأحادية القديمة.'
-                          : 'Research runs through the multi-researcher agency pipeline by default. Enable to fall back to the legacy single loop.'}
-                      </p>
-                    </div>
-                    <label className="flex items-center gap-2 cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={current.legacyMode === true}
-                        onChange={(e) => setCurrent({ ...current, legacyMode: e.target.checked })}
-                        className="rounded border-white/20 bg-canvas text-accent focus:ring-0 focus:ring-offset-0"
-                      />
-                      <span>{isArabic ? 'الحلقة القديمة' : 'Legacy loop'}</span>
-                    </label>
-                  </div>
+                  {/* Research pipeline (ADR-0010 closure): the agency path is
+                      the standard research path; the legacy escape hatch was
+                      removed after its soak waiver (ticket #104). */}
                 </div>
               )}
 
