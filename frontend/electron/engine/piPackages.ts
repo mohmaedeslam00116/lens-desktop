@@ -219,10 +219,16 @@ export function toEngineTool(t: PackageTool): LLMToolDefinition {
  * Composes the engine-side handler for all captured package tools. A captured
  * tool's execute() returns pi's `{ content, isError, details }` envelope; the
  * handler normalizes it to the engine's `{ success, result, error }` shape.
+ *
+ * `opts.signal` (the research run's AbortSignal) is linked into every tool
+ * execution so user cancellation aborts in-flight web_search/fetch_content
+ * calls instead of leaving them running to the per-tool deadline; `opts.timeoutMs`
+ * honors the documented per-tool deadline instead of a hardcoded value.
  */
 export function wrapPackageToolHandler(
   tools: PackageTool[],
-  extra?: ToolCallHandler
+  extra?: ToolCallHandler,
+  opts?: { timeoutMs?: number; signal?: AbortSignal }
 ): ToolCallHandler {
   const byName = new Map(tools.map((t) => [t.name, t] as const));
   return async (call) => {
@@ -232,8 +238,13 @@ export function wrapPackageToolHandler(
     }
     const tool = byName.get(call.name);
     if (!tool) return { success: false, error: `Unsupported tool: ${call.name}` };
-    const timeoutMs = 5 * 60 * 1000;
+    const timeoutMs = opts?.timeoutMs ?? 5 * 60 * 1000;
     const ctrl = new AbortController();
+    const onAbort = () => ctrl.abort();
+    if (opts?.signal) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     timer.unref?.();
     try {
@@ -250,6 +261,7 @@ export function wrapPackageToolHandler(
       return { success: false, error: err?.message || String(err) };
     } finally {
       clearTimeout(timer);
+      opts?.signal?.removeEventListener('abort', onAbort);
     }
   };
 }
@@ -285,7 +297,9 @@ export async function loadPureTodoTool(options: PackageToolOptions): Promise<Pac
       parameters: types.TodoParamsSchema as Record<string, unknown>,
       async execute(_callId, params) {
         const result = reducer.applyTaskMutation(store.getState(sessionId), params.action, params);
-        store.commitState(sessionId, result.state);
+        // Mirror loadTodoPlanStore's rule: never persist an error op —
+        // unvalidated model params must not mutate the session store.
+        if (result?.op?.kind !== 'error') store.commitState(sessionId, result.state);
         return envelope.buildToolResult(params.action, params, result.state, result.op);
       },
     };

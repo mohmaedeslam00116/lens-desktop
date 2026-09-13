@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -35,6 +35,7 @@ export interface BillionContextHandle {
 
 let activeHandle: BillionContextHandle | null = null;
 let currentPid: number | null = null;
+let currentChild: ChildProcess | null = null;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -76,11 +77,35 @@ export async function startBillionContext(options: BillionContextOptions = {}): 
     return null;
   }
 
-  const child = spawn(binary, ['--port', String(port)], {
+  // Spawn through the Node executable: the resolved binary is a .js bundle
+  // (no exec bit / shebang guarantee on Linux/macOS, not a valid image on
+  // Windows), so spawning it directly is not portable.
+  const child = spawn(process.execPath, [binary, '--port', String(port)], {
     env: process.env,
     stdio: 'ignore',
   });
+  // An unhandled 'error' event (ENOENT/EACCES/ENOEXEC) throws asynchronously
+  // outside this promise and would crash the Electron main process; handle it
+  // and fall back to the documented compression-disabled mode instead.
+  child.on('error', (err) => {
+    console.warn('[billionContext] proxy child failed to start:', err);
+    if (currentChild === child) {
+      currentChild = null;
+      currentPid = null;
+      activeHandle = null;
+    }
+  });
+  child.on('exit', () => {
+    // Clear the tracked handle once the child is gone so a stale pid can never
+    // be signalled after OS pid reuse.
+    if (currentChild === child) {
+      currentChild = null;
+      currentPid = null;
+      activeHandle = null;
+    }
+  });
   child.unref?.();
+  currentChild = child;
   currentPid = child.pid ?? null;
 
   const base = `http://127.0.0.1:${port}`;
@@ -109,12 +134,16 @@ export async function startBillionContext(options: BillionContextOptions = {}): 
 
 /** Stop and reap the supervised child process. Idempotent. */
 export async function disposeBillion(): Promise<void> {
-  const pid = currentPid;
+  const child = currentChild;
+  currentChild = null;
   currentPid = null;
   activeHandle = null;
-  if (pid == null) return;
+  if (!child) return;
   try {
-    process.kill(pid, 'SIGKILL');
+    // Kill the tracked ChildProcess handle, never a raw pid: process.kill on
+    // a stale pid can signal an unrelated process after OS pid reuse, while
+    // child.kill() is a no-op once the child has exited.
+    child.kill('SIGKILL');
   } catch {
     // process already reaped
   }

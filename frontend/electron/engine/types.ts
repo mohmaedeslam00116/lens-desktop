@@ -236,7 +236,8 @@ export interface ResearchRequest {
   embedding_model?: string;
   embedding_api_key?: string;
   embedding_endpoint?: string;
-  embedding_enabled?: boolean;  /** Opt-in: attach the vendored pi ecosystem research tools (pi-web-access
+  embedding_enabled?: boolean;
+  /** Opt-in: attach the vendored pi ecosystem research tools (pi-web-access
    * + rpiv-todo) to the agent's tool loop. Defaults to false so existing
    * behavior and tests are unchanged. */
   tool_packages?: boolean;

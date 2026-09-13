@@ -128,12 +128,15 @@ export class DeepResearchAgent {
     let packageHandler: ToolCallHandler | undefined;
     if (request.tool_packages === true) {
       const { buildResearchPackageTools } = await import('./piResearchTools');
-      const built = await buildResearchPackageTools({
-        sessionId: this.sessionId,
-        cwd: process.cwd(),
-        language: language === 'ar' ? 'ar' : 'en',
-        timeoutMs: 5 * 60 * 1000,
-      });
+      const built = await buildResearchPackageTools(
+        {
+          sessionId: this.sessionId,
+          cwd: process.cwd(),
+          language: language === 'ar' ? 'ar' : 'en',
+          timeoutMs: 5 * 60 * 1000,
+        },
+        signal
+      );
       packageTools = built.tools;
       packageHandler = built.handler;
     }

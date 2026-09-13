@@ -9,10 +9,16 @@ export interface ResearchPackageTools {
   handler: ToolCallHandler;
 }
 
-let cachedPackageTools: PackageTool[] | undefined;
+/**
+ * Per-session tool cache. Tools are session-bound — the package host stamps
+ * `ctx.sessionId`/`ctx.cwd` onto each captured tool and the pure todo tool
+ * closes over the session-scoped store — so a process-wide cache would leak
+ * one session's state into another. Keyed by sessionId; evict on teardown.
+ */
+const cachedPackageTools = new Map<string, PackageTool[]>();
 
 /**
- * Loads (once per process) the vendored pi ecosystem tools and adapts them to
+ * Loads (per session) the vendored pi ecosystem tools and adapts them to
  * the engine tool contract.
  *
  *  - pi-web-access: 4 tools  (web_search, source_check, fetch_content,
@@ -22,10 +28,15 @@ let cachedPackageTools: PackageTool[] | undefined;
  *  - pi-subagents: deferred (needs a pi-coding-agent host; sources vendored).
  */
 export async function buildResearchPackageTools(
-  options: PackageToolOptions & { refresh?: boolean }
+  options: PackageToolOptions & { refresh?: boolean },
+  signal?: AbortSignal
 ): Promise<ResearchPackageTools> {
-  if (cachedPackageTools && !options.refresh) {
-    return { tools: cachedPackageTools.map(toEngineTool), handler: wrapPackageToolHandler(cachedPackageTools) };
+  const cached = cachedPackageTools.get(options.sessionId);
+  if (cached && !options.refresh) {
+    return {
+      tools: cached.map(toEngineTool),
+      handler: wrapPackageToolHandler(cached, undefined, { signal, timeoutMs: options.timeoutMs }),
+    };
   }
 
   const loaded: PackageTool[] = [];
@@ -40,13 +51,22 @@ export async function buildResearchPackageTools(
   if (todo) loaded.push(todo);
   else console.warn('[piResearchTools] rpiv-todo unavailable — proceeding without the todo tool.');
 
-  cachedPackageTools = loaded;
-  return { tools: loaded.map(toEngineTool), handler: wrapPackageToolHandler(loaded) };
+  cachedPackageTools.set(options.sessionId, loaded);
+  return {
+    tools: loaded.map(toEngineTool),
+    handler: wrapPackageToolHandler(loaded, undefined, { signal, timeoutMs: options.timeoutMs }),
+  };
 }
 
-/** Convenience for tests: clear the process-wide cache. */
+/** Convenience for tests: clear every session's cached tools. */
 export function resetPackageToolCache(): void {
-  cachedPackageTools = undefined;
+  cachedPackageTools.clear();
+}
+
+/** Evicts one session's cached tools — call on session teardown to keep the
+ * per-session map memory-bounded. */
+export function evictPackageToolCache(sessionId: string): void {
+  cachedPackageTools.delete(sessionId);
 }
 
 export { wrapPackageToolHandler } from './piPackages';

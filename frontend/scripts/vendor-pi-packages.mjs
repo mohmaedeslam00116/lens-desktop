@@ -1,8 +1,8 @@
 /**
  * Vendors the three TypeScript pi ecosystem packages from node_modules into
- * frontend/electron/vendor/pi/<pkg>/ so the embedded engine can load them
- * through Node's native type stripping (Node refuses to strip types under
- * node_modules). Run after `npm install`:
+ * dist-electron/vendor/pi/<pkg>/ so the embedded engine can load them through
+ * jiti (Node refuses to type-strip under node_modules; the emitted per-package
+ * package.json marks the copies as ESM). Run after `npm install`:
  *
  *   node scripts/vendor-pi-packages.mjs
  */
@@ -48,6 +48,12 @@ function copyTree(src, dst, stats) {
 
 for (const pkg of MANIFEST) {
   const srcRoot = path.join(nm, pkg);
+  if (!fs.existsSync(srcRoot)) {
+    // Partial installs (--omit, pruned lockfiles) must not break the build
+    // with an opaque ENOENT — skip loudly; the engine degrades per package.
+    console.warn(`[vendor-pi-packages] skipped ${pkg}: not installed under node_modules`);
+    continue;
+  }
   // `web-access`, `subagents`, `rpiv-todo` — strip the npm `pi-` prefix so the
   // engine uses stable short entry paths independent of the npm package name.
   const rel = pkg.startsWith('@') ? pkg.slice(pkg.indexOf('/') + 1) : pkg.replace(/^pi-/, '');
@@ -57,6 +63,7 @@ for (const pkg of MANIFEST) {
   result[pkg] = stats;
   // Mark the vendored tree as ESM so the loader treats intra-package `.ts`
   // files (which use top-level await) as modules.
+  fs.mkdirSync(dstRoot, { recursive: true });
   fs.writeFileSync(path.join(dstRoot, 'package.json'), JSON.stringify({ type: 'module' }) + '\n');
 }
 

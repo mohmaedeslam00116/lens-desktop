@@ -135,10 +135,18 @@ export class ParentResearchAgent {
     if (signal?.aborted) return;
 
     if (todoStore) {
-      for (const a of assignments) {
-        a.taskId = todoStore.createTask(a.facet, {
-          activeForm: `Researching: ${a.facet}`,
-        });
+      try {
+        for (const a of assignments) {
+          a.taskId = todoStore.createTask(a.facet, {
+            activeForm: `Researching: ${a.facet}`,
+          });
+        }
+      } catch (err) {
+        // The todo plan is orchestration bookkeeping, not research output:
+        // a store fault degrades to telemetry-only tracking (documented
+        // contract) instead of failing the whole research run.
+        console.warn('[ParentResearchAgent] todo plan write failed; telemetry-only tracking:', err);
+        todoStore = null;
       }
     }
 
@@ -147,8 +155,12 @@ export class ParentResearchAgent {
     // BEFORE any started telemetry is emitted, so every started snapshot shows
     // the full assignment set, not a sequential work-in-progress trail.
     if (todoStore) {
-      for (const a of assignments) {
-        todoStore.updateTask(a.taskId!, { status: 'in_progress' });
+      try {
+        for (const a of assignments) {
+          if (a.taskId !== undefined) todoStore.updateTask(a.taskId, { status: 'in_progress' });
+        }
+      } catch (err) {
+        console.warn('[ParentResearchAgent] todo status write failed:', err);
       }
     }
     for (const a of assignments) {
@@ -202,8 +214,12 @@ export class ParentResearchAgent {
     }
 
     for (const a of assignments) {
-      if (todoStore) {
-        todoStore.updateTask(a.taskId!, { status: 'completed', activeForm: `Researched: ${a.facet}` });
+      if (todoStore && a.taskId !== undefined) {
+        try {
+          todoStore.updateTask(a.taskId, { status: 'completed', activeForm: `Researched: ${a.facet}` });
+        } catch (err) {
+          console.warn('[ParentResearchAgent] todo completion write failed:', err);
+        }
       }
       this.emitTelemetry(a, facetCount, 'completed', todoStore);
     }
