@@ -286,26 +286,19 @@ describe('Agency default flip (ADR-0012, ticket #95 — server routing)', () => 
     assert.equal(parent.activationManager, manager);
   });
 
-  it('plan-less default run degrades to delegated legacy execution (ADR-0012 fallback, not an error)', async () => {
+  it('plan-less default runs fail loudly at the engine guard (authorization is strictly gated; the session lifecycle owns the plan-less UX)', async () => {
     stubFetchEmpty();
-    // Plan-less legacy runs make a subqueries call first, then the report.
-    const faux = await makeFaux(REPORT, { withSubqueries: true });
+    const faux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
-
     const emitted = [];
     const agent = new ParentResearchAgent('s-default-planless', (e) => emitted.push(e));
-    const request = baseRequest({ agency_mode: undefined, plan: undefined });
-    delete request.agency_mode;
+    const request = baseRequest();
     delete request.plan;
-    await agent.run(request);
-
-    const notice = emitted.find(
-      (e) => e.type === 'status' && typeof e.message === 'string' && e.message.includes('No approved research plan')
+    await assert.rejects(
+      agent.run(request),
+      /approved research plan/i,
     );
-    assert.ok(notice, 'degraded delegation is observable in telemetry');
-    const finished = emitted.find((e) => e.type === 'finished');
-    assert.ok(finished, 'run completes through the delegated legacy loop');
-    assert.ok(finished.report.startsWith(REPORT));
+    assert.equal(emitted.filter((e) => e.type === 'source').length, 0, 'no retrieval may start');
   });
 
   it('explicit agency_mode with an unapproved plan still fails loudly (contract violation)', async () => {

@@ -23,35 +23,40 @@ for the standard loop only.
    request flag > settings default. Any non-`false` value of the engine
    default keeps the agency path; `legacy_mode: true` restores the legacy
    single-loop exactly as before the flip.
-3. **Plan-less fallback: escape hatch, not silent reroute.** The agency path
-   requires an approved plan; default-standard runs whose plan is missing or
-   unapproved are not abandoned — the parent degrades: it logs a warning and
-   delegates to the legacy loop with all telemetry seams attached. A client
-   that explicitly sent an agency request (`agency_mode: true`) without an
-   approved plan still gets the loud error (explicit contract violation
-   remains loud).
+3. **Authorization stays strictly gated — no plan-less fallback.** The agency
+   path requires an approved plan, period. With the flip, the session
+   lifecycle remains the owner of the plan-less UX: runs stop at the approval
+   gate (`isPlanAuthorized`) before any agent is constructed, so a default
+   run without an approved plan never reaches retrieval. The parent's engine
+   guard throws for any unapproved plan regardless of how the request arrived
+   (explicit `agency_mode` or default routing). A plan-less delegation
+   fallback was considered and REJECTED in review: it would start retrieval
+   before authorization — an authorization bypass dressed as UX.
 4. **Wide mode is never rerouted** (unchanged phase-1 rule).
 5. **Settings lockstep**: a `legacyMode` boolean joins the research settings
    surface and is forwarded on every start request; `researchRequest.mjs`
    passes it through untouched.
 6. **Closure ticket**: legacy-loop removal is filed as a follow-up contract
-   ticket, blocked on agency-default soak time (per ADR-0010 expand–contract).
+   ticket (#104), blocked on agency-default soak time (per ADR-0010
+   expand–contract).
 
 ## Consequences
 
 - Default research execution now exercises the agency orchestration seams
   (#88–#94) on every standard run; the #94 harness gates regressions.
 - The legacy loop stays one flag away for escape-hatch and A/B comparison;
-  its removal is an explicit, scheduled contract step — not drift.
-- Plan-less default runs remain functional (degraded, logged) instead of
-  failing, preserving the pre-flip contract for unapproved-plan clients.
+  its removal is an explicit, scheduled contract step (#104) — not drift.
+- The authorization invariant is unchanged by the flip: retrieval is strictly
+  gated until `isPlanAuthorized()` is satisfied, at both the session gate and
+  the parent's engine guard.
 
 ## Alternatives considered
 
 - **Renderer sends `agency_mode: true` explicitly** — rejected: couples the
   flip to every payload-building call site and misses API/CLI entry points.
-- **Silent reroute on missing plan with no warning** — rejected: hides
-  authorization-contract violations; the degraded-delegation path must be
-  observable in telemetry/logs.
+- **Plan-less runs delegate to the legacy loop with a warning** — rejected in
+  review: starts retrieval without `isPlanAuthorized()`, weakening the
+  authorization policy. The session lifecycle already owns the plan-less UX
+  (approval gate precedes execution); the engine guard must not bypass it.
 - **Flip wide mode too** — rejected: out of scope for #95 (ADR-0010 phase 5
   covers pi-native tooling swaps under the same harness gate).

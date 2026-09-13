@@ -206,35 +206,22 @@ export class ParentResearchAgent {
     // pending/rejected plan with milestones must never pass this seam.
     //
     // ADR-0012 (phase-4 default flip): agency is now the DEFAULT standard
-    // path, so plan-less default runs are not contract violations — they are
-    // clients that never went through plan authorization. Degrade gracefully:
-    // warn, then delegate to the legacy loop with all telemetry seams intact
-    // (the delegated run below is unchanged). An EXPLICIT agency request
-    // (`agency_mode: true`) without an approved plan stays a loud error.
+    // path, so this guard is the engine-layer half of the authorization
+    // policy. Retrieval is STRICTLY gated until the plan is approved: the
+    // session lifecycle owns the plan-less UX (runs stop at the approval
+    // gate before any agent is constructed), and direct engine callers get
+    // this loud error. There is deliberately no silent fallback — review
+    // round 1 (#95 PR) rejected plan-less delegation as an authorization
+    // bypass.
     const approvedPlan = (request as { plan?: ResearchPlan }).plan;
     if (
       approvedPlan?.status !== 'approved'
       || !approvedPlan.milestones
       || approvedPlan.milestones.length === 0
     ) {
-      if (request.agency_mode === true) {
-        throw new Error(
-          '[ParentResearchAgent] agency mode requires an approved research plan with milestones'
-        );
-      }
-      console.warn(
-        '[ParentResearchAgent] default agency run has no approved plan; delegating to the legacy loop (ADR-0012 plan-less fallback).'
+      throw new Error(
+        '[ParentResearchAgent] agency mode requires an approved research plan with milestones'
       );
-      this.emitEvent({
-        type: 'status',
-        message: 'No approved research plan — running the standard research loop.',
-        step: 'planning',
-      });
-      // All telemetry seams stay attached (interceptingEmit): the delegated
-      // legacy loop's events flow through the same parent emit channel.
-      const delegate = new DeepResearchAgent(this.sessionId, this.emitEvent, this.activationManager);
-      await delegate.run(request, signal);
-      return;
     }
 
     const assignments = deriveFacetAssignments(approvedPlan);
