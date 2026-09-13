@@ -291,24 +291,26 @@ export class ParentResearchAgent {
         // Compression lease (ticket #92): acquired ONCE at parent scope for
         // the whole fan-out — researchers run concurrently against the
         // process-wide supervisor, so per-researcher acquire/release would
-        // leak children. Released in a finally block after the fan-out.
+        // leak children. The try opens BEFORE acquisition so a throwing
+        // notice callback (or any fault after an owned lease exists) still
+        // reaches the finally that releases the proxy child.
         let proxyBaseUrl: string | undefined;
         let compressionNotices: string[] = [];
         let ownsProxyLease = false;
-        if ((request as { compression_mode?: boolean }).compression_mode === true) {
-          const lease = await routeCompression({
-            enabled: true,
-            signal,
-          });
-          proxyBaseUrl = lease.proxyBaseUrl ?? undefined;
-          compressionNotices = lease.notices;
-          ownsProxyLease = lease.ownsProxy;
-          for (const notice of compressionNotices) {
-            this.emitEvent({ type: 'status', message: notice, step: 'compression' });
-          }
-        }
-
         try {
+          if ((request as { compression_mode?: boolean }).compression_mode === true) {
+            const lease = await routeCompression({
+              enabled: true,
+              signal,
+            });
+            proxyBaseUrl = lease.proxyBaseUrl ?? undefined;
+            compressionNotices = lease.notices;
+            ownsProxyLease = lease.ownsProxy;
+            for (const notice of compressionNotices) {
+              this.emitEvent({ type: 'status', message: notice, step: 'compression' });
+            }
+          }
+
         const budget = researcherBudgets.get(this.sessionId) ?? { researchersLaunched: 0, findingsAdmitted: 0 };
         researcherBudgets.set(this.sessionId, budget);
 

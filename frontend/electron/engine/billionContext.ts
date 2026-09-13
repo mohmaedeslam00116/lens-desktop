@@ -44,28 +44,51 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Health probe bounds: an absolute deadline (independent of socket
+ * inactivity) and a small response byte cap — a malicious/broken server
+ * streaming forever must not extend startup or balloon memory. */
+const PROBE_TIMEOUT_MS = 2000;
+const PROBE_MAX_BODY_BYTES = 4096;
+
 /**
  * Health probe over raw node:http — deliberately NOT globalThis.fetch, so
  * the supervisor's loopback probe is immune to app-level fetch
  * instrumentation (and test stubs). Honors an optional AbortSignal.
+ * Bounded: absolute deadline + byte-capped body, decoded once as UTF-8.
  */
 function probeHealth(base: string, signal?: AbortSignal): Promise<{ ok: boolean; upstream?: string }> {
   return new Promise((resolve) => {
     let settled = false;
+    const chunks: Buffer[] = [];
+    let bodyBytes = 0;
+    let req: http.ClientRequest | undefined;
     const finish = (result: { ok: boolean; upstream?: string }) => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadline);
       if (signal) signal.removeEventListener('abort', onAbort);
-      req.destroy();
+      req?.destroy();
       resolve(result);
     };
     const onAbort = () => finish({ ok: false });
-    const req = http.get(`${base}/__bili/health`, { timeout: 2000 }, (res) => {
-      let body = '';
-      res.on('data', (chunk: string) => { body += chunk; });
+    // Absolute probe deadline: socket-activity timeouts alone cannot bound a
+    // server that dribbles data forever.
+    const deadline = setTimeout(() => finish({ ok: false }), PROBE_TIMEOUT_MS);
+    req = http.get(`${base}/__bili/health`, (res) => {
+      res.on('data', (chunk: Buffer) => {
+        bodyBytes += chunk.length;
+        if (bodyBytes > PROBE_MAX_BODY_BYTES) {
+          finish({ ok: false });
+          return;
+        }
+        chunks.push(chunk);
+      });
       res.on('end', () => {
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
           try {
+            // One decode of the accumulated bytes: per-chunk string decoding
+            // would corrupt UTF-8 sequences split across chunk boundaries.
+            const body = Buffer.concat(chunks).toString('utf8');
             const parsed = JSON.parse(body) as { ok?: boolean; upstream?: string };
             finish({ ok: parsed.ok === true, upstream: parsed.upstream });
           } catch {
