@@ -289,9 +289,6 @@ export interface ApiSettings {
     tavily?: string;
     serper?: string;
   };
-  /** Escape hatch to the legacy single-loop research path (ADR-0012:
-   * the agency path is the default; this restores the pre-flip loop). */
-  legacyMode?: boolean;
 }
 
 export interface DiscoverArticle {

@@ -237,15 +237,16 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
   });
 });
 
-describe('Agency default flip (ADR-0012, ticket #95 — server routing)', () => {
-  it('routes the standard loop to the agency path by default; legacy_mode is the escape hatch; wide is never rerouted', () => {
+describe('Agency default flip closed (ADR-0012 + ticket #104 — server routing)', () => {
+  it('routes every standard run to the agency path; the removed legacy escape flag is silently dropped; wide is never rerouted', () => {
     // Default standard run → agency path (the flip).
     const standard = { query: 'Q', mode: 'standard' };
     assert.ok(createResearchAgent(standard, 's1', () => {}) instanceof ParentResearchAgent);
 
-    // Escape hatch: request flag restores the legacy single-loop.
-    const legacy = { query: 'Q', mode: 'standard', legacy_mode: true };
-    assert.ok(createResearchAgent(legacy, 's2', () => {}) instanceof DeepResearchAgent);
+    // The legacy escape flag is REMOVED (#104): silently dropped — no
+    // schema validation, unknown request fields are ignored.
+    const legacyFlag = { query: 'Q', mode: 'standard', legacy_mode: true };
+    assert.ok(createResearchAgent(legacyFlag, 's2', () => {}) instanceof ParentResearchAgent);
 
     // Wide is never rerouted — default or not.
     const wide = { query: 'Q', mode: 'wide' };
@@ -256,27 +257,6 @@ describe('Agency default flip (ADR-0012, ticket #95 — server routing)', () => 
     // Explicit agency opt-in still routes to the parent.
     const agency = { query: 'Q', mode: 'standard', agency_mode: true };
     assert.ok(createResearchAgent(agency, 's4', () => {}) instanceof ParentResearchAgent);
-  });
-
-  it('resolves the escape flag: request flag wins over the settings default', () => {
-    // Settings alone can restore the legacy loop.
-    const fromSettings = { query: 'Q', mode: 'standard' };
-    assert.ok(
-      createResearchAgent(fromSettings, 's5', () => {}, undefined, { legacyMode: true })
-        instanceof DeepResearchAgent
-    );
-    // An explicit request flag beats settings (false → agency despite settings).
-    const requestWins = { query: 'Q', mode: 'standard', legacy_mode: false };
-    assert.ok(
-      createResearchAgent(requestWins, 's6', () => {}, undefined, { legacyMode: true })
-        instanceof ParentResearchAgent
-    );
-    // Settings true + request true → legacy.
-    const both = { query: 'Q', mode: 'standard', legacy_mode: true };
-    assert.ok(
-      createResearchAgent(both, 's7', () => {}, undefined, { legacyMode: true })
-        instanceof DeepResearchAgent
-    );
   });
 
   it('forwards the skill activation manager into the parent so the delegated loop keeps skill activation', () => {

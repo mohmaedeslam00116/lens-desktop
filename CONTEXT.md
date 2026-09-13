@@ -206,7 +206,7 @@ One assigned slice of the approved research plan (initially a 1:1 mapping onto a
 The immutable tasking envelope the Parent Research Agent hands to a Researcher: its facet, selected role, budget share, and output contract. The brief's shape mirrors the pi-subagents delegation contract so a future host-based swap stays mechanical.
 
 ### Agency Mode
-The execution mode in which a research run is driven by the Parent Research Agent orchestrating parallel Researchers, as opposed to the legacy single-loop research path. Since the ADR-0012 default flip (ticket #95), Agency Mode is the DEFAULT standard research path; the legacy loop remains reachable via the `legacy_mode` escape flag (request flag over settings) pending removal.
+The execution mode in which a research run is driven by the Parent Research Agent orchestrating parallel Researchers. Since the ADR-0012 default flip (ticket #95) it is the standard research path, and since the contract closure (ticket #104) it is the ONLY standard path — the legacy single-loop route and its `legacy_mode` escape flag were removed (silently dropped on requests; see ADR-0012's amendment).
 
 ### Dual Retrieval Plane
 The researcher retrieval architecture in which LENS-native search providers and scraping remain the primary, cost-controlled plane (keys and budgets owned by LENS settings), while the pi-web-access toolset attaches supplementarily for its specialized modes (answer-mode fetch, source verification).
@@ -227,7 +227,7 @@ The bounded mechanism by which the Parent Research Agent spawns additional role-
 The regression gate (`engine/parityHarness.ts`, ADR-0011) that replays golden offline fixture runs through the legacy loop and both agency paths (delegation + researcher fan-out) and diffs coverage score, citation-grounding audit, admission sets, and the shared LiveEvent backbone against documented thresholds. It protects the agency default flip, auditor gating, and fan-out constant tuning.
 
 ### Legacy Escape Flag
-The `legacy_mode: true` request flag (settings mirror: `legacyMode`) that routes a standard research run back to the legacy single loop after the ADR-0012 default flip. Resolution order: request flag over settings default; wide mode is never rerouted. Removal is scheduled by the legacy-loop contract ticket.
+*(Removed, ticket #104.)* Formerly the `legacy_mode: true` request flag (settings mirror: `legacyMode`) that routed a standard research run back to the legacy single loop after the ADR-0012 default flip. Requests still carrying it have the flag silently dropped — the engine performs no request-schema validation. The legacy loop survives only as the parent's delegated implementation, pinned by the #88 byte-equivalence contract at the agent level.
 
 ### ResearcherTelemetry
 The additive live-event projection (`researcher_telemetry`, following the `wide_telemetry` precedent) carrying researcher lifecycle and progress — identity, role, facet, phase, and running counts. Evidence found by researchers flows as ordinary source events, never inside telemetry.

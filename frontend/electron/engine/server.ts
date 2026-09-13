@@ -5,10 +5,12 @@ import { LiveEvent, ResearchPlan, ResearchRequest, WideResearchRequest } from '.
 import { ModelClient } from './models';
 import { DeepResearchAgent } from './agent';
 import { ParentResearchAgent } from './parentAgent';
+// ADR-0010 closure (ticket #104): DeepResearchAgent's only remaining
+// consumers are the followup Q&A static and the wide-mode session-completion
+// path — the standard-loop route now goes exclusively through the parent.
 import { evictPackageToolCache } from './piResearchTools';
 import { resetResearcherBudget } from './parentAgent';
 import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
-import { shouldUseAgencyPath, ResearchPathSettings } from './researchDefaults';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
 import { SessionLifecycleManager, ResearchSession } from './sessionLifecycle';
@@ -45,19 +47,16 @@ export function createResearchAgent(
   sessionId: string,
   emitEvent: (event: LiveEvent) => void,
   activationManager?: SkillActivationManager,
-  settings?: ResearchPathSettings,
-): DeepResearchAgent | WideResearchAgent | ParentResearchAgent {
-  // ADR-0010 phase 4 / ADR-0012 (ticket #95): the standard loop DEFAULTS to
-  // the agency path (Parent Research Agent). `legacy_mode: true` (request
-  // flag wins over settings) is the escape hatch back to the legacy
-  // single-loop pending removal (expand–contract closure). Wide mode is
-  // never rerouted.
-  if (request.mode !== 'wide' && shouldUseAgencyPath(request, settings)) {
+): WideResearchAgent | ParentResearchAgent {
+  // ADR-0010 phase 4/5 closure (ticket #104): the agency path IS the standard
+  // research path. The legacy single-loop escape hatch (`legacy_mode` request
+  // flag / `legacyMode` setting) was removed after its soak waiver — requests
+  // still carrying the flag have it silently dropped (no schema validation;
+  // documented in ADR-0012 and #104). Wide mode is never rerouted.
+  if (request.mode !== 'wide') {
     return new ParentResearchAgent(sessionId, emitEvent, activationManager);
   }
-  return request.mode === 'wide'
-    ? new WideResearchAgent(sessionId, emitEvent, {}, activationManager)
-    : new DeepResearchAgent(sessionId, emitEvent, activationManager);
+  return new WideResearchAgent(sessionId, emitEvent, {}, activationManager);
 }
 
 const sessionManager = new SessionLifecycleManager();

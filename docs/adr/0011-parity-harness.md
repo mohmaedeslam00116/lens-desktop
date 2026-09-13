@@ -47,7 +47,10 @@ artifact identifying the failing stage.
      `report_chunk` runs collapse (chunk boundaries are
      arrival-timing dependent). The remaining sequence must be equal to
      the legacy loop's.
-2. **Golden fixtures** (`frontend/test/fixtures/parity/*.json`): plan +
+2. **Golden fixtures** *(amended by #104: the harness runs two agency legs —
+   delegation baseline vs fan-out — after the legacy single-loop route was
+   removed; the legacy-vs-delegation byte-equivalence remains pinned at the
+   agent level by the #88 contract test)*: plan +
    offline retrieval stubs (per-facet search/scrape maps) + expected report.
    Fixture JSON stores the plan and retrieval maps; deterministic offline
    agents live in the harness. No network. The agency leg runs with

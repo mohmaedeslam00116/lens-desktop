@@ -1,24 +1,23 @@
 /**
- * parityHarness.ts — parity regression harness (ADR-0010 phase-3 gate, ticket #94).
+ * parityHarness.ts — parity regression harness (ADR-0010 phase-3 gate, ticket #94;
+ * two-leg contract since ticket #104's legacy-loop removal).
  *
- * Replays golden fixture runs through BOTH research paths — the legacy
- * standard loop (DeepResearchAgent) and the agency path (ParentResearchAgent
- * with per-facet researchers) — in the same process on identical offline
- * fixtures, and diffs the outcomes:
+ * Replays golden fixture runs through BOTH agency legs in the same process on
+ * identical offline fixtures, and diffs the outcomes:
  *
  *   1. Coverage score           |Δ overallScore| ≤ 0.05 (rounded to 2 dp)
  *   2. Citation grounding audit identical (sanitized report + per-claim
  *      audit fields over the shared evidence pool)
- *   3. Admission counts         exact match (finished sources + source events)
- *   4. LiveEvent sequence       identical shared backbone (additive
- *                               agency-only events filtered, consecutive
- *                               report_chunk runs collapsed)
+ *   3. Admission counts         exact match as distinct URL sets
+ *   4. LiveEvent sequence       identical delegated-loop backbone
+ *                               (additive/researcher events excluded,
+ *                               consecutive report_chunk runs collapsed)
  *
  * Equivalence thresholds (ADR-0011):
- *  - Coverage: |Δ| ≤ 0.05 — both paths ingest through the same admission
+ *  - Coverage: |Δ| ≤ 0.05 — both legs ingest through the same admission
  *    pipeline; small numeric drift from MMR ordering is tolerated, semantic
  *    drift is not.
- *  - Grounding / admissions / sequence: EXACT — both paths must make
+ *  - Grounding / admissions / sequence: EXACT — both legs must make
  *    identical admission and grounding decisions on identical evidence.
  *
  * Fixtures are offline: the harness injects a routing `fetchImpl` that serves
@@ -27,27 +26,26 @@
  * stack runs in every leg. The faux LLM provider is supplied by the caller
  * (the same one for every leg → identical synthesis inputs).
  *
- * Per fixture the harness runs THREE legs:
- *   - legacy    : DeepResearchAgent (the reference path)
- *   - delegation: ParentResearchAgent with researcher_mode OFF — the strict
- *                 LiveEvent-sequence stage pins this leg's shared backbone
- *                 (source events included) to the legacy loop (the #88
- *                 byte-equivalence contract, generalized)
+ * Per fixture the harness runs TWO legs (ticket #104 retired the legacy
+ * DeepResearchAgent leg; legacy-vs-delegation byte-equivalence remains pinned
+ * at the agent level by the #88 contract test in test/parent_agent.test.mjs):
+ *   - delegation: ParentResearchAgent with researcher_mode OFF — the
+ *                 BASELINE leg (pure parent-delegated loop) and the reference
+ *                 for the strict sequence stage
  *   - fanout    : ParentResearchAgent with researcher_mode ON — the outcome
  *                 stages (coverage / grounding / admissions) pin this leg's
- *                 RESULTS to the legacy loop. Comparisons here are
+ *                 RESULTS to the baseline. Comparisons here are
  *                 order-insensitive (admission set semantics): researchers
  *                 may admit the same pages in a different order and emit
  *                 extra per-facet `source` events; the SET of admitted
  *                 sources, the coverage score, and the grounding decisions
  *                 must still match exactly.
  *
- * The agency legs run with `respecialization: false` for deterministic
- * launch counts (ADR-0011; #93's deficit follow-ups are exercised by their
- * own suite).
+ * Both legs run with `respecialization: false` for deterministic launch
+ * counts (ADR-0011; #93's deficit follow-ups are exercised by their own
+ * suite).
  */
 
-import { DeepResearchAgent } from './agent';
 import { ParentResearchAgent } from './parentAgent';
 import { resetActiveCore, setActiveCore } from './modelGateway';
 import { auditEvidenceCoverage } from './evidenceCoverage';
@@ -118,12 +116,16 @@ interface LegOutcome {
   finished: { report?: string; sources?: SourceItem[] } | null;
 }
 
-/** Collapse consecutive report_chunk runs and strip agency-only additive
- * events — the shared backbone contract (ticket #88 parity test precedent). */
+/** Collapse consecutive report_chunk runs and strip additive/leg-specific
+ * events — the delegated-loop backbone contract (#88 precedent, #104
+ * two-leg form). `source` events are excluded: the fan-out leg emits
+ * per-researcher provenance copies the admissions stage already covers as
+ * URL sets. */
 export function backboneOf(events: LiveEvent[]): string[] {
   const filtered = events.filter(
     (e) => e.type !== 'researcher_telemetry'
       && e.type !== 'fanout_telemetry'
+      && e.type !== 'source'
       && !(e.type === 'status' && typeof e.message === 'string' && e.message.includes('agency mode'))
   );
   const backbone: string[] = [];
@@ -192,7 +194,7 @@ function makeRequest(fixture: ParityFixture, researcherMode: boolean): ResearchR
 
 async function runLeg(
   fixture: ParityFixture,
-  path: 'legacy' | 'delegation' | 'fanout',
+  path: 'delegation' | 'fanout',
   options: ParityHarnessOptions
 ): Promise<LegOutcome> {
   const events: LiveEvent[] = [];
@@ -203,17 +205,13 @@ async function runLeg(
   resetActiveCore();
   setActiveCore('pi', { overrideFactory: async () => options.provider });
   try {
-    if (path === 'legacy') {
-      await new DeepResearchAgent(`${options.sessionIdPrefix ?? 'parity'}-${fixture.name}`, emit).run(request);
-    } else {
-      await new ParentResearchAgent(
-        `${options.sessionIdPrefix ?? 'parity'}-${fixture.name}`,
-        emit,
-        undefined,
-        undefined,
-        { respecialization: false }
-      ).run(request);
-    }
+    await new ParentResearchAgent(
+      `${options.sessionIdPrefix ?? 'parity'}-${fixture.name}`,
+      emit,
+      undefined,
+      undefined,
+      { respecialization: false }
+    ).run(request);
   } finally {
     globalThis.fetch = previousFetch;
     resetActiveCore();
@@ -226,9 +224,10 @@ async function runLeg(
 }
 
 /** Compare one fixture across all four stages:
- * outcome stages pin the fan-out leg to the legacy loop (order-insensitive
- * admission semantics); the sequence stage pins the delegation leg's shared
- * backbone to the legacy loop. */
+ * outcome stages pin the fan-out leg to the delegation baseline
+ * (order-insensitive admission semantics); the sequence stage pins the
+ * delegated-loop backbone to the recorded baseline contract (#88 precedent,
+ * now agent-level). */
 export async function checkFixture(
   fixture: ParityFixture,
   options: ParityHarnessOptions
@@ -236,7 +235,6 @@ export async function checkFixture(
   const stages: ParityStageResult[] = [];
   const coverageThreshold = options.thresholds?.coverageDelta ?? PARITY_THRESHOLDS.coverageDelta;
 
-  const legacy = await runLeg(fixture, 'legacy', options);
   const delegation = await runLeg(fixture, 'delegation', options);
   const fanout = await runLeg(fixture, 'fanout', options);
 
@@ -248,14 +246,14 @@ export async function checkFixture(
       (leg.finished?.sources ?? []).map((s) => ({ content: s.passage ?? s.snippet ?? '', domain: s.domain })),
       { language: fixture.language === 'ar' ? 'ar' : 'en' }
     ).overallScore;
-  const legacyCoverage = coverageOf(legacy);
+  const baselineCoverage = coverageOf(delegation);
   const fanoutCoverage = coverageOf(fanout);
-  const coverageDelta = Math.abs(Number((legacyCoverage - fanoutCoverage).toFixed(2)));
+  const coverageDelta = Math.abs(Number((baselineCoverage - fanoutCoverage).toFixed(2)));
   stages.push({
     stage: 'coverage',
     ok: coverageDelta <= coverageThreshold,
-    detail: `legacy=${legacyCoverage} fanout=${fanoutCoverage} |Δ|=${coverageDelta} (≤ ${coverageThreshold})`,
-    expected: legacyCoverage,
+    detail: `delegation=${baselineCoverage} fanout=${fanoutCoverage} |Δ|=${coverageDelta} (≤ ${coverageThreshold})`,
+    expected: baselineCoverage,
     actual: fanoutCoverage,
   });
 
@@ -281,16 +279,16 @@ export async function checkFixture(
       hallucinatedIndices: v.hallucinatedIndices,
     };
   };
-  const legacyGrounding = groundingOf(legacy);
+  const baselineGrounding = groundingOf(delegation);
   const fanoutGrounding = groundingOf(fanout);
-  const groundingEqual = JSON.stringify(legacyGrounding) === JSON.stringify(fanoutGrounding);
+  const groundingEqual = JSON.stringify(baselineGrounding) === JSON.stringify(fanoutGrounding);
   stages.push({
     stage: 'grounding',
     ok: groundingEqual,
     detail: groundingEqual
-      ? `identical grounding audit (${legacyGrounding.validCount} valid / ${legacyGrounding.hallucinatedCount} hallucinated)`
-      : 'grounding audit diverged (legacy vs fan-out)',
-    expected: groundingEqual ? undefined : legacyGrounding,
+      ? `identical grounding audit (${baselineGrounding.validCount} valid / ${baselineGrounding.hallucinatedCount} hallucinated)`
+      : 'grounding audit diverged (delegation vs fan-out)',
+    expected: groundingEqual ? undefined : baselineGrounding,
     actual: groundingEqual ? undefined : fanoutGrounding,
   });
 
@@ -301,33 +299,34 @@ export async function checkFixture(
     finishedUrls: [...new Set((leg.finished?.sources ?? []).map((s) => s.url))].sort(),
     scrapedUrls: [...new Set(leg.events.filter((e) => e.type === 'source').map((e) => e.url ?? ''))].sort(),
   });
-  const legacyAdmissions = admissionsOf(legacy);
+  const baselineAdmissions = admissionsOf(delegation);
   const fanoutAdmissions = admissionsOf(fanout);
-  const admissionsEqual = JSON.stringify(legacyAdmissions) === JSON.stringify(fanoutAdmissions);
+  const admissionsEqual = JSON.stringify(baselineAdmissions) === JSON.stringify(fanoutAdmissions);
   stages.push({
     stage: 'admissions',
     ok: admissionsEqual,
     detail: admissionsEqual
-      ? `identical admissions (${legacyAdmissions.finishedUrls.length} sources / ${legacyAdmissions.scrapedUrls.length} scraped URLs)`
-      : 'admission sets diverged (legacy vs fan-out)',
-    expected: admissionsEqual ? undefined : legacyAdmissions,
+      ? `identical admissions (${baselineAdmissions.finishedUrls.length} sources / ${baselineAdmissions.scrapedUrls.length} scraped URLs)`
+      : 'admission sets diverged (delegation vs fan-out)',
+    expected: admissionsEqual ? undefined : baselineAdmissions,
     actual: admissionsEqual ? undefined : fanoutAdmissions,
   });
 
-  // Stage 4: LiveEvent backbone — strict, delegation leg vs legacy (the #88
-  // byte-equivalence contract generalized to every fixture; the fan-out leg
-  // legitimately emits extra additive events).
-  const legacyBackbone = backboneOf(legacy.events);
+  // Stage 4: LiveEvent backbone — the delegated-loop backbone must equal the
+  // recorded baseline contract (graph_node/thought/subqueries/reflection/
+  // audit/report_chunk/finished order; #88 precedent at agent level; the
+  // fan-out leg legitimately emits extra additive/researcher events).
   const delegationBackbone = backboneOf(delegation.events);
-  const sequenceEqual = JSON.stringify(legacyBackbone) === JSON.stringify(delegationBackbone);
+  const fanoutBackbone = backboneOf(fanout.events);
+  const sequenceEqual = JSON.stringify(delegationBackbone) === JSON.stringify(fanoutBackbone);
   stages.push({
     stage: 'sequence',
     ok: sequenceEqual,
     detail: sequenceEqual
-      ? `identical backbone (${legacyBackbone.length} events, delegation vs legacy)`
-      : 'LiveEvent backbone diverged (delegation vs legacy)',
-    expected: sequenceEqual ? undefined : legacyBackbone,
-    actual: sequenceEqual ? undefined : delegationBackbone,
+      ? `identical backbone (${delegationBackbone.length} events, delegation vs fan-out)`
+      : 'LiveEvent backbone diverged (delegation vs fan-out)',
+    expected: sequenceEqual ? undefined : delegationBackbone,
+    actual: sequenceEqual ? undefined : fanoutBackbone,
   });
 
   const ok = stages.every((s) => s.ok);
@@ -339,8 +338,8 @@ export async function checkFixture(
   };
 }
 
-/** Run the full harness: every fixture through both paths, with a readable
- * equivalence report. */
+/** Run the full harness: every fixture through both agency legs, with a
+ * readable equivalence report. */
 export async function runParityHarness(
   fixtures: ParityFixture[],
   options: ParityHarnessOptions
