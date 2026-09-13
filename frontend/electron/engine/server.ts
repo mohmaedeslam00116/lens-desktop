@@ -4,6 +4,7 @@ import * as crypto from 'crypto';
 import { LiveEvent, ResearchPlan, ResearchRequest, WideResearchRequest } from './types';
 import { ModelClient } from './models';
 import { DeepResearchAgent } from './agent';
+import { ParentResearchAgent } from './parentAgent';
 import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
@@ -41,7 +42,13 @@ export function createResearchAgent(
   sessionId: string,
   emitEvent: (event: LiveEvent) => void,
   activationManager?: SkillActivationManager,
-): DeepResearchAgent | WideResearchAgent {
+): DeepResearchAgent | WideResearchAgent | ParentResearchAgent {
+  // ADR-0010 phase 1 (ticket #88): dormant agency_mode flag routes the
+  // STANDARD loop through the Parent Research Agent orchestration seam.
+  // Defaults to false — unflagged runs are byte-identical to today.
+  if (request.mode !== 'wide' && request.agency_mode === true) {
+    return new ParentResearchAgent(sessionId, emitEvent, activationManager);
+  }
   return request.mode === 'wide'
     ? new WideResearchAgent(sessionId, emitEvent, {}, activationManager)
     : new DeepResearchAgent(sessionId, emitEvent, activationManager);
@@ -237,6 +244,9 @@ function startAuthorizedExecution(session: ActiveSession, approvedPlan?: Researc
           metrics: { costs: 0 },
         }, { emitFinished: false });
       } else {
+        // Standard + agency(parent-delegated) path: the loop emits the
+        // agent-level finished, then complete() emits the session-level one —
+        // identical sequence for both paths, so parity holds.
         session.researchSession.complete();
       }
     } catch (err: any) {
