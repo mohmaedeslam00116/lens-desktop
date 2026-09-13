@@ -8,6 +8,7 @@ import { ParentResearchAgent } from './parentAgent';
 import { evictPackageToolCache } from './piResearchTools';
 import { resetResearcherBudget } from './parentAgent';
 import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
+import { shouldUseAgencyPath, ResearchPathSettings } from './researchDefaults';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
 import { SessionLifecycleManager, ResearchSession } from './sessionLifecycle';
@@ -44,11 +45,14 @@ export function createResearchAgent(
   sessionId: string,
   emitEvent: (event: LiveEvent) => void,
   activationManager?: SkillActivationManager,
+  settings?: ResearchPathSettings,
 ): DeepResearchAgent | WideResearchAgent | ParentResearchAgent {
-  // ADR-0010 phase 1 (ticket #88): dormant agency_mode flag routes the
-  // STANDARD loop through the Parent Research Agent orchestration seam.
-  // Defaults to false — unflagged runs are byte-identical to today.
-  if (request.mode !== 'wide' && request.agency_mode === true) {
+  // ADR-0010 phase 4 / ADR-0012 (ticket #95): the standard loop DEFAULTS to
+  // the agency path (Parent Research Agent). `legacy_mode: true` (request
+  // flag wins over settings) is the escape hatch back to the legacy
+  // single-loop pending removal (expand–contract closure). Wide mode is
+  // never rerouted.
+  if (request.mode !== 'wide' && shouldUseAgencyPath(request, settings)) {
     return new ParentResearchAgent(sessionId, emitEvent, activationManager);
   }
   return request.mode === 'wide'

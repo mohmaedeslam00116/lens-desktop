@@ -46,12 +46,18 @@ function baseRequest(overrides = {}) {
   };
 }
 
-async function makeFaux(reportText) {
+async function makeFaux(reportText, { withSubqueries = false } = {}) {
   const ai = await pi();
   const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
   // Approved plan → subqueries come from milestones, so exactly one LLM call
-  // (final synthesis) happens per run.
-  faux.setResponses([ai.fauxAssistantMessage(reportText)]);
+  // (final synthesis) happens per run. Plan-less runs make a subqueries call
+  // first.
+  const queued = [];
+  if (withSubqueries) {
+    queued.push(ai.fauxAssistantMessage('["fusion energy basics", "tokamak benchmarks 2026"]'));
+  }
+  queued.push(ai.fauxAssistantMessage(reportText));
+  faux.setResponses(queued);
   return faux;
 }
 
@@ -172,13 +178,13 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
     );
   });
 
-  it('requires an approved plan with milestones', async () => {
+  it('requires an approved plan with milestones (explicit agency request)', async () => {
     stubFetchEmpty();
     const faux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
     const agent = new ParentResearchAgent('s-noplan', () => {});
     await assert.rejects(
-      agent.run(baseRequest({ plan: undefined })),
+      agent.run(baseRequest({ plan: undefined, agency_mode: true })),
       /approved research plan/i,
     );
   });
@@ -190,11 +196,11 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
     const emitted = [];
     const agent = new ParentResearchAgent('s-unapproved', (e) => emitted.push(e));
     await assert.rejects(
-      agent.run(baseRequest({ plan: { ...approvedPlan, status: 'pending' } })),
+      agent.run(baseRequest({ plan: { ...approvedPlan, status: 'pending' }, agency_mode: true })),
       /approved research plan/i,
     );
     await assert.rejects(
-      agent.run(baseRequest({ plan: { ...approvedPlan, status: 'rejected' } })),
+      agent.run(baseRequest({ plan: { ...approvedPlan, status: 'rejected' }, agency_mode: true })),
       /approved research plan/i,
     );
     assert.equal(emitted.length, 0, 'no events may be emitted for an unapproved plan');
@@ -231,23 +237,87 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
   });
 });
 
-describe('Agency flag dormancy (server routing)', () => {
-  it('defaults to the legacy agents; agency_mode only reroutes the standard loop; wide is never rerouted', () => {
+describe('Agency default flip (ADR-0012, ticket #95 — server routing)', () => {
+  it('routes the standard loop to the agency path by default; legacy_mode is the escape hatch; wide is never rerouted', () => {
+    // Default standard run → agency path (the flip).
     const standard = { query: 'Q', mode: 'standard' };
-    assert.ok(createResearchAgent(standard, 's1', () => {}) instanceof DeepResearchAgent);
+    assert.ok(createResearchAgent(standard, 's1', () => {}) instanceof ParentResearchAgent);
 
-    const agency = { query: 'Q', mode: 'standard', agency_mode: true };
-    assert.ok(createResearchAgent(agency, 's2', () => {}) instanceof ParentResearchAgent);
+    // Escape hatch: request flag restores the legacy single-loop.
+    const legacy = { query: 'Q', mode: 'standard', legacy_mode: true };
+    assert.ok(createResearchAgent(legacy, 's2', () => {}) instanceof DeepResearchAgent);
 
-    const wide = { query: 'Q', mode: 'wide', agency_mode: true };
+    // Wide is never rerouted — default or not.
+    const wide = { query: 'Q', mode: 'wide' };
     assert.ok(createResearchAgent(wide, 's3', () => {}) instanceof WideResearchAgent);
+    const wideLegacy = { query: 'Q', mode: 'wide', agency_mode: true };
+    assert.ok(createResearchAgent(wideLegacy, 's3b', () => {}) instanceof WideResearchAgent);
+
+    // Explicit agency opt-in still routes to the parent.
+    const agency = { query: 'Q', mode: 'standard', agency_mode: true };
+    assert.ok(createResearchAgent(agency, 's4', () => {}) instanceof ParentResearchAgent);
+  });
+
+  it('resolves the escape flag: request flag wins over the settings default', () => {
+    // Settings alone can restore the legacy loop.
+    const fromSettings = { query: 'Q', mode: 'standard' };
+    assert.ok(
+      createResearchAgent(fromSettings, 's5', () => {}, undefined, { legacyMode: true })
+        instanceof DeepResearchAgent
+    );
+    // An explicit request flag beats settings (false → agency despite settings).
+    const requestWins = { query: 'Q', mode: 'standard', legacy_mode: false };
+    assert.ok(
+      createResearchAgent(requestWins, 's6', () => {}, undefined, { legacyMode: true })
+        instanceof ParentResearchAgent
+    );
+    // Settings true + request true → legacy.
+    const both = { query: 'Q', mode: 'standard', legacy_mode: true };
+    assert.ok(
+      createResearchAgent(both, 's7', () => {}, undefined, { legacyMode: true })
+        instanceof DeepResearchAgent
+    );
   });
 
   it('forwards the skill activation manager into the parent so the delegated loop keeps skill activation', () => {
     const manager = { getPromptContext: () => '', getToolDefinition: () => ({}) };
-    const agency = { query: 'Q', mode: 'standard', agency_mode: true };
-    const parent = createResearchAgent(agency, 's4', () => {}, manager);
+    const standard = { query: 'Q', mode: 'standard' };
+    const parent = createResearchAgent(standard, 's8', () => {}, manager);
     assert.equal(parent.activationManager, manager);
+  });
+
+  it('plan-less default run degrades to delegated legacy execution (ADR-0012 fallback, not an error)', async () => {
+    stubFetchEmpty();
+    // Plan-less legacy runs make a subqueries call first, then the report.
+    const faux = await makeFaux(REPORT, { withSubqueries: true });
+    setActiveCore('pi', { overrideFactory: async () => faux.provider });
+
+    const emitted = [];
+    const agent = new ParentResearchAgent('s-default-planless', (e) => emitted.push(e));
+    const request = baseRequest({ agency_mode: undefined, plan: undefined });
+    delete request.agency_mode;
+    delete request.plan;
+    await agent.run(request);
+
+    const notice = emitted.find(
+      (e) => e.type === 'status' && typeof e.message === 'string' && e.message.includes('No approved research plan')
+    );
+    assert.ok(notice, 'degraded delegation is observable in telemetry');
+    const finished = emitted.find((e) => e.type === 'finished');
+    assert.ok(finished, 'run completes through the delegated legacy loop');
+    assert.ok(finished.report.startsWith(REPORT));
+  });
+
+  it('explicit agency_mode with an unapproved plan still fails loudly (contract violation)', async () => {
+    stubFetchEmpty();
+    const faux = await makeFaux(REPORT);
+    setActiveCore('pi', { overrideFactory: async () => faux.provider });
+    const emitted = [];
+    const agent = new ParentResearchAgent('s-explicit-unapproved', (e) => emitted.push(e));
+    await assert.rejects(
+      agent.run(baseRequest({ plan: { ...approvedPlan, status: 'pending' }, agency_mode: true })),
+      /approved research plan/i,
+    );
   });
 });
 
