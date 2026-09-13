@@ -1,7 +1,16 @@
 import { LiveEvent, ResearchPlan, ResearchRequest } from './types';
 import { DeepResearchAgent } from './agent';
+import { ResearcherAgent, ResearcherOptions, ResearcherRunResult } from './researcherAgent';
 import { SkillActivationManager } from './skills';
 import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
+
+/** Researcher construction seam (pi-subagents-shaped): the default factory
+ * builds in-process researchers; tests and later phases can supply
+ * specialized constructions without changing the orchestration flow. */
+export type ResearcherFactory = (sessionId: string, emitEvent: (event: LiveEvent) => void, options: ResearcherOptions) => ResearcherAgent;
+
+const defaultResearcherFactory: ResearcherFactory =
+  (sessionId, emitEvent, options) => new ResearcherAgent(sessionId, emitEvent, options);
 
 /**
  * parentAgent.ts — Parent Research Agent orchestration seam (ADR-0010 phase 1,
@@ -62,14 +71,18 @@ export class ParentResearchAgent {
   private emitEvent: (event: LiveEvent) => void;
   private activationManager?: SkillActivationManager;
 
+  private researcherFactory: ResearcherFactory;
+
   constructor(
     sessionId: string,
     emitEvent: (event: LiveEvent) => void,
-    activationManager?: SkillActivationManager
+    activationManager?: SkillActivationManager,
+    researcherFactory: ResearcherFactory = defaultResearcherFactory
   ) {
     this.sessionId = sessionId;
     this.emitEvent = emitEvent;
     this.activationManager = activationManager;
+    this.researcherFactory = researcherFactory;
   }
 
   /** Emits one researcher_telemetry lifecycle event with the (optional,
@@ -208,11 +221,43 @@ export class ParentResearchAgent {
         step: 'planning',
       });
 
+      // ADR-0010 phase 2 (ticket #89): with researcher_mode, each facet executes
+      // inside an in-process researcher subagent — a scoped pi-core run using
+      // the pi-web-access toolset (supplementary plane) over the LENS retrieval
+      // backbone — and its findings flow into the delegated loop's evidence
+      // pool pre-tagged with the facet's milestone provenance. Evidence
+      // admission, dedupe, and the single session budget stay authoritative.
+      const researcherMode = (request as { researcher_mode?: boolean }).researcher_mode === true;
+      if (researcherMode) {
+        const seed: ResearcherRunResult[] = [];
+        for (const a of assignments) {
+          if (signal?.aborted) break;
+          const researcher = this.researcherFactory(this.sessionId, this.emitEvent, {
+            researcherId: researcherId(this.sessionId, a.facetIndex),
+            facetIndex: a.facetIndex,
+            facet: a.facet,
+            facetCount,
+            milestoneId: approvedPlan.milestones[a.facetIndex]?.id || `m${a.facetIndex + 1}`,
+            milestoneTitle: approvedPlan.milestones[a.facetIndex]?.query || a.facet,
+            toolPackages: true,
+            activationManager: this.activationManager,
+            searchProvider: request.search_provider,
+          });
+          seed.push(await researcher.run(request, signal));
+        }
+        // Findings enter the delegated loop's evidence pool with per-facet
+        // provenance; admission/coverage keep enforcing the LENS contracts.
+        (request as { scraped_sources?: unknown[] }).scraped_sources = [
+          ...((request as { scraped_sources?: unknown[] }).scraped_sources ?? []),
+          ...seed.flatMap((r) => r.findings),
+        ];
+      }
+
       // Delegate retrieval + synthesis verbatim to the legacy loop. The request
       // already carries the approved plan (trajectory freeze), so the delegated
       // run executes the identical fixture path and the final report is
-      // byte-equivalent by construction. #89 replaces this delegation with a
-      // real in-process researcher behind the same seams.
+      // byte-equivalent by construction. Later phases replace this delegation
+      // with real parallel researchers behind the same seams.
       const delegate = new DeepResearchAgent(this.sessionId, interceptingEmit, this.activationManager);
       await delegate.run(request, signal);
 

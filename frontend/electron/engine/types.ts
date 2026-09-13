@@ -137,7 +137,7 @@ export interface ResearcherTelemetry {
   role: string;
   /** The research facet (milestone query) assigned to this researcher. */
   facet: string;
-  phase: 'started' | 'completed';
+  phase: 'started' | 'completed' | 'retrieval' | 'tool_activity';
   counts: {
     facetIndex: number;
     facetCount: number;
@@ -218,6 +218,10 @@ export interface LiveEvent {
   };
   wideTelemetry?: WideResearchTelemetry;
   researcherTelemetry?: ResearcherTelemetry;
+  /** Research-facet provenance on `source` events emitted by researcher
+   * subagents (ADR-0010 phase 2, ticket #89). */
+  milestoneId?: string;
+  milestoneTitle?: string;
 }
 
 export interface ResearchRequest {
@@ -245,6 +249,10 @@ export interface ResearchRequest {
    * seam (ADR-0010 phase 1, ticket #88). Dormant by default — unflagged runs
    * execute the legacy loop unchanged. */
   agency_mode?: boolean;
+  /** Opt-in (requires agency_mode): each facet executes inside an in-process
+   * researcher subagent with the pi-web-access toolset (ADR-0010 phase 2,
+   * ticket #89). Dormant by default. */
+  researcher_mode?: boolean;
 }
 
 export interface SearchResultItem {
