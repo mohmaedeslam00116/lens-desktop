@@ -86,8 +86,8 @@ describe('ResearcherAgent (ticket #89 — single in-process researcher)', () => 
     const phases = emitted
       .filter((e) => e.type === 'researcher_telemetry')
       .map((e) => e.researcherTelemetry.phase);
-    assert.equal(phases[0], 'started');
-    assert.equal(phases.at(-1), 'completed');
+    assert.equal(phases[0], 'run_started');
+    assert.equal(phases.at(-1), 'run_completed');
     assert.ok(phases.includes('retrieval'), 'retrieval progress streams per source');
 
     const sources = emitted.filter((e) => e.type === 'source');
@@ -197,7 +197,7 @@ describe('Agency + researcher_mode end-to-end (offline via injected researcher f
 
     // Researcher lifecycle streamed additively alongside the legacy backbone.
     const phases = emitted.filter((e) => e.type === 'researcher_telemetry').map((e) => e.researcherTelemetry.phase);
-    assert.ok(phases.includes('started') && phases.includes('completed'));
+    assert.ok(phases.includes('run_started') && phases.includes('run_completed'));
   });
 });
 

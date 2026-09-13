@@ -75,7 +75,7 @@ export class ResearcherAgent {
   }
 
   private telemetry(
-    phase: 'started' | 'completed' | 'retrieval' | 'tool_activity',
+    phase: 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity',
     counts: { sourcesRetrieved?: number; toolCalls?: number } = {}
   ): void {
     this.emitEvent({
@@ -139,7 +139,10 @@ export class ResearcherAgent {
       return { researcherId: this.options.researcherId, facetIndex: this.options.facetIndex, facet: this.options.facet, findings, toolCalls };
     }
 
-    this.telemetry('started');
+    // Execution-level lifecycle uses distinct phase names from the parent's
+    // assignment lifecycle (`started`/`completed`): one component owns each
+    // pair, so telemetry consumers never double-count researchers.
+    this.telemetry('run_started');
 
     // Phase A — deterministic retrieval backbone (LENS plane, budget-bounded).
     // Bind: MultiSearchProvider.search is called statically in the engine;
@@ -243,7 +246,7 @@ export class ResearcherAgent {
       }
     }
 
-    this.telemetry('completed', { sourcesRetrieved: findings.length, toolCalls });
+    this.telemetry('run_completed', { sourcesRetrieved: findings.length, toolCalls });
     return {
       researcherId: this.options.researcherId,
       facetIndex: this.options.facetIndex,

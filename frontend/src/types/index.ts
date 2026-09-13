@@ -147,7 +147,7 @@ export interface LiveEvent {
     researcherId: string;
     role: string;
     facet: string;
-    phase: 'started' | 'completed' | 'retrieval' | 'tool_activity';
+    phase: 'started' | 'completed' | 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity';
     counts: { facetIndex: number; facetCount: number };
     todoProjection?: Array<{
       id: number;

@@ -40,6 +40,12 @@ const defaultResearcherFactory: ResearcherFactory =
  * additively so consumers can detect it. */
 const MAX_PROJECTION_TASKS = 50;
 
+/** Session-wide researcher-execution caps (ADR-0010 decision 8: researchers
+ * draw from the single session evidence budget — no second pool). Bounded so
+ * a large approved plan cannot fan out unbounded external calls or memory. */
+const MAX_RESEARCHERS_PER_SESSION = 8;
+const MAX_RESEARCHER_FINDINGS_PER_SESSION = 48;
+
 /** One derived facet assignment: which facet (query) runs, in what order. */
 export interface FacetAssignment {
   facetIndex: number;
@@ -230,8 +236,22 @@ export class ParentResearchAgent {
       const researcherMode = (request as { researcher_mode?: boolean }).researcher_mode === true;
       if (researcherMode) {
         const seed: ResearcherRunResult[] = [];
+        let sessionFindings = 0;
+        let researchersLaunched = 0;
         for (const a of assignments) {
           if (signal?.aborted) break;
+          // Session-wide caps: stop launching researchers once the process has
+          // used its researcher or source allowance (single session budget,
+          // ADR-0010 decision 8).
+          if (researchersLaunched >= MAX_RESEARCHERS_PER_SESSION) {
+            console.warn(`[ParentResearchAgent] researcher cap (${MAX_RESEARCHERS_PER_SESSION}) reached; remaining facets stay with the delegated loop.`);
+            break;
+          }
+          if (sessionFindings >= MAX_RESEARCHER_FINDINGS_PER_SESSION) {
+            console.warn(`[ParentResearchAgent] researcher source cap (${MAX_RESEARCHER_FINDINGS_PER_SESSION}) reached; remaining facets stay with the delegated loop.`);
+            break;
+          }
+          researchersLaunched += 1;
           const researcher = this.researcherFactory(this.sessionId, this.emitEvent, {
             researcherId: researcherId(this.sessionId, a.facetIndex),
             facetIndex: a.facetIndex,
@@ -243,7 +263,9 @@ export class ParentResearchAgent {
             activationManager: this.activationManager,
             searchProvider: request.search_provider,
           });
-          seed.push(await researcher.run(request, signal));
+          const result = await researcher.run(request, signal);
+          sessionFindings += result.findings.length;
+          seed.push(result);
         }
         // Findings enter the delegated loop's evidence pool with per-facet
         // provenance; admission/coverage keep enforcing the LENS contracts.

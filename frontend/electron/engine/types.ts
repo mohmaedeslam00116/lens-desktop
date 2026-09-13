@@ -137,7 +137,7 @@ export interface ResearcherTelemetry {
   role: string;
   /** The research facet (milestone query) assigned to this researcher. */
   facet: string;
-  phase: 'started' | 'completed' | 'retrieval' | 'tool_activity';
+  phase: 'started' | 'completed' | 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity';
   counts: {
     facetIndex: number;
     facetCount: number;
