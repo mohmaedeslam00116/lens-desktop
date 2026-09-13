@@ -3,11 +3,6 @@ import { DeepResearchAgent } from './agent';
 import { SkillActivationManager } from './skills';
 import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
 
-/** Memory-boundedness guard (ADR-0010 decision 6): the read-only todo
- * projection carried per telemetry event is capped; truncation is flagged
- * additively so consumers can detect it. */
-const MAX_PROJECTION_TASKS = 50;
-
 /**
  * parentAgent.ts — Parent Research Agent orchestration seam (ADR-0010 phase 1,
  * ticket #88).
@@ -30,6 +25,11 @@ const MAX_PROJECTION_TASKS = 50;
  * become real per-facet in-process loops in #89; the parent/researcher seams
  * here (brief, lifecycle telemetry, todo plan) are the stable surface.
  */
+
+/** Memory-boundedness guard (ADR-0010 decision 6): the read-only todo
+ * projection carried per telemetry event is capped; truncation is flagged
+ * additively so consumers can detect it. */
+const MAX_PROJECTION_TASKS = 50;
 
 /** One derived facet assignment: which facet (query) runs, in what order. */
 export interface FacetAssignment {
@@ -105,8 +105,15 @@ export class ParentResearchAgent {
   async run(request: ResearchRequest, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) return;
 
+    // Authorization guard (mirrors SessionLifecycleManager.isPlanAuthorized):
+    // only a plan the user actually approved may drive agency execution — a
+    // pending/rejected plan with milestones must never pass this seam.
     const approvedPlan = (request as { plan?: ResearchPlan }).plan;
-    if (!approvedPlan?.milestones || approvedPlan.milestones.length === 0) {
+    if (
+      approvedPlan?.status !== 'approved'
+      || !approvedPlan.milestones
+      || approvedPlan.milestones.length === 0
+    ) {
       throw new Error(
         '[ParentResearchAgent] agency mode requires an approved research plan with milestones'
       );
@@ -154,21 +161,72 @@ export class ParentResearchAgent {
       step: 'planning',
     });
 
-    // Delegate retrieval + synthesis verbatim to the legacy loop. The request
-    // already carries the approved plan (trajectory freeze), so the delegated
-    // run executes the identical fixture path and the final report is
-    // byte-equivalent by construction. #89 replaces this delegation with a
-    // real in-process researcher behind the same seams.
-    const delegate = new DeepResearchAgent(this.sessionId, this.emitEvent, this.activationManager);
-    await delegate.run(request, signal);
+    // Completed-lifecycle bookkeeping must land BEFORE the delegated run's
+    // terminal `finished` event: the delegated loop emits `finished` itself
+    // right before returning, and a consumer that closes the stream on
+    // `finished` would never see completion telemetry. So the delegated
+    // `finished` is intercepted and deferred: on success the parent first
+    // completes the todo tasks + emits completed telemetry, then forwards the
+    // captured event verbatim (byte-parity of the terminal event is kept).
+    let deferredFinished: LiveEvent | undefined;
+    const interceptingEmit = (event: LiveEvent) => {
+      if (event.type === 'finished' && !deferredFinished) {
+        deferredFinished = event;
+        return;
+      }
+      this.emitEvent(event);
+    };
 
-    if (signal?.aborted) return;
+    try {
+      // Delegate retrieval + synthesis verbatim to the legacy loop. The request
+      // already carries the approved plan (trajectory freeze), so the delegated
+      // run executes the identical fixture path and the final report is
+      // byte-equivalent by construction. #89 replaces this delegation with a
+      // real in-process researcher behind the same seams.
+      const delegate = new DeepResearchAgent(this.sessionId, interceptingEmit, this.activationManager);
+      await delegate.run(request, signal);
+    } catch (err) {
+      if (todoStore) this.markTasksForCleanup(todoStore, assignments);
+      throw err;
+    }
+
+    if (signal?.aborted) {
+      if (todoStore) this.markTasksForCleanup(todoStore, assignments);
+      return;
+    }
 
     for (const a of assignments) {
       if (todoStore) {
         todoStore.updateTask(a.taskId!, { status: 'completed', activeForm: `Researched: ${a.facet}` });
       }
       this.emitTelemetry(a, facetCount, 'completed', todoStore);
+    }
+
+    // Forward the deferred terminal event verbatim, now that the parent's
+    // completion lifecycle is fully emitted.
+    if (deferredFinished) {
+      this.emitEvent(deferredFinished);
+    }
+  }
+
+  /** Failure/cancellation cleanup: transitions abandoned in_progress tasks
+   * back to pending (the store supports pending → in_progress → completed
+   * plus tombstone delete; pending is the honest non-terminal state for
+   * unfinished facets) so the projection never retains stale in_progress. */
+  private markTasksForCleanup(
+    todoStore: TodoPlanStore,
+    assignments: FacetAssignment[]
+  ): void {
+    for (const a of assignments) {
+      if (a.taskId === undefined) continue;
+      try {
+        const task = todoStore.projection().find((t) => t.id === a.taskId);
+        if (task?.status === 'in_progress') {
+          todoStore.updateTask(a.taskId, { status: 'pending' });
+        }
+      } catch (err) {
+        console.warn(`[ParentResearchAgent] todo cleanup failed for task #${a.taskId}:`, err);
+      }
     }
   }
 }

@@ -99,6 +99,12 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
     const completedProjection = telemetry.at(-1).researcherTelemetry.todoProjection;
     assert.deepEqual(completedProjection.map((t) => t.status), ['completed', 'completed']);
 
+    // Completion lifecycle must land BEFORE the terminal finished event:
+    // consumers that close the stream on finished must still see it.
+    const finishedIndex = emitted.findIndex((e) => e.type === 'finished');
+    const lastCompletedIndex = emitted.map((e) => e.type).lastIndexOf('researcher_telemetry');
+    assert.ok(lastCompletedIndex < finishedIndex, 'completed telemetry must precede finished');
+
     // The run completes with the synthesized report.
     const finished = emitted.filter((e) => e.type === 'finished');
     assert.equal(finished.length, 1);
@@ -169,6 +175,48 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
       agent.run(baseRequest({ plan: undefined })),
       /approved research plan/i,
     );
+  });
+
+  it('rejects plans whose status is not approved (pending/rejected plans never drive agency execution)', async () => {
+    stubFetchEmpty();
+    const faux = await makeFaux(REPORT);
+    setActiveCore('pi', { overrideFactory: async () => faux.provider });
+    const emitted = [];
+    const agent = new ParentResearchAgent('s-unapproved', (e) => emitted.push(e));
+    await assert.rejects(
+      agent.run(baseRequest({ plan: { ...approvedPlan, status: 'pending' } })),
+      /approved research plan/i,
+    );
+    await assert.rejects(
+      agent.run(baseRequest({ plan: { ...approvedPlan, status: 'rejected' } })),
+      /approved research plan/i,
+    );
+    assert.equal(emitted.length, 0, 'no events may be emitted for an unapproved plan');
+  });
+
+  it('returns abandoned facet tasks to pending when the run is aborted (no stale in_progress)', async () => {
+    stubFetchEmpty();
+    const controller = new AbortController();
+    const emitted = [];
+    const agent = new ParentResearchAgent('s-abort-cleanup', (e) => {
+      emitted.push(e);
+      // Abort synchronously on the first started telemetry: the delegated run
+      // observes the aborted signal and never executes.
+      if (e.type === 'researcher_telemetry' && e.researcherTelemetry.phase === 'started') {
+        controller.abort();
+      }
+    });
+    await agent.run(baseRequest(), controller.signal);
+
+    // The delegated loop must not have produced a report stream.
+    assert.equal(emitted.filter((e) => e.type === 'report_chunk').length, 0);
+    // Store-level truth: abandoned tasks are back to pending — no stale
+    // in_progress survives the cancellation.
+    const { loadTodoPlanStore } = await import('../dist-electron/engine/piPackages.js');
+    const store = await loadTodoPlanStore('s-abort-cleanup');
+    const projection = store.projection();
+    assert.equal(projection.length, 2);
+    assert.ok(projection.every((t) => t.status === 'pending'), `expected all pending, got ${JSON.stringify(projection.map((t) => t.status))}`);
   });
 });
 
