@@ -141,12 +141,37 @@ export interface ResearcherTelemetry {
   counts: {
     facetIndex: number;
     facetCount: number;
+    /** URLs this researcher skipped because another researcher already
+     * fetched them (cross-researcher dedupe, ticket #90). Optional —
+     * assignment-lifecycle events omit it. */
+    dedupeShared?: number;
   };
   /** Read-only todo-plan projection at emission time (parent-owned state).
    * Size-capped by the engine; see todoProjectionTruncated. */
   todoProjection?: TodoTaskProjection[];
   /** True when todoProjection was truncated to the engine's cap. */
   todoProjectionTruncated?: boolean;
+}
+
+/** Aggregate fan-out telemetry for a parallel researcher phase (ADR-0010
+ * decision 8, ticket #90): concurrency + budget limits, cross-researcher
+ * dedupe yield, and per-facet coverage aggregation over admitted findings. */
+export interface FanoutTelemetry {
+  /** Effective concurrency limit = min(#facets, 4) unless overridden. */
+  concurrencyLimit: number;
+  facetsTotal: number;
+  researchersLaunched: number;
+  researchersCompleted: number;
+  researchersFailed: number;
+  /** Facets left to the delegated loop's own retrieval (caps reached). */
+  facetsDelegated: number;
+  /** URLs a researcher skipped because another already fetched them. */
+  urlsShared: number;
+  /** Session-wide admitted researcher findings after this fan-out. */
+  budgetFindingsAdmitted: number;
+  /** Per-facet evidence-coverage aggregation (facet query → overall score)
+   * computed over that facet's admitted findings (LENS contracts). */
+  coverageByFacet: Record<string, number>;
 }
 
 export interface PlanScopingOptions {
@@ -178,7 +203,8 @@ export interface LiveEvent {
     | 'budget_exhausted'
     | 'skill_activated'
     | 'wide_telemetry'
-    | 'researcher_telemetry';
+    | 'researcher_telemetry'
+    | 'fanout_telemetry';
   eventId?: number;
   sessionId?: string;
   state?: SessionState;
@@ -218,6 +244,8 @@ export interface LiveEvent {
   };
   wideTelemetry?: WideResearchTelemetry;
   researcherTelemetry?: ResearcherTelemetry;
+  /** Aggregate parallel fan-out telemetry (ticket #90). */
+  fanoutTelemetry?: FanoutTelemetry;
   /** Research-facet provenance on `source` events emitted by researcher
    * subagents (ADR-0010 phase 2, ticket #89). */
   milestoneId?: string;
@@ -253,6 +281,9 @@ export interface ResearchRequest {
    * researcher subagent with the pi-web-access toolset (ADR-0010 phase 2,
    * ticket #89). Dormant by default. */
   researcher_mode?: boolean;
+  /** Optional override of the parallel researcher concurrency limit
+   * (default: min(#facets, 4), ADR-0010 decision 8). Clamped to [1, 4]. */
+  researcher_concurrency?: number;
 }
 
 export interface SearchResultItem {
