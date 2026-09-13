@@ -9,11 +9,16 @@ import {
   PARITY_THRESHOLDS,
 } from '../dist-electron/engine/parityHarness.js';
 import { setActiveCore, resetActiveCore } from '../dist-electron/engine/modelGateway.js';
+import {
+  searchPlaneLedgerSnapshot,
+  resetSearchPlane,
+} from '../dist-electron/engine/searchPlane.js';
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
   resetActiveCore();
+  resetSearchPlane();
 });
 
 async function pi() {
@@ -151,6 +156,13 @@ describe('Parity regression harness (ticket #94 — ADR-0010 phase-3 gate)', () 
       );
     }
     assert.equal(results.length, FIXTURES.length);
+
+    // Plane gate (#109): the fixture leg ran through the vendored pi-web-access
+    // plane — every search admission was ledgered through the bounded gate
+    // (no unledgered retrieval), not served by the silent native fallback.
+    const ledger = searchPlaneLedgerSnapshot();
+    assert.ok(ledger.ledgered > 0, 'parity fixture must exercise the vendored plane');
+    assert.equal(ledger.active, 0, 'plane gate fully released after the run');
 
     // Readable report: every fixture carries one line per documented stage.
     const STAGES = ['coverage', 'grounding', 'admissions', 'sequence'];

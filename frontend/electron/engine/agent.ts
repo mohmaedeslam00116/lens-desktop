@@ -1,5 +1,6 @@
 import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem, WideResearchRequest, PlanMilestone } from './types';
 import { MultiSearchProvider } from './search';
+import { primarySearchPlane } from './searchPlane';
 import { PageScraper, ScrapedPage } from './scraper';
 import { auditEvidenceClaims, buildAuditSection } from './evidenceAuditor';
 import { LLMRequestOptions, LLMToolDefinition, ToolCallHandler } from './models';
@@ -307,7 +308,7 @@ Return ONLY a valid JSON array of strings, for example:
 
       let searchHits: any[] = [];
       try {
-        searchHits = await MultiSearchProvider.search(subq, searchProvider, apiKeys, 6, signal);
+        searchHits = await primarySearchPlane(subq, searchProvider, apiKeys, 6, signal);
       } catch (err) {
         if (signal?.aborted) return;
         console.warn(`[Agent] Search failed for subquery "${subq}":`, err);
@@ -403,7 +404,7 @@ Return ONLY a valid JSON array of strings, for example:
 
         let hopHits: any[] = [];
         try {
-          hopHits = await MultiSearchProvider.search(targetQ, searchProvider, apiKeys, 3, signal);
+          hopHits = await primarySearchPlane(targetQ, searchProvider, apiKeys, 3, signal);
         } catch (err) {
           if (signal?.aborted) return;
           console.warn(`[Agent] Search failed for adaptive query "${targetQ}":`, err);

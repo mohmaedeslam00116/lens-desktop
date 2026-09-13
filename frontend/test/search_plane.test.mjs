@@ -1,0 +1,130 @@
+import { describe, it, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { MultiSearchProvider } from '../dist-electron/engine/search.js';
+import {
+  primarySearchPlane,
+  searchPlaneLedgerSnapshot,
+  resetSearchPlane,
+} from '../dist-electron/engine/searchPlane.js';
+import {
+  buildResearchPackageTools,
+  resetPackageToolCache,
+} from '../dist-electron/engine/piResearchTools.js';
+import { ANSWER_MODE_UNSUPPORTED_MESSAGE } from '../dist-electron/engine/piPackages.js';
+
+const realFetch = globalThis.fetch;
+
+/** One-result DDG HTML — satisfies the vendored parser's ≥1-parseable contract. */
+const DDG_ONE_RESULT = `
+<html><body>
+<div class="result">
+  <h2 class="result__a" href="https://fusion.example/tokamak">Tokamak benchmark</h2>
+  <a class="result__snippet" href="https://fusion.example/tokamak">Steady-state Q&gt;1 sustained.</a>
+</div>
+</body></html>`;
+
+function stubFixtureFetch() {
+  const seen = [];
+  globalThis.fetch = (async (url) => {
+    seen.push(String(url));
+    return new Response(DDG_ONE_RESULT, { status: 200, headers: { 'content-type': 'text/html' } });
+  });
+  return seen;
+}
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  resetSearchPlane();
+  resetPackageToolCache();
+});
+
+describe('primary search plane (ADR-0013 seam swap, #109)', () => {
+  it('serves DDG queries through the vendored pi-web-access provider behind the seam', async () => {
+    const seen = stubFixtureFetch();
+    const results = await primarySearchPlane('tokamak benchmarks', 'duckduckgo', {}, 6);
+    assert.equal(results.length, 1);
+    assert.equal(results[0].title, 'Tokamak benchmark');
+    assert.equal(results[0].url, 'https://fusion.example/tokamak');
+    assert.ok(results[0].snippet.includes('Steady-state'), 'snippet parsed by the vendored module');
+    assert.ok(
+      seen.some((u) => u.startsWith('https://html.duckduckgo.com/html/')),
+      `vendored DDG endpoint hit — seen: ${JSON.stringify(seen)}`
+    );
+    // Vendored-path discriminator: the vendored module builds the URL with
+    // URL.searchParams (spaces → '+') and serves it in exactly one fetch —
+    // a native fallback would fetch a second time with %20 encoding.
+    assert.equal(seen.length, 1, 'single fetch: vendored plane served, no native fallback');
+    assert.ok(
+      seen[0].includes('q=tokamak+benchmarks'),
+      'vendored URL construction (native parser encodes spaces as %20)'
+    );
+  });
+
+  it('ledgers every vendored-plane call through the bounded gate (no unledgered retrieval)', async () => {
+    stubFixtureFetch();
+    const before = searchPlaneLedgerSnapshot();
+    await primarySearchPlane('ledgered query', 'duckduckgo', {}, 3);
+    const after = searchPlaneLedgerSnapshot();
+    assert.equal(after.ledgered, before.ledgered + 1, 'the call was admitted through the gate');
+    assert.equal(after.active, 0, 'gate released after the call');
+  });
+
+  it('falls back to the native seam entry when the vendored plane fails', async () => {
+    // Break the vendored resolution path: no fixture fetch (native fetch fails).
+    const seen = [];
+    globalThis.fetch = (async (url) => {
+      seen.push(String(url));
+      return new Response('no parseable results here', { status: 200 });
+    });
+    const origSearch = MultiSearchProvider.search;
+    let nativeCalled = false;
+    MultiSearchProvider.search = async (query, provider) => {
+      nativeCalled = true;
+      assert.equal(provider, 'duckduckgo', 'fallback goes through the canonical seam entry');
+      return [{ title: 'native', url: 'https://native.example/', snippet: 'native result' }];
+    };
+    try {
+      const results = await primarySearchPlane('fallback query', 'duckduckgo', {}, 3);
+      assert.equal(nativeCalled, true, 'native seam entry invoked');
+      assert.equal(results[0].url, 'https://native.example/');
+    } finally {
+      MultiSearchProvider.search = origSearch;
+    }
+  });
+
+  it('routes keyed providers through the native path (fallback guard D2)', async () => {
+    const origSearch = MultiSearchProvider.search;
+    let nativeCalled = false;
+    MultiSearchProvider.search = async (_q, provider, keys) => {
+      nativeCalled = true;
+      assert.equal(provider, 'tavily');
+      assert.equal(keys.tavily, 'k-test');
+      return [{ title: 't', url: 'https://t.example/', snippet: 's' }];
+    };
+    try {
+      const results = await primarySearchPlane('keyed query', 'tavily', { tavily: 'k-test' }, 3);
+      assert.equal(nativeCalled, true);
+      assert.equal(results.length, 1);
+    } finally {
+      MultiSearchProvider.search = origSearch;
+    }
+  });
+
+  it('rejects fetch_content answer-mode with graceful guidance (boundary D3)', async () => {
+    stubFixtureFetch();
+    const { tools, handler } = await buildResearchPackageTools({
+      sessionId: 'test-session-109',
+      cwd: process.cwd(),
+    });
+    const names = tools.map((t) => t.name);
+    assert.ok(names.includes('fetch_content'), 'tool surface unchanged');
+
+    const guarded = await handler({ name: 'fetch_content', arguments: { url: 'https://x.example/', mode: 'answer' } });
+    assert.equal(guarded.success, false);
+    assert.equal(guarded.error, ANSWER_MODE_UNSUPPORTED_MESSAGE);
+
+    const readable = await handler({ name: 'fetch_content', arguments: { url: 'https://fusion.example/tokamak' } });
+    assert.notEqual(readable.error, ANSWER_MODE_UNSUPPORTED_MESSAGE, 'readable mode not intercepted');
+  });
+});

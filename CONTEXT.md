@@ -208,8 +208,14 @@ The immutable tasking envelope the Parent Research Agent hands to a Researcher: 
 ### Agency Mode
 The execution mode in which a research run is driven by the Parent Research Agent orchestrating parallel Researchers. Since the ADR-0012 default flip (ticket #95) it is the standard research path, and since the contract closure (ticket #104) it is the ONLY standard path — the legacy single-loop route and its `legacy_mode` escape flag were removed (silently dropped on requests; see ADR-0012's amendment).
 
-### Dual Retrieval Plane
-The researcher retrieval architecture in which LENS-native search providers and scraping remain the primary, cost-controlled plane (keys and budgets owned by LENS settings), while the pi-web-access toolset attaches supplementarily for its specialized modes (answer-mode fetch, source verification).
+### Primary Retrieval Plane
+The retrieval architecture (ADR-0013) in which pi-web-access serves as the primary search plane behind the engine's search seam, while LENS remains authoritative for evidence admission, dedupe, budgets, telemetry boundaries, concurrency/fetch controls, and evidence preservation. Every vendored-plane retrieval is ledgered — admitted through bounded gates; no unledgered retrieval is allowed. Keyed providers route natively until the settings-to-`web-search.json` config seam lands.
+
+### Plane Ledger
+The admission counter and bounded concurrency gate through which every vendored-plane retrieval call passes (bounded admission + call count), the enforcement point proving no retrieval bypasses LENS's controls.
+
+### Answer-Mode Non-Support
+The boundary rule that `fetch_content` `mode: 'answer'` is explicitly unsupported in LENS — it requires a model and would split synthesis ownership, which stays exclusively with the Parent Research Agent; the bridge intercepts such calls and returns graceful guidance.
 
 ### Evidence Auditor
 A verification stage that runs after researcher fan-out and checks that every important claim maps to retrieved sources, producing structured verdicts. Verdicts annotate admission by default; gating admission is a settings-gated escalation proven safe by the parity harness.
