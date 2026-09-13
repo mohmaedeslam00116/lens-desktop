@@ -47,7 +47,7 @@ export function createResearchAgent(
   // STANDARD loop through the Parent Research Agent orchestration seam.
   // Defaults to false — unflagged runs are byte-identical to today.
   if (request.mode !== 'wide' && request.agency_mode === true) {
-    return new ParentResearchAgent(sessionId, emitEvent);
+    return new ParentResearchAgent(sessionId, emitEvent, activationManager);
   }
   return request.mode === 'wide'
     ? new WideResearchAgent(sessionId, emitEvent, {}, activationManager)

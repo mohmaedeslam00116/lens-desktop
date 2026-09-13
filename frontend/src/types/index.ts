@@ -151,6 +151,7 @@ export interface LiveEvent {
       status: 'pending' | 'in_progress' | 'completed' | 'deleted';
       activeForm?: string;
     }>;
+    todoProjectionTruncated?: boolean;
   };
 }
 

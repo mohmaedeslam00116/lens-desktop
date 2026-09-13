@@ -142,8 +142,11 @@ export interface ResearcherTelemetry {
     facetIndex: number;
     facetCount: number;
   };
-  /** Read-only todo-plan projection at emission time (parent-owned state). */
+  /** Read-only todo-plan projection at emission time (parent-owned state).
+   * Size-capped by the engine; see todoProjectionTruncated. */
   todoProjection?: TodoTaskProjection[];
+  /** True when todoProjection was truncated to the engine's cap. */
+  todoProjectionTruncated?: boolean;
 }
 
 export interface PlanScopingOptions {

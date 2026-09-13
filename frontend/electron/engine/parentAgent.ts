@@ -1,6 +1,12 @@
 import { LiveEvent, ResearchPlan, ResearchRequest } from './types';
 import { DeepResearchAgent } from './agent';
+import { SkillActivationManager } from './skills';
 import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
+
+/** Memory-boundedness guard (ADR-0010 decision 6): the read-only todo
+ * projection carried per telemetry event is capped; truncation is flagged
+ * additively so consumers can detect it. */
+const MAX_PROJECTION_TASKS = 50;
 
 /**
  * parentAgent.ts — Parent Research Agent orchestration seam (ADR-0010 phase 1,
@@ -29,6 +35,10 @@ import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
 export interface FacetAssignment {
   facetIndex: number;
   facet: string;
+  /** rpiv-todo task id assigned by the store at creation time. Set during
+   * run() when the todo plan store is available; consumers must treat it as
+   * optional (the store may degrade to telemetry-only tracking). */
+  taskId?: number;
 }
 
 /**
@@ -50,20 +60,34 @@ function researcherId(sessionId: string, facetIndex: number): string {
 export class ParentResearchAgent {
   private sessionId: string;
   private emitEvent: (event: LiveEvent) => void;
+  private activationManager?: SkillActivationManager;
 
-  constructor(sessionId: string, emitEvent: (event: LiveEvent) => void) {
+  constructor(
+    sessionId: string,
+    emitEvent: (event: LiveEvent) => void,
+    activationManager?: SkillActivationManager
+  ) {
     this.sessionId = sessionId;
     this.emitEvent = emitEvent;
+    this.activationManager = activationManager;
   }
 
-  /** Emits one researcher_telemetry lifecycle event with the (optional)
-   * read-only todo-plan projection snapshot. */
+  /** Emits one researcher_telemetry lifecycle event with the (optional,
+   * size-capped) read-only todo-plan projection snapshot. */
   private emitTelemetry(
     assignment: FacetAssignment,
     facetCount: number,
     phase: 'started' | 'completed',
     todoStore: TodoPlanStore | null
   ): void {
+    let projectionFields: Pick<NonNullable<LiveEvent['researcherTelemetry']>, 'todoProjection' | 'todoProjectionTruncated'> = {};
+    if (todoStore) {
+      const projection = todoStore.projection();
+      projectionFields = {
+        todoProjection: projection.slice(0, MAX_PROJECTION_TASKS),
+        ...(projection.length > MAX_PROJECTION_TASKS ? { todoProjectionTruncated: true } : {}),
+      };
+    }
     this.emitEvent({
       type: 'researcher_telemetry',
       researcherTelemetry: {
@@ -73,7 +97,7 @@ export class ParentResearchAgent {
         facet: assignment.facet,
         phase,
         counts: { facetIndex: assignment.facetIndex, facetCount },
-        ...(todoStore ? { todoProjection: todoStore.projection() } : {}),
+        ...projectionFields,
       },
     });
   }
@@ -99,10 +123,13 @@ export class ParentResearchAgent {
     } catch (err) {
       console.warn('[ParentResearchAgent] todo plan store unavailable:', err);
     }
+    // Recheck cancellation after the async store load so an aborted run never
+    // creates tasks or emits lifecycle events.
+    if (signal?.aborted) return;
 
     if (todoStore) {
       for (const a of assignments) {
-        todoStore.createTask(a.facet, {
+        a.taskId = todoStore.createTask(a.facet, {
           activeForm: `Researching: ${a.facet}`,
         });
       }
@@ -114,7 +141,7 @@ export class ParentResearchAgent {
     // the full assignment set, not a sequential work-in-progress trail.
     if (todoStore) {
       for (const a of assignments) {
-        todoStore.updateTask(a.facetIndex + 1, { status: 'in_progress' });
+        todoStore.updateTask(a.taskId!, { status: 'in_progress' });
       }
     }
     for (const a of assignments) {
@@ -132,14 +159,14 @@ export class ParentResearchAgent {
     // run executes the identical fixture path and the final report is
     // byte-equivalent by construction. #89 replaces this delegation with a
     // real in-process researcher behind the same seams.
-    const delegate = new DeepResearchAgent(this.sessionId, this.emitEvent);
+    const delegate = new DeepResearchAgent(this.sessionId, this.emitEvent, this.activationManager);
     await delegate.run(request, signal);
 
     if (signal?.aborted) return;
 
     for (const a of assignments) {
       if (todoStore) {
-        todoStore.updateTask(a.facetIndex + 1, { status: 'completed', activeForm: `Researched: ${a.facet}` });
+        todoStore.updateTask(a.taskId!, { status: 'completed', activeForm: `Researched: ${a.facet}` });
       }
       this.emitTelemetry(a, facetCount, 'completed', todoStore);
     }

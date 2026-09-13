@@ -183,6 +183,13 @@ describe('Agency flag dormancy (server routing)', () => {
     const wide = { query: 'Q', mode: 'wide', agency_mode: true };
     assert.ok(createResearchAgent(wide, 's3', () => {}) instanceof WideResearchAgent);
   });
+
+  it('forwards the skill activation manager into the parent so the delegated loop keeps skill activation', () => {
+    const manager = { getPromptContext: () => '', getToolDefinition: () => ({}) };
+    const agency = { query: 'Q', mode: 'standard', agency_mode: true };
+    const parent = createResearchAgent(agency, 's4', () => {}, manager);
+    assert.equal(parent.activationManager, manager);
+  });
 });
 
 describe('Renderer contract tolerance (additive researcher_telemetry)', () => {
