@@ -37,9 +37,16 @@ artifact identifying the failing stage.
      definition.
    - **Admission counts** — finished.sources length, scraped_sources length,
      dedupe-filtered count: must match exactly (budget is path-invariant).
-   - **LiveEvent sequence** — the shared backbone (additive agency-only
-     events + orchestration `status` messages filtered, consecutive
-     `report_chunk` runs collapsed) must be equal.
+   - **LiveEvent sequence** — the shared backbone, normalized as follows:
+     additive agency-only events (`researcher_telemetry`,
+     `fanout_telemetry`) and agency-mode orchestration `status` messages
+     are **excluded** from the canonical sequence before comparison — they
+     have no legacy counterpart (the legacy path cannot emit them, so
+     including them would fail parity by construction) and are covered by
+     their own suites (#88–#93) rather than this stage — and consecutive
+     `report_chunk` runs collapse (chunk boundaries are
+     arrival-timing dependent). The remaining sequence must be equal to
+     the legacy loop's.
 2. **Golden fixtures** (`frontend/test/fixtures/parity/*.json`): plan +
    offline retrieval stubs (per-facet search/scrape maps) + expected report.
    Fixture JSON stores the plan and retrieval maps; deterministic offline
