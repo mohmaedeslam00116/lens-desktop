@@ -116,7 +116,8 @@ export interface LiveEvent {
     | 'session_state'
     | 'cancelled'
     | 'budget_exhausted'
-    | 'wide_telemetry';
+    | 'wide_telemetry'
+    | 'researcher_telemetry';
   sessionId?: string;
   state?: string;
   plan?: ResearchPlan;
@@ -138,6 +139,19 @@ export interface LiveEvent {
   node?: ResearchGraphNode;
   reflections?: string[];
   wideTelemetry?: WideResearchTelemetry;
+  researcherTelemetry?: {
+    researcherId: string;
+    role: string;
+    facet: string;
+    phase: 'started' | 'completed';
+    counts: { facetIndex: number; facetCount: number };
+    todoProjection?: Array<{
+      id: number;
+      subject: string;
+      status: 'pending' | 'in_progress' | 'completed' | 'deleted';
+      activeForm?: string;
+    }>;
+  };
 }
 
 export interface TocHeading {

@@ -149,6 +149,63 @@ export async function loadVendoredPackageTools(
   }
 }
 
+/**
+ * Parent-only direct access to the session-scoped rpiv-todo store (ADR-0010
+ * decision 7): the Parent Research Agent writes the research plan through the
+ * pure state modules — bypassing the LLM-facing tool envelope — while the
+ * renderer only ever sees read-only projections. Returns null when the
+ * vendored copy is unavailable; callers degrade to telemetry-only tracking.
+ */
+export interface TodoPlanStore {
+  createTask(subject: string, opts?: { activeForm?: string; description?: string }): number;
+  updateTask(id: number, patch: { status?: 'pending' | 'in_progress' | 'completed'; activeForm?: string }): void;
+  /** Read-only projection of the session's todo tasks. */
+  projection(): Array<{ id: number; subject: string; status: 'pending' | 'in_progress' | 'completed' | 'deleted'; activeForm?: string }>;
+}
+
+export async function loadTodoPlanStore(sessionId: string): Promise<TodoPlanStore | null> {
+  const loader = await getJitiLoader();
+  if (!loader) return null;
+  const root = path.join(VENDOR_ROOT, 'rpiv-todo');
+  try {
+    const reducer = loader(path.join(root, 'state', 'state-reducer.ts')) as Record<string, any>;
+    const store = loader(path.join(root, 'state', 'store.ts')) as Record<string, any>;
+    if (typeof reducer?.applyTaskMutation !== 'function'
+      || typeof store?.getState !== 'function' || typeof store?.commitState !== 'function') {
+      console.warn('[piPackages] rpiv-todo store modules missing expected exports.');
+      return null;
+    }
+    return {
+      createTask(subject, opts) {
+        const res = reducer.applyTaskMutation(
+          store.getState(sessionId), 'create',
+          { subject, ...(opts?.activeForm ? { activeForm: opts.activeForm } : {}), ...(opts?.description ? { description: opts.description } : {}) },
+        );
+        if (res?.op?.kind === 'error') throw new Error(String(res.op.message));
+        store.commitState(sessionId, res.state);
+        return res.op.taskId as number;
+      },
+      updateTask(id, patch) {
+        const res = reducer.applyTaskMutation(store.getState(sessionId), 'update', { id, ...patch });
+        if (res?.op?.kind === 'error') throw new Error(String(res.op.message));
+        store.commitState(sessionId, res.state);
+      },
+      projection() {
+        const st = store.getState(sessionId);
+        return (st?.tasks ?? []).map((t: Record<string, any>) => ({
+          id: t.id as number,
+          subject: String(t.subject),
+          status: t.status,
+          ...(t.activeForm ? { activeForm: String(t.activeForm) } : {}),
+        }));
+      },
+    };
+  } catch (err) {
+    console.warn(`[piPackages] failed to load rpiv-todo store modules: ${String(err).slice(0, 600)}`);
+    return null;
+  }
+}
+
 /** Wraps a captured package tool into the engine's LLMToolDefinition. */
 export function toEngineTool(t: PackageTool): LLMToolDefinition {
   return {

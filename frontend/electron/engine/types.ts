@@ -118,6 +118,34 @@ export interface WideResearchTelemetry {
 
 export type PlanApprovalAction = 'approve_plan' | 'reject_plan' | 'regenerate_plan';
 
+/** Read-only projection of one rpiv-todo research-plan task (ADR-0010 #7:
+ * parent-only writes; the renderer never reads the todo store directly). */
+export interface TodoTaskProjection {
+  id: number;
+  subject: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'deleted';
+  activeForm?: string;
+}
+
+/** Researcher lifecycle/progress telemetry for the Research Agency path
+ * (ADR-0010 #6) — follows the wide_telemetry additive-event precedent.
+ * Evidence found by researchers keeps flowing as ordinary `source` events. */
+export interface ResearcherTelemetry {
+  researcherId: string;
+  /** Facet role tag. v1 pass-through uses 'primary'; the closed 5-role
+   * catalog + deficit re-specialization land with ticket #93. */
+  role: string;
+  /** The research facet (milestone query) assigned to this researcher. */
+  facet: string;
+  phase: 'started' | 'completed';
+  counts: {
+    facetIndex: number;
+    facetCount: number;
+  };
+  /** Read-only todo-plan projection at emission time (parent-owned state). */
+  todoProjection?: TodoTaskProjection[];
+}
+
 export interface PlanScopingOptions {
   language?: 'ar' | 'en' | string;
   targetSources?: number;
@@ -146,7 +174,8 @@ export interface LiveEvent {
     | 'cancelled'
     | 'budget_exhausted'
     | 'skill_activated'
-    | 'wide_telemetry';
+    | 'wide_telemetry'
+    | 'researcher_telemetry';
   eventId?: number;
   sessionId?: string;
   state?: SessionState;
@@ -185,6 +214,7 @@ export interface LiveEvent {
     uncoveredSubqueries: string[];
   };
   wideTelemetry?: WideResearchTelemetry;
+  researcherTelemetry?: ResearcherTelemetry;
 }
 
 export interface ResearchRequest {
@@ -203,11 +233,14 @@ export interface ResearchRequest {
   embedding_model?: string;
   embedding_api_key?: string;
   embedding_endpoint?: string;
-  embedding_enabled?: boolean;
-  /** Opt-in: attach the vendored pi ecosystem research tools (pi-web-access
-   *  + rpiv-todo) to the agent's tool loop. Defaults to false so existing
-   *  behavior and tests are unchanged. */
+  embedding_enabled?: boolean;  /** Opt-in: attach the vendored pi ecosystem research tools (pi-web-access
+   * + rpiv-todo) to the agent's tool loop. Defaults to false so existing
+   * behavior and tests are unchanged. */
   tool_packages?: boolean;
+  /** Opt-in: run research through the Parent Research Agent orchestration
+   * seam (ADR-0010 phase 1, ticket #88). Dormant by default — unflagged runs
+   * execute the legacy loop unchanged. */
+  agency_mode?: boolean;
 }
 
 export interface SearchResultItem {
