@@ -75,8 +75,10 @@ export async function claimAndShare(
     const shared = await existing;
     if (!shared) {
       // The earlier fetch failed: drop the memoized null so the next caller
-      // becomes the new owner and may retry the fetch.
-      ledger.entries.delete(canonical);
+      // becomes the new owner and may retry the fetch. Identity-check first:
+      // a newer caller may have re-registered a live claim for this URL while
+      // this coroutine was suspended on the await.
+      if (ledger.entries.get(canonical) === existing) ledger.entries.delete(canonical);
       return null;
     }
     return { ...shared, shared: true };
@@ -101,8 +103,10 @@ export async function claimAndShare(
   // interleaving caller can miss the claim.
   ledger.entries.set(canonical, p);
   const own = await p;
-  if (!own) {
+  if (!own && ledger.entries.get(canonical) === p) {
     // Own fetch failed: release the claim so a later caller can retry.
+    // Identity-check guards against dropping a claim a newer caller
+    // (re-)registered while this fetch was in flight.
     ledger.entries.delete(canonical);
   }
   return own;
