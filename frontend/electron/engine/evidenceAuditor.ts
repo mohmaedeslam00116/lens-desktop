@@ -34,6 +34,11 @@ const PARTIAL_THRESHOLD = 0.25;
 const MIN_CLAIM_TOKENS = 4;
 /** Hard cap on extracted claims (memory/time boundedness). */
 const MAX_CLAIMS = 40;
+/** Evidence boundedness: cap how many sources are audited and how much
+ * text per source is tokenized, so a huge page collection cannot balloon
+ * memory or block the Electron main process. */
+const MAX_EVIDENCE_SOURCES = 24;
+const MAX_EVIDENCE_CHARS_PER_SOURCE = 8000;
 
 /** A single auditor verdict for one important claim. */
 export interface ClaimVerdict {
@@ -86,8 +91,16 @@ export function extractImportantClaims(report: string): string[] {
   const seen = new Set<string>();
   for (const sentence of splitSentences(report)) {
     if (claims.length >= MAX_CLAIMS) break;
-    // Skip markdown furniture and headings — only declarative text.
-    const bare = sentence.replace(/[#>*`_\-|]/g, '').trim();
+    const trimmed = sentence.trim();
+    // Headings are never claims — detect them BEFORE any marker stripping,
+    // so long headings like "## Executive Summary and Key Metrics" are not
+    // audited as claim sentences.
+    if (/^#{1,6}\s/.test(trimmed)) continue;
+    // Strip only leading blockquote/list markers, not content characters.
+    const bare = trimmed
+      .replace(/^\s*>\s?/, '')
+      .replace(/^\s*(?:[-+*]|\d+\.)\s+/, '')
+      .trim();
     if (!bare || bare.length < 25) continue;
     const tokens = tokenizeBilingual(bare).filter((t) => t.length > 1);
     if (tokens.length < MIN_CLAIM_TOKENS) continue;
@@ -110,10 +123,16 @@ export function auditEvidenceClaims(
 ): EvidenceAudit {
   const claims = extractImportantClaims(report);
   // Evidence text pool: one bounded blob per source keeps `bestEvidenceIndex`
-  // meaningful for consumers (pointer into the sources array).
-  const evidence = sources.map((s) =>
-    [s.content, s.passage, s.snippet].filter((t): t is string => typeof t === 'string' && t.length > 0).join('\n')
-  );
+  // meaningful for consumers (pointer into the sources array). Sources and
+  // per-source text are capped first (memory/time boundedness).
+  const evidence = sources
+    .slice(0, MAX_EVIDENCE_SOURCES)
+    .map((s) =>
+      [s.content, s.passage, s.snippet]
+        .filter((t): t is string => typeof t === 'string' && t.length > 0)
+        .join('\n')
+        .slice(0, MAX_EVIDENCE_CHARS_PER_SOURCE)
+    );
   // Precompute each evidence blob's token set once (avoid quadratic
   // re-tokenization across claims).
   const evidenceTokenSets = evidence.map((text) => new Set(tokenizeBilingual(text)));
@@ -156,9 +175,10 @@ export function auditEvidenceClaims(
   const supported = verdicts.filter((v) => v.verdict === 'supported').length;
   const partiallySupported = verdicts.filter((v) => v.verdict === 'partially_supported').length;
   const unsupported = verdicts.filter((v) => v.verdict === 'unsupported').length;
+  // No audited claims = no measured support: report 0 (never a false 100%).
   const overallSupport =
     verdicts.length === 0
-      ? 1
+      ? 0
       : Number((verdicts.reduce((sum, v) => sum + v.supportRatio, 0) / verdicts.length).toFixed(3));
 
   return {
