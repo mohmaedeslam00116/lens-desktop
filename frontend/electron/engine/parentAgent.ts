@@ -277,7 +277,22 @@ export class ParentResearchAgent {
             activationManager: this.activationManager,
             searchProvider: request.search_provider,
           });
-          const result = await researcher.run(request, signal);
+          // A transient researcher failure must not prevent the delegated
+          // retrieval/synthesis path from running: contain it and continue
+          // with the remaining facets (the facet falls back to the delegated
+          // loop's own retrieval). On abort, leave through the cleanup path.
+          let result: ResearcherRunResult;
+          try {
+            result = await researcher.run(request, signal);
+          } catch (err) {
+            if (signal?.aborted) break;
+            console.warn(
+              `[ParentResearchAgent] researcher failed for facet ${a.facetIndex}; delegating without its findings:`,
+              err
+            );
+            continue;
+          }
+          if (signal?.aborted) break;
           // Admit only the remaining session allowance — one researcher's
           // result can never overshoot the stated session-wide cap.
           const remaining = MAX_RESEARCHER_FINDINGS_PER_SESSION - budget.findingsAdmitted;
