@@ -13,10 +13,15 @@ describe('Explicit Wide Research server routing', () => {
     assert.ok(createResearchAgent(request, 'wide-session', () => {}) instanceof WideResearchAgent);
   });
 
-  it('keeps legacy storm depth on the standard direct agent path', () => {
+  it('keeps legacy storm depth on the standard direct agent path (legacy_mode escape hatch)', () => {
     const request = normalizeResearchRequest({ query: 'Fast deep report', report_type: 'storm' });
     assert.equal(request.mode, 'standard');
-    assert.ok(createResearchAgent(request, 'storm-session', () => {}) instanceof DeepResearchAgent);
+    // ADR-0012 default flip: the standard loop routes to the agency path by
+    // default; the legacy single-loop needs the explicit escape flag.
+    const legacyRequest = { ...request, legacy_mode: true };
+    assert.ok(
+      createResearchAgent(legacyRequest, 'storm-session', () => {}) instanceof DeepResearchAgent
+    );
   });
 
   it('normalizes missing and invalid modes to standard', () => {

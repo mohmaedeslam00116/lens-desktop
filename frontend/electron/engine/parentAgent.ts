@@ -204,6 +204,15 @@ export class ParentResearchAgent {
     // Authorization guard (mirrors SessionLifecycleManager.isPlanAuthorized):
     // only a plan the user actually approved may drive agency execution — a
     // pending/rejected plan with milestones must never pass this seam.
+    //
+    // ADR-0012 (phase-4 default flip): agency is now the DEFAULT standard
+    // path, so this guard is the engine-layer half of the authorization
+    // policy. Retrieval is STRICTLY gated until the plan is approved: the
+    // session lifecycle owns the plan-less UX (runs stop at the approval
+    // gate before any agent is constructed), and direct engine callers get
+    // this loud error. There is deliberately no silent fallback — review
+    // round 1 (#95 PR) rejected plan-less delegation as an authorization
+    // bypass.
     const approvedPlan = (request as { plan?: ResearchPlan }).plan;
     if (
       approvedPlan?.status !== 'approved'
