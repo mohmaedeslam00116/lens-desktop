@@ -159,6 +159,8 @@ export async function loadVendoredPackageTools(
 export interface TodoPlanStore {
   createTask(subject: string, opts?: { activeForm?: string; description?: string }): number;
   updateTask(id: number, patch: { status?: 'pending' | 'in_progress' | 'completed'; activeForm?: string }): void;
+  /** Tombstone-deletes a task (rollback of partial creation). */
+  deleteTask(id: number): void;
   /** Read-only projection of the session's todo tasks. */
   projection(): Array<{ id: number; subject: string; status: 'pending' | 'in_progress' | 'completed' | 'deleted'; activeForm?: string }>;
 }
@@ -187,6 +189,11 @@ export async function loadTodoPlanStore(sessionId: string): Promise<TodoPlanStor
       },
       updateTask(id, patch) {
         const res = reducer.applyTaskMutation(store.getState(sessionId), 'update', { id, ...patch });
+        if (res?.op?.kind === 'error') throw new Error(String(res.op.message));
+        store.commitState(sessionId, res.state);
+      },
+      deleteTask(id) {
+        const res = reducer.applyTaskMutation(store.getState(sessionId), 'delete', { id });
         if (res?.op?.kind === 'error') throw new Error(String(res.op.message));
         store.commitState(sessionId, res.state);
       },

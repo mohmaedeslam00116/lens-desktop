@@ -144,40 +144,18 @@ export class ParentResearchAgent {
       } catch (err) {
         // The todo plan is orchestration bookkeeping, not research output:
         // a store fault degrades to telemetry-only tracking (documented
-        // contract) instead of failing the whole research run.
-        console.warn('[ParentResearchAgent] todo plan write failed; telemetry-only tracking:', err);
+        // contract) instead of failing the whole research run. Roll back any
+        // partially created tasks so the session plan holds no orphans.
+        console.warn('[ParentResearchAgent] todo plan write failed; rolling back and degrading to telemetry-only tracking:', err);
+        for (const a of assignments) {
+          if (a.taskId !== undefined) {
+            try { todoStore.deleteTask(a.taskId); } catch { /* best-effort rollback */ }
+            a.taskId = undefined;
+          }
+        }
         todoStore = null;
       }
     }
-
-    // Researcher lifecycle — assignment mirrors the phase-3 parallel fan-out
-    // (ADR-0010 decision 8): every assigned researcher is marked in_progress
-    // BEFORE any started telemetry is emitted, so every started snapshot shows
-    // the full assignment set, not a sequential work-in-progress trail.
-    if (todoStore) {
-      try {
-        for (const a of assignments) {
-          if (a.taskId !== undefined) todoStore.updateTask(a.taskId, { status: 'in_progress' });
-        }
-      } catch (err) {
-        console.warn('[ParentResearchAgent] todo status write failed:', err);
-      }
-    }
-    for (const a of assignments) {
-      this.emitTelemetry(a, facetCount, 'started', todoStore);
-      // The consumer's emit callback may abort the signal synchronously;
-      // stop the lifecycle immediately and clean up abandoned tasks.
-      if (signal?.aborted) {
-        if (todoStore) this.markTasksForCleanup(todoStore, assignments);
-        return;
-      }
-    }
-
-    this.emitEvent({
-      type: 'status',
-      message: `Assigning ${facetCount} research facet${facetCount === 1 ? '' : 's'} to researchers (agency mode)...`,
-      step: 'planning',
-    });
 
     // Completed-lifecycle bookkeeping must land BEFORE the delegated run's
     // terminal `finished` event: the delegated loop emits `finished` itself
@@ -195,7 +173,41 @@ export class ParentResearchAgent {
       this.emitEvent(event);
     };
 
+    // Everything from the first lifecycle emission onward runs inside the
+    // cleanup-protected block: a throwing emit callback (consumers may abort
+    // the signal synchronously from their callback) or a delegation fault
+    // must never leave the todo plan with stale in_progress tasks.
     try {
+      // Researcher lifecycle — assignment mirrors the phase-3 parallel fan-out
+      // (ADR-0010 decision 8): every assigned researcher is marked in_progress
+      // BEFORE any started telemetry is emitted, so every started snapshot
+      // shows the full assignment set, not a sequential work-in-progress trail.
+      if (todoStore) {
+        try {
+          for (const a of assignments) {
+            if (a.taskId !== undefined) todoStore.updateTask(a.taskId, { status: 'in_progress' });
+          }
+        } catch (err) {
+          console.warn('[ParentResearchAgent] todo status write failed:', err);
+        }
+      }
+
+      for (const a of assignments) {
+        this.emitTelemetry(a, facetCount, 'started', todoStore);
+        // The consumer's emit callback may abort the signal synchronously;
+        // stop the lifecycle immediately and clean up abandoned tasks.
+        if (signal?.aborted) {
+          if (todoStore) this.markTasksForCleanup(todoStore, assignments);
+          return;
+        }
+      }
+
+      this.emitEvent({
+        type: 'status',
+        message: `Assigning ${facetCount} research facet${facetCount === 1 ? '' : 's'} to researchers (agency mode)...`,
+        step: 'planning',
+      });
+
       // Delegate retrieval + synthesis verbatim to the legacy loop. The request
       // already carries the approved plan (trajectory freeze), so the delegated
       // run executes the identical fixture path and the final report is
@@ -203,31 +215,36 @@ export class ParentResearchAgent {
       // real in-process researcher behind the same seams.
       const delegate = new DeepResearchAgent(this.sessionId, interceptingEmit, this.activationManager);
       await delegate.run(request, signal);
+
+      if (signal?.aborted) {
+        if (todoStore) this.markTasksForCleanup(todoStore, assignments);
+        return;
+      }
+
+      for (const a of assignments) {
+        if (todoStore && a.taskId !== undefined) {
+          try {
+            todoStore.updateTask(a.taskId, { status: 'completed', activeForm: `Researched: ${a.facet}` });
+          } catch (err) {
+            console.warn('[ParentResearchAgent] todo completion write failed:', err);
+          }
+        }
+        this.emitTelemetry(a, facetCount, 'completed', todoStore);
+        if (signal?.aborted) {
+          if (todoStore) this.markTasksForCleanup(todoStore, assignments);
+          return;
+        }
+      }
+
+      // Forward the deferred terminal event verbatim, now that the parent's
+      // completion lifecycle is fully emitted — unless the consumer aborted
+      // during completion telemetry.
+      if (deferredFinished && !signal?.aborted) {
+        this.emitEvent(deferredFinished);
+      }
     } catch (err) {
       if (todoStore) this.markTasksForCleanup(todoStore, assignments);
       throw err;
-    }
-
-    if (signal?.aborted) {
-      if (todoStore) this.markTasksForCleanup(todoStore, assignments);
-      return;
-    }
-
-    for (const a of assignments) {
-      if (todoStore && a.taskId !== undefined) {
-        try {
-          todoStore.updateTask(a.taskId, { status: 'completed', activeForm: `Researched: ${a.facet}` });
-        } catch (err) {
-          console.warn('[ParentResearchAgent] todo completion write failed:', err);
-        }
-      }
-      this.emitTelemetry(a, facetCount, 'completed', todoStore);
-    }
-
-    // Forward the deferred terminal event verbatim, now that the parent's
-    // completion lifecycle is fully emitted.
-    if (deferredFinished) {
-      this.emitEvent(deferredFinished);
     }
   }
 
