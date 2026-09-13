@@ -30,6 +30,9 @@ import { buildResearchPackageTools } from './piResearchTools';
 const URL_PATTERN = /https?:\/\/[^\s"'<>\\)\]]+/g;
 const MAX_TOOL_URLS = 8;
 const MAX_FINDINGS = 8;
+/** Hard ceiling for model-driven tool rounds, regardless of the requested
+ * option (boundedness: no Infinity/arbitrary-cost loops). */
+const MAX_TOOL_ROUNDS = 8;
 
 export interface ResearcherOptions {
   researcherId: string;
@@ -197,10 +200,14 @@ export class ResearcherAgent {
           this.telemetry('tool_activity', { toolCalls });
           const result = await inner(call);
           if (call.name === 'web_search' && typeof result.result === 'string') {
-            const urls = result.result.match(URL_PATTERN) || [];
-            for (const url of urls.slice(0, MAX_TOOL_URLS)) {
+            // Lazy iteration with an early stop: a huge tool response must not
+            // allocate an unbounded match array just to read the first few URLs.
+            let urlCount = 0;
+            for (const match of result.result.matchAll(URL_PATTERN)) {
+              if (urlCount >= MAX_TOOL_URLS) break;
+              urlCount += 1;
               if (signal?.aborted) break;
-              await this.ingestUrl(url.replace(/[.,;]+$/, ''), seen, findings, signal);
+              await this.ingestUrl(match[0].replace(/[.,;]+$/, ''), seen, findings, signal);
             }
           }
           return result;
@@ -208,7 +215,10 @@ export class ResearcherAgent {
 
         const provider = request.llm_provider || 'gemini';
         const apiKeys = request.api_keys || {};
-        const maxToolRounds = this.options.maxToolRounds ?? 2;
+        const requestedToolRounds = this.options.maxToolRounds ?? 2;
+        const maxToolRounds = Number.isFinite(requestedToolRounds)
+          ? Math.min(MAX_TOOL_ROUNDS, Math.max(0, Math.floor(requestedToolRounds)))
+          : 2;
         const systemPrompt = [
           `You are a specialized research subagent.`,
           `Your assigned research facet (topic ${this.options.facetIndex + 1}/${this.options.facetCount}): "${this.options.facet}".`,
