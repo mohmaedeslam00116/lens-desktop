@@ -187,7 +187,10 @@ describe('Agency + researcher_mode end-to-end (offline via injected researcher f
 
     const finished = emitted.find((e) => e.type === 'finished');
     assert.ok(finished, 'run completes');
-    assert.equal(finished.report, REPORT, 'delegated synthesis unchanged (parity contract)');
+    // Ticket #91: the finished report = delegated synthesis + advisory audit
+    // section (part of the report contract in every run).
+    assert.ok(finished.report.startsWith(REPORT), 'delegated synthesis unchanged (parity contract)');
+    assert.match(finished.report, /## Evidence Audit/);
 
     const seeded = (finished.sources || []).filter((s) => String(s.url).includes('seeded-'));
     assert.ok(seeded.length >= 2, `seeded researcher findings appear in report sources (got ${seeded.length})`);

@@ -118,7 +118,8 @@ export interface LiveEvent {
     | 'budget_exhausted'
     | 'wide_telemetry'
     | 'researcher_telemetry'
-    | 'fanout_telemetry';
+    | 'fanout_telemetry'
+    | 'audit_telemetry';
   sessionId?: string;
   state?: string;
   plan?: ResearchPlan;
@@ -151,6 +152,22 @@ export interface LiveEvent {
     urlsShared: number;
     budgetFindingsAdmitted: number;
     coverageByFacet: Record<string, number>;
+  };
+  /** Advisory evidence-audit verdicts (ADR-0010 decision 4, ticket #91). */
+  auditTelemetry?: {
+    verdicts: Array<{
+      index: number;
+      claim: string;
+      verdict: 'supported' | 'partially_supported' | 'unsupported';
+      supportRatio: number;
+      bestEvidenceIndex: number;
+    }>;
+    supported: number;
+    partiallySupported: number;
+    unsupported: number;
+    overallSupport: number;
+    mode: 'advisory' | 'gating';
+    language: 'ar' | 'en';
   };
   /** Research-facet provenance on `source` events emitted by researcher
    * subagents (ADR-0010 phase 2, ticket #89). */

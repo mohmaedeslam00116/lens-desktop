@@ -1,6 +1,7 @@
 import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem, WideResearchRequest, PlanMilestone } from './types';
 import { MultiSearchProvider } from './search';
 import { PageScraper, ScrapedPage } from './scraper';
+import { auditEvidenceClaims, buildAuditSection } from './evidenceAuditor';
 import { LLMRequestOptions, LLMToolDefinition, ToolCallHandler } from './models';
 import { generate } from './modelGateway';
 import { createEmbeddingModel, rankSourcePassages, fallbackEvidence, EmbeddingProvider } from './embeddings';
@@ -601,7 +602,25 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
     })));
     report = citationContract.verifyAndSanitize(report).sanitizedText;
 
-    // 7. Emit Finished Event
+    // 7. Advisory Evidence Audit (ADR-0010 decision 4, ticket #91)
+    // Deterministic, offline, bilingual claim-vs-evidence verification of the
+    // synthesized report. Advisory only: verdicts annotate — they never gate
+    // admission, coverage, early exit, or budget decisions (gating is a
+    // settings flag reserved for post-#94 parity data).
+    const audit = auditEvidenceClaims(
+      report,
+      scrapedSources.map(s => ({ content: s.content, url: s.url })),
+      { language: isAr ? 'ar' : 'en' }
+    );
+    this.emitEvent({ type: 'audit_telemetry', auditTelemetry: audit });
+    // The report itself surfaces audit outcomes (both languages). Streamed as
+    // a final report_chunk so streamed-vs-final equality holds; the finished
+    // event then carries the section inside `report` verbatim.
+    const auditSection = buildAuditSection(audit);
+    this.emitEvent({ type: 'report_chunk', chunk: auditSection });
+    report += auditSection;
+
+    // 8. Emit Finished Event
     const formattedSources: SourceItem[] = scrapedSources.map(s => ({
       url: s.url,
       title: s.title,
