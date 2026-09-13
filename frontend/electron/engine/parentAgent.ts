@@ -7,6 +7,7 @@ import { auditEvidenceCoverage } from './evidenceCoverage';
 import { resetFetchLedger } from './fetchLedger';
 import { routeCompression, disposeCompression } from './compressionRouting';
 import { assignRoles, planRespecialization, ResearcherRole, ROLE_LABELS } from './researcherRoles';
+import { normalizeCanonicalUrl } from './dedup';
 import { tokenizeBilingual } from './bm25';
 
 /** Researcher construction seam (pi-subagents-shaped): the default factory
@@ -303,6 +304,10 @@ export class ParentResearchAgent {
             counts: { facetIndex: a.facetIndex, facetCount },
           },
         });
+        // The consumer's emit callback may abort the signal synchronously;
+        // stop the role-selection stream immediately (the started loop's own
+        // abort check performs the todo-task cleanup).
+        if (signal?.aborted) break;
       }
 
       for (const a of assignments) {
@@ -473,57 +478,90 @@ export class ParentResearchAgent {
         if (!this.respecializationEnabled) {
           console.warn('[ParentResearchAgent] re-specialization disabled for this run; deficit follow-ups skipped.');
         }
-        for (const p of this.respecializationEnabled ? proposals : []) {
-          if (signal?.aborted) break;
-          if (budget.researchersLaunched >= MAX_RESEARCHERS_PER_SESSION
-            || budget.findingsAdmitted >= MAX_RESEARCHER_FINDINGS_PER_SESSION) {
-            console.warn('[ParentResearchAgent] re-specialization bounded by the session budget.');
-            break;
-          }
-          budget.researchersLaunched += 1;
-          researchersLaunched += 1;
-          this.emitEvent({
-            type: 'researcher_telemetry',
-            researcherTelemetry: {
+        // Follow-ups run through the SAME bounded worker pool (concurrency
+        // limit), so deficit re-specialization never costs more wall-clock
+        // than the pool permits.
+        await runPool(
+          this.respecializationEnabled ? proposals : [],
+          concurrencyLimit,
+          async (p) => {
+            // Budget re-check per launch: earlier pool workers may already
+            // have spent the session's researcher/finding allowance.
+            if (
+              budget.researchersLaunched >= MAX_RESEARCHERS_PER_SESSION
+              || budget.findingsAdmitted >= MAX_RESEARCHER_FINDINGS_PER_SESSION
+            ) {
+              console.warn('[ParentResearchAgent] re-specialization bounded by the session budget.');
+              return;
+            }
+            if (signal?.aborted) return;
+            budget.researchersLaunched += 1;
+            researchersLaunched += 1;
+            this.emitEvent({
+              type: 'researcher_telemetry',
+              researcherTelemetry: {
+                researcherId: respecializationResearcherId(this.sessionId, p.facetIndex, 1),
+                role: p.role,
+                facet: p.facet,
+                phase: 'role_selected',
+                counts: { facetIndex: p.facetIndex, facetCount, respecialization: true, rationale: p.reason },
+              },
+            });
+            // emitEvent may abort synchronously — check before consuming.
+            if (signal?.aborted) return;
+            const researcher = this.researcherFactory(this.sessionId, this.emitEvent, {
               researcherId: respecializationResearcherId(this.sessionId, p.facetIndex, 1),
-              role: p.role,
+              facetIndex: p.facetIndex,
               facet: p.facet,
-              phase: 'role_selected',
-              counts: { facetIndex: p.facetIndex, facetCount, respecialization: true, rationale: p.reason },
-            },
-          });
-          const researcher = this.researcherFactory(this.sessionId, this.emitEvent, {
-            researcherId: respecializationResearcherId(this.sessionId, p.facetIndex, 1),
-            facetIndex: p.facetIndex,
-            facet: p.facet,
-            facetCount,
-            milestoneId: approvedPlan.milestones[p.facetIndex]?.id || `m${p.facetIndex + 1}`,
-            milestoneTitle: approvedPlan.milestones[p.facetIndex]?.query || p.facet,
-            role: p.role,
-            toolPackages: true,
-            activationManager: this.activationManager,
-            searchProvider: request.search_provider,
-            proxyBaseUrl,
-            compressionNotices,
-          });
-          let result: ResearcherRunResult;
-          try {
-            result = await researcher.run(request, signal);
-          } catch (err) {
-            if (signal?.aborted) break;
-            researchersFailed += 1;
-            console.warn(`[ParentResearchAgent] re-specialization researcher failed for facet ${p.facetIndex}:`, err);
-            continue;
-          }
-          if (signal?.aborted) break;
-          researchersCompleted += 1;
-          const remaining = MAX_RESEARCHER_FINDINGS_PER_SESSION - budget.findingsAdmitted;
-          const admitted = result.findings.slice(0, Math.max(0, remaining));
-          budget.findingsAdmitted += admitted.length;
-          seed[p.facetIndex] = seed[p.facetIndex]
-            ? { ...seed[p.facetIndex], findings: [...seed[p.facetIndex].findings, ...admitted] }
-            : { ...result, findings: admitted };
-        }
+              facetCount,
+              milestoneId: approvedPlan.milestones[p.facetIndex]?.id || `m${p.facetIndex + 1}`,
+              milestoneTitle: approvedPlan.milestones[p.facetIndex]?.query || p.facet,
+              role: p.role,
+              toolPackages: true,
+              activationManager: this.activationManager,
+              searchProvider: request.search_provider,
+              proxyBaseUrl,
+              compressionNotices,
+            });
+            let result: ResearcherRunResult;
+            try {
+              result = await researcher.run(request, signal);
+            } catch (err) {
+              if (signal?.aborted) return;
+              researchersFailed += 1;
+              console.warn(`[ParentResearchAgent] re-specialization researcher failed for facet ${p.facetIndex}:`, err);
+              return;
+            }
+            if (signal?.aborted) return;
+            researchersCompleted += 1;
+            // The fetch ledger dedupes FETCHES, but the initial researcher may
+            // already have admitted a URL into this facet's seed — dedupe the
+            // admissions against it under the canonical-URL contract so shared
+            // pages never double-count evidence or session budget.
+            const existing = seed[p.facetIndex];
+            const seenUrls = new Set((existing?.findings ?? []).map((f) => normalizeCanonicalUrl(f.url)));
+            const remaining = MAX_RESEARCHER_FINDINGS_PER_SESSION - budget.findingsAdmitted;
+            const admitted = result.findings
+              .filter((f) => !seenUrls.has(normalizeCanonicalUrl(f.url)))
+              .slice(0, Math.max(0, remaining));
+            budget.findingsAdmitted += admitted.length;
+            seed[p.facetIndex] = existing
+              ? { ...existing, findings: [...existing.findings, ...admitted] }
+              : { ...result, findings: admitted };
+            // Recompute the facet's coverage from the merged seed so
+            // fanout_telemetry reflects post-follow-up state, not the deficit
+            // that triggered the follow-up.
+            if (admitted.length > 0) {
+              coverageByFacet[p.facet] = auditEvidenceCoverage(
+                p.facet,
+                [],
+                seed[p.facetIndex].findings.map((f) => ({ content: f.content, domain: f.domain })),
+                { language: request.language === 'ar' ? 'ar' : 'en' }
+              ).overallScore;
+            }
+          },
+          () => signal?.aborted === true
+        );
         this.emitEvent({
           type: 'fanout_telemetry',
           fanoutTelemetry: {
