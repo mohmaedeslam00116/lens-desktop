@@ -6,6 +6,7 @@ import { ModelClient } from './models';
 import { DeepResearchAgent } from './agent';
 import { ParentResearchAgent } from './parentAgent';
 import { evictPackageToolCache } from './piResearchTools';
+import { resetResearcherBudget } from './parentAgent';
 import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
@@ -96,6 +97,8 @@ export function scheduleSessionCleanup(sessionId: string, delayMs = DEFAULT_SESS
     // Session-scoped package tools (pi-web-access ctx, rpiv-todo store) must
     // not outlive the session — evict to keep the per-session cache bounded.
     evictPackageToolCache(sessionId);
+    // Session-scoped researcher allowance (ADR-0010 decision 8) likewise.
+    resetResearcherBudget(sessionId);
   }, delayMs);
   if (timer.unref) {
     timer.unref();

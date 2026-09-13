@@ -42,9 +42,23 @@ const MAX_PROJECTION_TASKS = 50;
 
 /** Session-wide researcher-execution caps (ADR-0010 decision 8: researchers
  * draw from the single session evidence budget — no second pool). Bounded so
- * a large approved plan cannot fan out unbounded external calls or memory. */
+ * a large approved plan cannot fan out unbounded external calls or memory.
+ * Counters live at SESSION scope (module map keyed by sessionId, evicted on
+ * session teardown) — repeated runs for one session share the allowance. */
 const MAX_RESEARCHERS_PER_SESSION = 8;
 const MAX_RESEARCHER_FINDINGS_PER_SESSION = 48;
+
+interface ResearcherBudget {
+  researchersLaunched: number;
+  findingsAdmitted: number;
+}
+
+const researcherBudgets = new Map<string, ResearcherBudget>();
+
+/** Clears one session's researcher allowance — call on session teardown. */
+export function resetResearcherBudget(sessionId: string): void {
+  researcherBudgets.delete(sessionId);
+}
 
 /** One derived facet assignment: which facet (query) runs, in what order. */
 export interface FacetAssignment {
@@ -236,22 +250,22 @@ export class ParentResearchAgent {
       const researcherMode = (request as { researcher_mode?: boolean }).researcher_mode === true;
       if (researcherMode) {
         const seed: ResearcherRunResult[] = [];
-        let sessionFindings = 0;
-        let researchersLaunched = 0;
+        const budget = researcherBudgets.get(this.sessionId) ?? { researchersLaunched: 0, findingsAdmitted: 0 };
+        researcherBudgets.set(this.sessionId, budget);
         for (const a of assignments) {
           if (signal?.aborted) break;
-          // Session-wide caps: stop launching researchers once the process has
+          // Session-wide caps: stop launching researchers once the session has
           // used its researcher or source allowance (single session budget,
           // ADR-0010 decision 8).
-          if (researchersLaunched >= MAX_RESEARCHERS_PER_SESSION) {
+          if (budget.researchersLaunched >= MAX_RESEARCHERS_PER_SESSION) {
             console.warn(`[ParentResearchAgent] researcher cap (${MAX_RESEARCHERS_PER_SESSION}) reached; remaining facets stay with the delegated loop.`);
             break;
           }
-          if (sessionFindings >= MAX_RESEARCHER_FINDINGS_PER_SESSION) {
+          if (budget.findingsAdmitted >= MAX_RESEARCHER_FINDINGS_PER_SESSION) {
             console.warn(`[ParentResearchAgent] researcher source cap (${MAX_RESEARCHER_FINDINGS_PER_SESSION}) reached; remaining facets stay with the delegated loop.`);
             break;
           }
-          researchersLaunched += 1;
+          budget.researchersLaunched += 1;
           const researcher = this.researcherFactory(this.sessionId, this.emitEvent, {
             researcherId: researcherId(this.sessionId, a.facetIndex),
             facetIndex: a.facetIndex,
@@ -264,8 +278,15 @@ export class ParentResearchAgent {
             searchProvider: request.search_provider,
           });
           const result = await researcher.run(request, signal);
-          sessionFindings += result.findings.length;
-          seed.push(result);
+          // Admit only the remaining session allowance — one researcher's
+          // result can never overshoot the stated session-wide cap.
+          const remaining = MAX_RESEARCHER_FINDINGS_PER_SESSION - budget.findingsAdmitted;
+          const admitted = result.findings.slice(0, Math.max(0, remaining));
+          if (admitted.length < result.findings.length) {
+            console.warn(`[ParentResearchAgent] researcher findings truncated to the session allowance (${admitted.length}/${result.findings.length} admitted).`);
+          }
+          budget.findingsAdmitted += admitted.length;
+          seed.push({ ...result, findings: admitted });
         }
         // Findings enter the delegated loop's evidence pool with per-facet
         // provenance; admission/coverage keep enforcing the LENS contracts.
