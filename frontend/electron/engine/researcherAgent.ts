@@ -110,6 +110,9 @@ export class ResearcherAgent {
       const scrape = this.options.scrapeFn ?? PageScraper.scrape;
       const page = await scrape(url, 7000, signal);
       if (!page?.content || page.content.startsWith('Content unavailable from ') || page.content.startsWith('Error retrieving ')) {
+        // Un-mark the URL so a later tool-directed retrieval for the same URL
+        // can retry — the supplementary plane is the recovery path.
+        seen.delete(url);
         return;
       }
       findings.push({
@@ -129,6 +132,7 @@ export class ResearcherAgent {
       });
       this.telemetry('retrieval', { sourcesRetrieved: findings.length });
     } catch (err) {
+      seen.delete(url);
       if (signal?.aborted) return;
       console.warn(`[ResearcherAgent] scrape failed for ${url}:`, err);
     }
@@ -163,10 +167,11 @@ export class ResearcherAgent {
         signal
       );
     } catch (err) {
-      if (signal?.aborted) {
-        return { researcherId: this.options.researcherId, facetIndex: this.options.facetIndex, facet: this.options.facet, findings, toolCalls };
+      if (!signal?.aborted) {
+        console.warn(`[ResearcherAgent] search failed for facet "${this.options.facet}":`, err);
       }
-      console.warn(`[ResearcherAgent] search failed for facet "${this.options.facet}":`, err);
+      // No early return on abort: flow reaches the common completion logic so
+      // run_completed is always emitted (no stale active researcher in telemetry).
     }
     for (const hit of hits) {
       if (signal?.aborted) break;
