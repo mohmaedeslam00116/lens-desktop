@@ -39,6 +39,14 @@ export interface PiAdapterOptions {
    * in tests). When absent, the default registry is used.
    */
   overrideFactory?: (providerId: string) => Promise<unknown>;
+  /**
+   * Compression proxy base URL (ADR-0010: billion-context subprocess, ticket
+   * #92). When set, every model's upstream `baseUrl` is rewritten through the
+   * proxy in URL-prefix mode — `http://127.0.0.1:<port>/bili/<upstream>` —
+   * so the upstream host stays encoded in the path (no MITM/CA). Models with
+   * an empty baseUrl are left untouched.
+   */
+  proxyBaseUrl?: string;
 }
 
 export const DEFAULT_PI_MODELS = {
@@ -118,6 +126,30 @@ export async function createOpenAiCompatibleProvider(
     models: [],
     api: { 'openai-completions': apiModuleOf(ai) },
   });
+}
+
+/**
+ * Rewrites an upstream base URL through the compression proxy's URL-prefix
+ * mode: `<proxy>/bili/<upstream-without-scheme>` (e.g.
+ * `http://127.0.0.1:8787/bili/api.openai.com/v1`) — the bili URL-prefix
+ * contract keeps the upstream host encoded in the path (no MITM/CA).
+ * Idempotent for already-proxied URLs; empty upstreams pass through.
+ */
+export function proxyPrefixUrl(proxyBaseUrl: string, upstreamUrl: string): string {
+  const base = proxyBaseUrl.replace(/\/+$/, '');
+  const upstream = upstreamUrl.replace(/\/+$/, '');
+  if (!upstream) return upstreamUrl;
+  if (upstream === base || upstream.startsWith(`${base}/`)) return upstreamUrl;
+  return `${base}/bili/${upstream.replace(/^https?:\/\//, '')}`;
+}
+
+/**
+ * Returns a copy of the model with its `baseUrl` routed through the
+ * compression proxy when one is configured; otherwise the model unchanged.
+ */
+export function applyProxyToModel(model: PiModel, proxyBaseUrl?: string): PiModel {
+  if (!proxyBaseUrl || !model?.baseUrl) return model;
+  return { ...model, baseUrl: proxyPrefixUrl(proxyBaseUrl, model.baseUrl) };
 }
 
 async function buildProvider(
@@ -250,7 +282,7 @@ export async function generateWithPi(
   });
   models.setProvider(provider);
 
-  const model = resolveModel(provider, modelName);
+  const model = applyProxyToModel(resolveModel(provider, modelName), adapterOptions?.proxyBaseUrl);
   if (signal?.aborted) {
     throw new Error('[PiAdapter] aborted before the first model request');
   }

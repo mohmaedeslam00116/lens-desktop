@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -21,6 +22,8 @@ export interface BillionContextOptions {
   binary?: string;
   /** Health-check timeout in ms (default 8000). */
   healthTimeoutMs?: number;
+  /** Cancellation: aborts the startup wait immediately. */
+  signal?: AbortSignal;
 }
 
 export interface BillionContextHandle {
@@ -41,22 +44,77 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function probeHealth(base: string): Promise<{ ok: boolean; upstream?: string }> {
-  try {
-    const res = await fetch(`${base}/__bili/health`, { signal: AbortSignal.timeout(2000) });
-    if (!res.ok) return { ok: false };
-    try {
-      const body = (await res.json()) as { ok?: boolean; upstream?: string };
-      return { ok: body.ok === true, upstream: body.upstream };
-    } catch {
-      return { ok: true };
+/** Health probe bounds: an absolute deadline (independent of socket
+ * inactivity) and a small response byte cap — a malicious/broken server
+ * streaming forever must not extend startup or balloon memory. */
+const PROBE_TIMEOUT_MS = 2000;
+const PROBE_MAX_BODY_BYTES = 4096;
+
+/**
+ * Health probe over raw node:http — deliberately NOT globalThis.fetch, so
+ * the supervisor's loopback probe is immune to app-level fetch
+ * instrumentation (and test stubs). Honors an optional AbortSignal.
+ * Bounded: absolute deadline + byte-capped body, decoded once as UTF-8.
+ */
+function probeHealth(base: string, signal?: AbortSignal): Promise<{ ok: boolean; upstream?: string }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const chunks: Buffer[] = [];
+    let bodyBytes = 0;
+    let req: http.ClientRequest | undefined;
+    const finish = (result: { ok: boolean; upstream?: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      req?.destroy();
+      resolve(result);
+    };
+    const onAbort = () => finish({ ok: false });
+    // Absolute probe deadline: socket-activity timeouts alone cannot bound a
+    // server that dribbles data forever.
+    const deadline = setTimeout(() => finish({ ok: false }), PROBE_TIMEOUT_MS);
+    req = http.get(`${base}/__bili/health`, (res) => {
+      res.on('data', (chunk: Buffer) => {
+        bodyBytes += chunk.length;
+        if (bodyBytes > PROBE_MAX_BODY_BYTES) {
+          finish({ ok: false });
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('end', () => {
+        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+          try {
+            // One decode of the accumulated bytes: per-chunk string decoding
+            // would corrupt UTF-8 sequences split across chunk boundaries.
+            const body = Buffer.concat(chunks).toString('utf8');
+            const parsed = JSON.parse(body) as { ok?: boolean; upstream?: string };
+            finish({ ok: parsed.ok === true, upstream: parsed.upstream });
+          } catch {
+            finish({ ok: true });
+          }
+        } else {
+          finish({ ok: false });
+        }
+      });
+      res.on('error', () => finish({ ok: false }));
+    });
+    req.on('timeout', () => finish({ ok: false }));
+    req.on('error', () => finish({ ok: false }));
+    if (signal) {
+      if (signal.aborted) finish({ ok: false });
+      else signal.addEventListener('abort', onAbort, { once: true });
     }
-  } catch {
-    return { ok: false };
-  }
+  });
 }
 
 export function resolveBillionBinary(): string | null {
+  // Ops/test override: point the supervisor at a specific bili binary
+  // (tests use a stub script; operators can pin a version) without
+  // bundling or importing billion-context in-process.
+  const override = process.env.LENS_BILI_BINARY;
+  if (override && fs.existsSync(override)) return override;
   const candidate = path.join(process.cwd(), 'node_modules', 'billion-context', 'dist', 'index.js');
   return fs.existsSync(candidate) ? candidate : null;
 }
@@ -83,6 +141,7 @@ export async function startBillionContext(options: BillionContextOptions = {}): 
   const child = spawn(process.execPath, [binary, '--port', String(port)], {
     env: process.env,
     stdio: 'ignore',
+    signal: options.signal,
   });
   // An unhandled 'error' event (ENOENT/EACCES/ENOEXEC) throws asynchronously
   // outside this promise and would crash the Electron main process; handle it
@@ -111,7 +170,12 @@ export async function startBillionContext(options: BillionContextOptions = {}): 
   const base = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const probe = await probeHealth(base);
+    if (options.signal?.aborted) {
+      console.warn('[billionContext] startup aborted; compression disabled.');
+      await disposeBillion();
+      return null;
+    }
+    const probe = await probeHealth(base, options.signal);
     if (probe.ok) {
       const handle: BillionContextHandle = {
         port,

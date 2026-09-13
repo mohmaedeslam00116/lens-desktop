@@ -61,6 +61,14 @@ export interface ResearcherOptions {
    * bridge). Tests supply a faux toolset to exercise the model-driven
    * retrieval path offline. */
   packageToolsFactory?: typeof import('./piResearchTools').buildResearchPackageTools;
+  /** Compression proxy base URL leased by the PARENT for the whole fan-out
+   * (ADR-0010, ticket #92); absent = uncompressed. The researcher never
+   * starts or stops the supervised proxy itself — researchers run
+   * concurrently against a process-wide supervisor, so the lease is owned at
+   * parent/session scope and released after the run. */
+  proxyBaseUrl?: string;
+  /** Degradation notices collected by the parent's lease acquisition. */
+  compressionNotices?: string[];
 }
 
 export interface ResearcherRunResult {
@@ -214,6 +222,9 @@ export class ResearcherAgent {
     // Phase B — model-driven retrieval through the pi-web-access toolset
     // (supplementary plane; the adapter runs its own depth-capped tool loop).
     if (this.options.toolPackages && !signal?.aborted) {
+      // Compression routing (ticket #92): the proxy lease is acquired by the
+      // parent for the whole fan-out; the researcher only consumes its URL.
+      const proxyBaseUrl = this.options.proxyBaseUrl;
       try {
         const buildTools = this.options.packageToolsFactory
           ?? (await import('./piResearchTools')).buildResearchPackageTools;
@@ -283,7 +294,7 @@ export class ResearcherAgent {
               ],
               temperature: 0.2,
             },
-            { signal }
+            { signal, ...(proxyBaseUrl ? { proxyBaseUrl } : {}) }
           );
         }
       } catch (err) {
