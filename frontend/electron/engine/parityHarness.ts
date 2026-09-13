@@ -146,11 +146,25 @@ export function makeFixtureFetch(fixture: ParityFixture): typeof fetch {
       return null;
     }
     for (const [pageUrl, html] of Object.entries(fixture.pageHtml)) {
-      if (url === pageUrl || url.startsWith(pageUrl)) return html;
+      // Exact origin+pathname match: query/fragment variants of the same
+      // fixture page are served; unrelated URLs sharing a prefix are not.
+      try {
+        const requested = new URL(url);
+        const fixtureUrl = new URL(pageUrl);
+        if (requested.origin === fixtureUrl.origin && requested.pathname === fixtureUrl.pathname) return html;
+      } catch {
+        // Malformed URL — fall through to the documented 404.
+      }
     }
     return null;
   };
-  return (async (input: RequestInfo | URL): Promise<Response> => {
+  return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    // Honor the caller's cancellation contract: abort exactly like a real
+    // network fetch would when retrieval supplies an aborted signal.
+    const signal =
+      init?.signal ??
+      (typeof Request !== 'undefined' && input instanceof Request ? input.signal : undefined);
+    signal?.throwIfAborted();
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const html = route(url);
     if (html === null) {
@@ -248,9 +262,15 @@ export async function checkFixture(
   // Stage 2: citation grounding audit — identical sanitizer decisions on the
   // same report + shared evidence pool (admission preprocessing is
   // path-invariant by contract, so grounding decisions must match exactly).
+  // Citation indices are positional over the registered excerpts, so the
+  // shared pool is canonicalized by URL first — the fan-out leg's sources
+  // array order is researcher-arrival dependent, which must not affect the
+  // grounding contract (ADR-0011: order-insensitive admission semantics).
+  const canonicalSourcesOf = (leg: LegOutcome): SourceItem[] =>
+    [...(leg.finished?.sources ?? [])].sort((a, b) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0));
   const groundingOf = (leg: LegOutcome) => {
     const contract = new CitationGroundingContract();
-    contract.registerExcerpts(leg.finished?.sources ?? []);
+    contract.registerExcerpts(canonicalSourcesOf(leg));
     const v = contract.verifyAndSanitize(leg.finished?.report ?? '');
     return {
       sanitizedText: v.sanitizedText,

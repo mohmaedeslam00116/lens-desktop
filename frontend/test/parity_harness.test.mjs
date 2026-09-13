@@ -97,11 +97,18 @@ const FIXTURES = [
 
 const REPORT = FIXTURES[0].report;
 
-async function makeFaux(totalResponses) {
+/** Builds a faux provider queueing each fixture's OWN golden report —
+ * the runner consumes fixtures sequentially, so responses are grouped per
+ * fixture (responseCount per fixture, report per fixture). */
+async function makeFaux(fixtures) {
   const ai = await pi();
   const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
   const queued = [];
-  for (let i = 0; i < totalResponses; i++) queued.push(ai.fauxAssistantMessage(REPORT));
+  for (const fixture of fixtures) {
+    for (let i = 0; i < responseCount(fixture); i++) {
+      queued.push(ai.fauxAssistantMessage(fixture.report));
+    }
+  }
   faux.setResponses(queued);
   return faux;
 }
@@ -113,24 +120,45 @@ const responseCount = (fixture) => 6 + 2 * fixture.plan.milestones.length;
 
 const ARTIFACT_DIR = path.join(process.cwd(), 'test', 'artifacts');
 const ARTIFACT = path.join(ARTIFACT_DIR, 'parity-report.json');
+const FORCED_ARTIFACT = path.join(ARTIFACT_DIR, 'parity-report-forced.json');
+
+/** Persists the divergence artifact (JSON + human-readable) so a failing
+ * run leaves the diff on disk BEFORE the assertion fires. */
+async function writeArtifact(report, artifactPath = ARTIFACT) {
+  await mkdir(ARTIFACT_DIR, { recursive: true });
+  await writeFile(
+    artifactPath,
+    JSON.stringify({ ...report, humanReadable: formatParityReport(report) }, null, 2)
+  );
+}
 
 describe('Parity regression harness (ticket #94 — ADR-0010 phase-3 gate)', () => {
   it('runs both paths on shared offline fixtures and emits a readable equivalence report (baseline parity)', async () => {
-    const faux = await makeFaux(FIXTURES.reduce((sum, f) => sum + responseCount(f), 0));
-    const report = await runParityHarness(FIXTURES, { provider: faux.provider });
-
-    assert.equal(report.ok, true, `baseline parity broke: ${formatParityReport(report)}`);
-    assert.equal(report.divergence, null);
-    assert.equal(report.results.length, FIXTURES.length);
+    // One provider per fixture (its own golden report), one harness run per
+    // fixture — leg response counts vary, so per-fixture queues cannot desync.
+    const results = [];
+    for (const fixture of FIXTURES) {
+      const faux = await makeFaux([fixture]);
+      const r = await runParityHarness([fixture], { provider: faux.provider });
+      results.push(...r.results);
+      if (!r.ok) {
+        // Artifact first — the diff must outlive the failing assertion.
+        await writeArtifact(r);
+      }
+      assert.equal(
+        r.ok, true,
+        `baseline parity broke for ${fixture.name} — divergence artifact written to ${ARTIFACT}\n${formatParityReport(r)}`
+      );
+    }
+    assert.equal(results.length, FIXTURES.length);
 
     // Readable report: every fixture carries one line per documented stage.
     const STAGES = ['coverage', 'grounding', 'admissions', 'sequence'];
-    for (const r of report.results) {
+    for (const r of results) {
       assert.deepEqual(r.stages.map((s) => s.stage), STAGES);
       assert.ok(r.summary.every((line) => line.includes('✔')));
     }
-    const text = formatParityReport(report);
-    assert.match(text, /EQUIVALENT/);
+    const text = results.map((r) => r.summary.join('\n')).join('\n');
     for (const f of FIXTURES) {
       for (const stage of STAGES) assert.ok(text.includes(`${f.name}/${stage}`), `missing ${f.name}/${stage} in report`);
     }
@@ -140,7 +168,7 @@ describe('Parity regression harness (ticket #94 — ADR-0010 phase-3 gate)', () 
     // Documented threshold (ADR-0011): coverage |Δ| ≤ 0.05, everything else exact.
     assert.equal(PARITY_THRESHOLDS.coverageDelta, 0.05);
 
-    const faux = await makeFaux(responseCount(FIXTURES[0]));
+    const faux = await makeFaux([FIXTURES[0]]);
     const report = await runParityHarness([FIXTURES[0]], { provider: faux.provider });
     assert.equal(report.ok, true);
 
@@ -154,7 +182,7 @@ describe('Parity regression harness (ticket #94 — ADR-0010 phase-3 gate)', () 
   });
 
   it('divergence beyond thresholds fails with a diff artifact identifying the stage', async () => {
-    const faux = await makeFaux(responseCount(FIXTURES[0]));
+    const faux = await makeFaux([FIXTURES[0]]);
     // Force divergence via the threshold override (proves the artifact path:
     // stage identification + expected/actual diff, not just a boolean).
     const report = await runParityHarness([FIXTURES[0]], {
@@ -167,18 +195,14 @@ describe('Parity regression harness (ticket #94 — ADR-0010 phase-3 gate)', () 
     assert.equal(typeof report.divergence.expected, 'number');
     assert.equal(typeof report.divergence.actual, 'number');
 
-    await mkdir(ARTIFACT_DIR, { recursive: true });
     try {
-      await writeFile(
-        ARTIFACT,
-        JSON.stringify({ ...report, humanReadable: formatParityReport(report) }, null, 2)
-      );
-      const artifact = JSON.parse(await readFile(ARTIFACT, 'utf8'));
+      await writeArtifact(report, FORCED_ARTIFACT);
+      const artifact = JSON.parse(await readFile(FORCED_ARTIFACT, 'utf8'));
       assert.equal(artifact.divergence.stage, 'coverage');
       assert.match(artifact.humanReadable, /DIVERGED/);
       assert.match(artifact.humanReadable, /coverage/);
     } finally {
-      await rm(ARTIFACT, { force: true });
+      await rm(FORCED_ARTIFACT, { force: true });
     }
   });
 });
