@@ -57,6 +57,19 @@ The boundary was locked as nine decisions:
 9. **Recording — this ADR lands in the swap PR** with the first implementation
    that honors the boundary.
 
+## Contract state (amended at ticket #110)
+
+The contract step retired the native DuckDuckGo HTML implementation and the
+unused Instant-Answer module: the vendored plane is the **only** keyless
+search path. The native `search()` seam remains as the keyed-provider entry
+(Tavily/Serper retire at the #112 config seam); its keyless fallback routes
+to the primary plane, and the plane's failure fallback goes straight to the
+caller's keyed provider or propagates — the seam is terminal in both
+directions, so no plane↔native re-entry cycle exists (an earlier draft that
+fell back through `search()` hung the suite on a 39k-iteration fallback
+cycle; the terminal-fallback design is load-bearing). Wide mode keeps its
+keyed routing through `search()` unchanged.
+
 ## Implementation shape (first increment, #109)
 
 - `engine/searchPlane.ts`: the primary plane adapter — signature-compatible

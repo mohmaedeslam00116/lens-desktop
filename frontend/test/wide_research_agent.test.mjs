@@ -5,6 +5,11 @@ import http from 'node:http';
 import { WideResearchAgent, sanitizeCitationIndices } from '../dist-electron/engine/wideAgent.js';
 import { MultiSearchProvider } from '../dist-electron/engine/search.js';
 
+/** Unwrapped fetch captured at module load — the vendored-plane test seam
+ * swaps globalThis.fetch for the duration of its call, so the fixture
+ * transport must close over the real one. */
+const plainFetch = globalThis.fetch;
+
 const approvedPlan = {
   id: 'wide-plan-1',
   version: 1,
@@ -222,7 +227,7 @@ describe('WideResearchAgent', () => {
     assert.equal(events.some(event => event.type === 'finished'), false);
   });
 
-  it('cancels searchDuckDuckGo promptly when response body stalls after headers', async () => {
+  it('cancels the vendored primary-plane search promptly when the response body stalls after headers (retired native DDG: equivalent contract on the plane, #110)', async () => {
     let headersSent = false;
     let serverAborted = false;
     let onHeadersSent;
@@ -251,9 +256,15 @@ describe('WideResearchAgent', () => {
 
       const controller = new AbortController();
       let searchError = null;
-      const searchPromise = MultiSearchProvider.searchDuckDuckGo('quantum computing', 5, controller.signal, endpoint).catch((err) => {
-        searchError = err;
-      });
+      // Post-contract (#110): the native DDG implementation retired — the
+      // same wire contract (endpoint override + prompt AbortError) is pinned
+      // on the vendored primary plane via its module-level fetch/URL seams.
+      const { __testSeams } = await import('../dist-electron/engine/searchPlane.js');
+      const searchPromise = __testSeams
+        .searchWithDuckDuckGo('quantum computing', { numResults: 5, signal: controller.signal, fetchImpl: (u, i) => plainFetch(`${endpoint}?${new URL(String(u)).search}`, i) })
+        .catch((err) => {
+          searchError = err;
+        });
 
       await Promise.race([
         headersSentPromise,

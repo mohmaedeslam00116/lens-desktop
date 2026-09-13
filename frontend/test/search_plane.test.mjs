@@ -83,23 +83,47 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     assert.equal(after.active, 0, 'gate released after the call');
   });
 
-  it('falls back to the native seam entry when the vendored plane fails', async () => {
-    // Break the vendored resolution path: no fixture fetch (native fetch fails).
+  it('propagates vendored-plane failures when no keyed provider is available (post-contract, #110)', async () => {
+    // Post-contract the plane IS the keyless path (native DDG retired) — a
+    // plane failure with no keys is terminal: the error propagates to the
+    // caller's per-query handling. A re-entry into native search() would
+    // cycle (search() → plane → search()); assert it never happens.
     globalThis.fetch = (async () =>
       new Response('no parseable results here', { status: 200 }));
-    const origSearch = MultiSearchProvider.search;
-    let nativeCalled = false;
-    MultiSearchProvider.search = async (query, provider) => {
-      nativeCalled = true;
-      assert.equal(provider, 'duckduckgo', 'fallback goes through the canonical seam entry');
-      return [{ title: 'native', url: 'https://native.example/', snippet: 'native result' }];
+    const origTavily = MultiSearchProvider.searchTavily;
+    const origSerper = MultiSearchProvider.searchSerper;
+    let keyedCalled = false;
+    MultiSearchProvider.searchTavily = async () => { keyedCalled = true; return []; };
+    MultiSearchProvider.searchSerper = async () => { keyedCalled = true; return []; };
+    try {
+      await assert.rejects(
+        primarySearchPlane('fallback query', 'duckduckgo', {}, 3),
+        /no parseable results/,
+        'terminal: the vendored-plane error propagates (no re-entry cycle)'
+      );
+      assert.equal(keyedCalled, false, 'no keyed fallback without keys');
+    } finally {
+      MultiSearchProvider.searchTavily = origTavily;
+      MultiSearchProvider.searchSerper = origSerper;
+    }
+  });
+
+  it('falls back to the caller\'s keyed provider when the vendored plane fails with keys present (#110)', async () => {
+    globalThis.fetch = (async () =>
+      new Response('no parseable results here', { status: 200 }));
+    const origTavily = MultiSearchProvider.searchTavily;
+    let keyedCalled = false;
+    MultiSearchProvider.searchTavily = async (_q, key) => {
+      keyedCalled = true;
+      assert.equal(key, 'k-test');
+      return [{ title: 'keyed', url: 'https://keyed.example/', snippet: 's' }];
     };
     try {
-      const results = await primarySearchPlane('fallback query', 'duckduckgo', {}, 3);
-      assert.equal(nativeCalled, true, 'native seam entry invoked');
-      assert.equal(results[0].url, 'https://native.example/');
+      const results = await primarySearchPlane('fallback query', 'duckduckgo', { tavily: 'k-test' }, 3);
+      assert.equal(keyedCalled, true, 'keyed fallback engaged');
+      assert.equal(results[0].url, 'https://keyed.example/');
     } finally {
-      MultiSearchProvider.search = origSearch;
+      MultiSearchProvider.searchTavily = origTavily;
     }
   });
 
