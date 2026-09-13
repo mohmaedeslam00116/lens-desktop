@@ -326,10 +326,16 @@ export class ParentResearchAgent {
               facetCount,
               milestoneId: approvedPlan.milestones[a.facetIndex]?.id || `m${a.facetIndex + 1}`,
               milestoneTitle: approvedPlan.milestones[a.facetIndex]?.query || a.facet,
-              toolPackages: true,
-              activationManager: this.activationManager,
-              searchProvider: request.search_provider,
-            });
+            toolPackages: true,
+            activationManager: this.activationManager,
+            searchProvider: request.search_provider,
+            // Ticket #92: opt-in compression routing for researcher
+            // long-context traffic; degrades gracefully to uncompressed.
+            compressionEnabled:
+              (request as { compression_mode?: boolean }).compression_mode === true,
+            onNotice: (notice) =>
+              this.emitEvent({ type: 'status', message: notice, step: 'compression' }),
+          });
             // A transient researcher failure must not prevent the delegated
             // retrieval/synthesis path from running: contain it and leave the
             // facet to the delegated loop's own retrieval. On abort, stop.

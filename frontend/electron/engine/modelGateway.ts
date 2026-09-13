@@ -30,9 +30,13 @@ export function resetActiveCore(): void {
   activePiOptions = undefined;
 }
 
-/** Per-request adapter options (currently the session AbortSignal). */
+/** Per-request adapter options (currently the session AbortSignal and the
+ * optional compression-proxy base URL for researcher long-context traffic,
+ * ticket #92). */
 export interface GatewayGenerateOptions {
   signal?: AbortSignal;
+  /** Compression proxy base URL (URL-prefix mode); absent = uncompressed. */
+  proxyBaseUrl?: string;
 }
 
 /**

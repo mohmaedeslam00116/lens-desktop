@@ -291,6 +291,10 @@ export interface ResearchRequest {
   /** Optional override of the parallel researcher concurrency limit
    * (default: min(#facets, 4), ADR-0010 decision 8). Clamped to [1, 4]. */
   researcher_concurrency?: number;
+  /** Opt-in (requires researcher_mode): route researcher long-context model
+   * traffic through the supervised billion-context proxy (ADR-0010, ticket
+   * #92). Dormant by default; degrades gracefully to uncompressed runs. */
+  compression_mode?: boolean;
 }
 
 export interface SearchResultItem {
