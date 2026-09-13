@@ -223,6 +223,22 @@ export function toEngineTool(t: PackageTool): LLMToolDefinition {
 }
 
 /**
+ * Primary-plane boundary guard (ADR-0013, decision D3): `fetch_content`
+ * answer-mode is explicitly unsupported — it requires a model (ctx.model,
+ * undefined in LENS) and would split synthesis ownership, which stays
+ * exclusively with the Parent Research Agent. The guard runs as the shared
+ * handler's pre-dispatch check (before any vendored execution) and returns
+ * graceful guidance text pointing at the supported modes.
+ */
+export function isAnswerModeFetchCall(args: Record<string, unknown>): boolean {
+  return args?.mode === 'answer';
+}
+
+/** Guidance returned to the model when answer-mode is requested. */
+export const ANSWER_MODE_UNSUPPORTED_MESSAGE =
+  "Error: fetch_content mode 'answer' is unsupported in LENS — synthesis is owned by the research agent. Use mode 'readable' (default) or 'raw', or pose the question in your task prompt instead.";
+
+/**
  * Composes the engine-side handler for all captured package tools. A captured
  * tool's execute() returns pi's `{ content, isError, details }` envelope; the
  * handler normalizes it to the engine's `{ success, result, error }` shape.
@@ -239,6 +255,12 @@ export function wrapPackageToolHandler(
 ): ToolCallHandler {
   const byName = new Map(tools.map((t) => [t.name, t] as const));
   return async (call) => {
+    // Primary-plane boundary (ADR-0013, D3): answer-mode fetch_content is
+    // intercepted before any vendored execution — graceful guidance, no
+    // model injection, synthesis stays Parent-owned.
+    if (call.name === 'fetch_content' && isAnswerModeFetchCall(call.arguments ?? {})) {
+      return { success: false, error: ANSWER_MODE_UNSUPPORTED_MESSAGE };
+    }
     if (extra) {
       const r = await extra(call);
       if (r.success) return r;

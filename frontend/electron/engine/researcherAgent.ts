@@ -1,6 +1,7 @@
 import { LiveEvent, ResearchRequest } from './types';
 import { generate } from './modelGateway';
 import { MultiSearchProvider } from './search';
+import { primarySearchPlane } from './searchPlane';
 import { PageScraper, ScrapedPage } from './scraper';
 import { LLMToolDefinition, ToolCallHandler } from './models';
 import { SkillActivationManager } from './skills';
@@ -196,12 +197,14 @@ export class ResearcherAgent {
     // pair, so telemetry consumers never double-count researchers.
     this.telemetry('run_started');
 
-    // Phase A — deterministic retrieval backbone (LENS plane, budget-bounded).
+    // Phase A — deterministic retrieval backbone (budget-bounded). Default
+    // plane: the vendored pi-web-access DDG adapter (ADR-0013 primary plane,
+    // #109) — the seam contract is unchanged, only what sits behind it.
     // Bind: MultiSearchProvider.search is called statically in the engine;
     // detaching it as a free function would lose its `this`.
     const searchFn = this.options.searchFn
       ? this.options.searchFn
-      : MultiSearchProvider.search.bind(MultiSearchProvider);
+      : primarySearchPlane;
     let hits: Array<{ url: string }> = [];
     try {
       hits = await searchFn(
