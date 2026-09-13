@@ -153,6 +153,12 @@ export class ParentResearchAgent {
     }
     for (const a of assignments) {
       this.emitTelemetry(a, facetCount, 'started', todoStore);
+      // The consumer's emit callback may abort the signal synchronously;
+      // stop the lifecycle immediately and clean up abandoned tasks.
+      if (signal?.aborted) {
+        if (todoStore) this.markTasksForCleanup(todoStore, assignments);
+        return;
+      }
     }
 
     this.emitEvent({

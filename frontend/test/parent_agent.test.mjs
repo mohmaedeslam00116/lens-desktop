@@ -208,8 +208,11 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
     });
     await agent.run(baseRequest(), controller.signal);
 
-    // The delegated loop must not have produced a report stream.
+    // The delegated loop must not have produced a report stream, and the
+    // lifecycle must stop at the first started event (no telemetry for the
+    // remaining facets after the callback aborted the signal).
     assert.equal(emitted.filter((e) => e.type === 'report_chunk').length, 0);
+    assert.equal(emitted.filter((e) => e.type === 'researcher_telemetry').length, 1);
     // Store-level truth: abandoned tasks are back to pending — no stale
     // in_progress survives the cancellation.
     const { loadTodoPlanStore } = await import('../dist-electron/engine/piPackages.js');
