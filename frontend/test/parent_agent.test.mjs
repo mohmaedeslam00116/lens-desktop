@@ -105,10 +105,12 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
     const lastCompletedIndex = emitted.map((e) => e.type).lastIndexOf('researcher_telemetry');
     assert.ok(lastCompletedIndex < finishedIndex, 'completed telemetry must precede finished');
 
-    // The run completes with the synthesized report.
+    // The run completes with the synthesized report (plus the advisory audit
+    // section — ticket #91 makes it part of the report contract).
     const finished = emitted.filter((e) => e.type === 'finished');
     assert.equal(finished.length, 1);
-    assert.equal(finished[0].report, REPORT);
+    assert.ok(finished[0].report.startsWith(REPORT));
+    assert.match(finished[0].report, /## Evidence Audit/);
     assert.equal(faux.state.callCount, 1, 'no replanning LLM call expected');
   });
 
@@ -136,7 +138,8 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
     );
 
     // 2. The assembled streamed report is byte-equivalent and matches the
-    //    final report (streaming integrity) in both paths.
+    //    final report (streaming integrity) in both paths (the advisory audit
+    //    section is part of the report in both — ticket #91).
     const joinedOf = (events) => events.filter((e) => e.type === 'report_chunk').map((e) => e.chunk).join('');
     const legacyJoined = joinedOf(emittedLegacy);
     const agencyJoined = joinedOf(emittedAgency);

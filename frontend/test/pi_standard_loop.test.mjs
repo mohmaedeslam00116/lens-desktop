@@ -61,7 +61,10 @@ describe('Standard research loop on the pi core (ticket 05)', () => {
     assert.deepEqual(subq.subqueries, ['fusion energy basics', 'tokamak benchmarks 2026']);
 
     const report = emitted.filter((e) => e.type === 'report_chunk').map((e) => e.chunk).join('');
-    assert.equal(report, '# Fusion Energy Report\n\nKey findings summarized.');
+    // Ticket #91: the advisory audit section streams as the final chunk and
+    // is part of the finished report.
+    assert.ok(report.startsWith('# Fusion Energy Report\n\nKey findings summarized.'));
+    assert.match(report, /## Evidence Audit/);
 
     const finished = emitted.find((e) => e.type === 'finished');
     assert.ok(finished, 'expected a finished event');

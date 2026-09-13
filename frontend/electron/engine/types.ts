@@ -174,6 +174,9 @@ export interface FanoutTelemetry {
   coverageByFacet: Record<string, number>;
 }
 
+/** Advisory evidence-audit types (ADR-0010 decision 4, ticket #91). */
+export type EvidenceAudit = import('./evidenceAuditor').EvidenceAudit;
+
 export interface PlanScopingOptions {
   language?: 'ar' | 'en' | string;
   targetSources?: number;
@@ -204,7 +207,8 @@ export interface LiveEvent {
     | 'skill_activated'
     | 'wide_telemetry'
     | 'researcher_telemetry'
-    | 'fanout_telemetry';
+    | 'fanout_telemetry'
+    | 'audit_telemetry';
   eventId?: number;
   sessionId?: string;
   state?: SessionState;
@@ -246,6 +250,9 @@ export interface LiveEvent {
   researcherTelemetry?: ResearcherTelemetry;
   /** Aggregate parallel fan-out telemetry (ticket #90). */
   fanoutTelemetry?: FanoutTelemetry;
+  /** Advisory evidence-audit verdicts for the synthesized report
+   * (ADR-0010 decision 4, ticket #91). Advisory only — never gates. */
+  auditTelemetry?: EvidenceAudit;
   /** Research-facet provenance on `source` events emitted by researcher
    * subagents (ADR-0010 phase 2, ticket #89). */
   milestoneId?: string;
