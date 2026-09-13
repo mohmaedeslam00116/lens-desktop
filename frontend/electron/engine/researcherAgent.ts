@@ -5,6 +5,7 @@ import { PageScraper, ScrapedPage } from './scraper';
 import { LLMToolDefinition, ToolCallHandler } from './models';
 import { SkillActivationManager } from './skills';
 import { buildResearchPackageTools } from './piResearchTools';
+import { claimAndShare } from './fetchLedger';
 
 /**
  * researcherAgent.ts — single in-process researcher subagent (ADR-0010 phase 2,
@@ -24,6 +25,11 @@ import { buildResearchPackageTools } from './piResearchTools';
  * The seams here (researcherId, brief-style options, activity telemetry,
  * result envelope) are the pi-subagents-shaped surface the parent already
  * speaks; a later host-based adoption is a swap behind them.
+ *
+ * Cross-researcher URL dedupe (ticket #90): every scrape goes through the
+ * session-scoped fetch ledger — a URL fetched by one researcher is never
+ * re-fetched by another; the already-admitted page is shared instead and
+ * counted in this researcher's `dedupeShared` telemetry.
  */
 
 /** URL extraction from tool result text (web_search results carry URLs). */
@@ -64,12 +70,16 @@ export interface ResearcherRunResult {
   /** Findings tagged with the facet's milestone provenance. */
   findings: ScrapedPage[];
   toolCalls: number;
+  /** URLs skipped because another researcher already fetched them —
+   * the shared page still joined this facet's evidence pool. */
+  dedupeShared: number;
 }
 
 export class ResearcherAgent {
   private sessionId: string;
   private emitEvent: (event: LiveEvent) => void;
   private options: ResearcherOptions;
+  private dedupeShared = 0;
 
   constructor(sessionId: string, emitEvent: (event: LiveEvent) => void, options: ResearcherOptions) {
     this.sessionId = sessionId;
@@ -79,7 +89,7 @@ export class ResearcherAgent {
 
   private telemetry(
     phase: 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity',
-    counts: { sourcesRetrieved?: number; toolCalls?: number } = {}
+    counts: { sourcesRetrieved?: number; toolCalls?: number; dedupeShared?: number } = {}
   ): void {
     this.emitEvent({
       type: 'researcher_telemetry',
@@ -97,7 +107,11 @@ export class ResearcherAgent {
     });
   }
 
-  /** Scrapes one URL into a provenance-tagged finding (deduped, capped). */
+  /** Scrapes one URL into a provenance-tagged finding through the session
+   * fetch ledger: cross-researcher dedupe (a URL is fetched once per session;
+   * concurrent researchers share the admitted page) with retry semantics for
+   * failed fetches. The finding lands in this facet's pool even when shared,
+   * so coverage reflects every facet the evidence serves. */
   private async ingestUrl(
     url: string,
     seen: Set<string>,
@@ -108,15 +122,33 @@ export class ResearcherAgent {
     seen.add(url);
     try {
       const scrape = this.options.scrapeFn ?? PageScraper.scrape;
-      const page = await scrape(url, 7000, signal);
-      if (!page?.content || page.content.startsWith('Content unavailable from ') || page.content.startsWith('Error retrieving ')) {
-        return;
-      }
-      findings.push({
-        ...page,
+      const entry = await claimAndShare(this.sessionId, url, async (): Promise<ScrapedPage | null> => {
+        const page = await scrape(url, 7000, signal);
+        if (
+          !page?.content
+          || page.content.startsWith('Content unavailable from ')
+          || page.content.startsWith('Error retrieving ')
+        ) {
+          // Normalize failed fetches to null so the ledger releases the claim
+          // and a later researcher can retry the URL.
+          return null;
+        }
+        return page;
+      });
+      if (!entry) return; // failed fetch (own or shared); claim already released
+      // Stamp THIS facet's provenance on the (possibly shared) page copy so
+      // per-facet evidence — and per-facet coverage aggregation — attributes
+      // the finding to this facet.
+      const page: ScrapedPage = {
+        ...(entry.page as ScrapedPage),
         milestoneId: this.options.milestoneId,
         milestoneTitle: this.options.milestoneTitle,
-      });
+      };
+      if (entry.shared) {
+        this.dedupeShared += 1;
+        this.telemetry('retrieval', { dedupeShared: this.dedupeShared });
+      }
+      findings.push(page);
       this.emitEvent({
         type: 'source',
         url: page.url,
@@ -127,8 +159,11 @@ export class ResearcherAgent {
         milestoneId: this.options.milestoneId,
         milestoneTitle: this.options.milestoneTitle,
       });
-      this.telemetry('retrieval', { sourcesRetrieved: findings.length });
+      if (!entry.shared) {
+        this.telemetry('retrieval', { sourcesRetrieved: findings.length });
+      }
     } catch (err) {
+      seen.delete(url);
       if (signal?.aborted) return;
       console.warn(`[ResearcherAgent] scrape failed for ${url}:`, err);
     }
@@ -138,8 +173,9 @@ export class ResearcherAgent {
     const findings: ScrapedPage[] = [];
     const seen = new Set<string>();
     let toolCalls = 0;
+    this.dedupeShared = 0;
     if (signal?.aborted) {
-      return { researcherId: this.options.researcherId, facetIndex: this.options.facetIndex, facet: this.options.facet, findings, toolCalls };
+      return { researcherId: this.options.researcherId, facetIndex: this.options.facetIndex, facet: this.options.facet, findings, toolCalls, dedupeShared: 0 };
     }
 
     // Execution-level lifecycle uses distinct phase names from the parent's
@@ -163,10 +199,11 @@ export class ResearcherAgent {
         signal
       );
     } catch (err) {
-      if (signal?.aborted) {
-        return { researcherId: this.options.researcherId, facetIndex: this.options.facetIndex, facet: this.options.facet, findings, toolCalls };
+      if (!signal?.aborted) {
+        console.warn(`[ResearcherAgent] search failed for facet "${this.options.facet}":`, err);
       }
-      console.warn(`[ResearcherAgent] search failed for facet "${this.options.facet}":`, err);
+      // No early return on abort: flow reaches the common completion logic so
+      // run_completed is always emitted (no stale active researcher in telemetry).
     }
     for (const hit of hits) {
       if (signal?.aborted) break;
@@ -256,13 +293,14 @@ export class ResearcherAgent {
       }
     }
 
-    this.telemetry('run_completed', { sourcesRetrieved: findings.length, toolCalls });
+    this.telemetry('run_completed', { sourcesRetrieved: findings.length, toolCalls, dedupeShared: this.dedupeShared });
     return {
       researcherId: this.options.researcherId,
       facetIndex: this.options.facetIndex,
       facet: this.options.facet,
       findings,
       toolCalls,
+      dedupeShared: this.dedupeShared,
     };
   }
 }

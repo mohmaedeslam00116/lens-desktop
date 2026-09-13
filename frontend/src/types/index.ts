@@ -117,7 +117,8 @@ export interface LiveEvent {
     | 'cancelled'
     | 'budget_exhausted'
     | 'wide_telemetry'
-    | 'researcher_telemetry';
+    | 'researcher_telemetry'
+    | 'fanout_telemetry';
   sessionId?: string;
   state?: string;
   plan?: ResearchPlan;
@@ -139,6 +140,18 @@ export interface LiveEvent {
   node?: ResearchGraphNode;
   reflections?: string[];
   wideTelemetry?: WideResearchTelemetry;
+  /** Aggregate parallel fan-out telemetry (ticket #90). */
+  fanoutTelemetry?: {
+    concurrencyLimit: number;
+    facetsTotal: number;
+    researchersLaunched: number;
+    researchersCompleted: number;
+    researchersFailed: number;
+    facetsDelegated: number;
+    urlsShared: number;
+    budgetFindingsAdmitted: number;
+    coverageByFacet: Record<string, number>;
+  };
   /** Research-facet provenance on `source` events emitted by researcher
    * subagents (ADR-0010 phase 2, ticket #89). */
   milestoneId?: string;
@@ -148,7 +161,12 @@ export interface LiveEvent {
     role: string;
     facet: string;
     phase: 'started' | 'completed' | 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity';
-    counts: { facetIndex: number; facetCount: number };
+    counts: {
+      facetIndex: number;
+      facetCount: number;
+      /** URLs this researcher skipped because another already fetched them. */
+      dedupeShared?: number;
+    };
     todoProjection?: Array<{
       id: number;
       subject: string;
