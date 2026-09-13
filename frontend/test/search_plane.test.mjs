@@ -33,6 +33,19 @@ function stubFixtureFetch() {
   return seen;
 }
 
+/** Deadline-bounded poll: a regression must fail the test, not stall the worker. */
+async function waitFor(cond, { timeoutMs = 5000, what = 'condition' } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`timeout waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+/** One microtask flush: acquire() registers its waiter synchronously in the
+ * promise executor, so a single flush guarantees queue registration. */
+const flush = () => new Promise((r) => setImmediate(r));
+
 afterEach(() => {
   globalThis.fetch = realFetch;
   resetSearchPlane();
@@ -124,24 +137,29 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     for (let i = 0; i < 3; i++) {
       inFlight.push(primarySearchPlane(`slot-${i}`, 'duckduckgo', {}, 3, hold.signal));
     }
-    while (searchPlaneLedgerSnapshot().ledgered < 3) {
-      await new Promise((r) => setTimeout(r, 5));
+    try {
+      await waitFor(() => searchPlaneLedgerSnapshot().ledgered >= 3, { what: 'slot admission' });
+      // Queue a fourth caller, then abort it while queued. acquire() registers
+      // its waiter synchronously, so one flush guarantees queue membership.
+      const queuedSignal = new AbortController();
+      const queued = primarySearchPlane('queued-but-aborted', 'duckduckgo', {}, 3, queuedSignal.signal);
+      await flush();
+      const queuedBefore = searchPlaneLedgerSnapshot().ledgered;
+      queuedSignal.abort();
+      await assert.rejects(queued, /abort/i, 'aborted waiter rejected, never executed');
+      // Release the gate; the held calls complete. The aborted caller must NOT
+      // have executed (seen only ever holds the 3 slot queries).
+      releaseGate();
+      const settled = await Promise.allSettled(inFlight);
+      assert.ok(settled.every((s) => s.status === 'fulfilled'));
+      assert.equal(seen.length, 3, `no post-cancel execution — seen: ${JSON.stringify(seen)}`);
+      assert.equal(searchPlaneLedgerSnapshot().ledgered, queuedBefore, 'aborted caller never admitted');
+      assert.equal(searchPlaneLedgerSnapshot().active, 0, 'gate fully released');
+    } finally {
+      releaseGate();
+      hold.abort();
+      await Promise.allSettled(inFlight).catch(() => {});
     }
-    // Queue a fourth caller, then abort it while queued.
-    const queuedSignal = new AbortController();
-    const queued = primarySearchPlane('queued-but-aborted', 'duckduckgo', {}, 3, queuedSignal.signal);
-    await new Promise((r) => setTimeout(r, 10));
-    const queuedBefore = searchPlaneLedgerSnapshot().ledgered;
-    queuedSignal.abort();
-    await assert.rejects(queued, /abort/i, 'aborted waiter rejected, never executed');
-    // Release the gate; the held calls complete. The aborted caller must NOT
-    // have executed (seen only ever holds the 3 slot queries).
-    releaseGate();
-    const settled = await Promise.allSettled(inFlight);
-    assert.ok(settled.every((s) => s.status === 'fulfilled'));
-    assert.equal(seen.length, 3, `no post-cancel execution — seen: ${JSON.stringify(seen)}`);
-    assert.equal(searchPlaneLedgerSnapshot().ledgered, queuedBefore, 'aborted caller never admitted');
-    assert.equal(searchPlaneLedgerSnapshot().active, 0, 'gate fully released');
   });
 
   it('caps the admission queue: saturation fails loudly instead of degrading silently', async () => {
@@ -157,24 +175,25 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     for (let i = 0; i < 3; i++) {
       inFlight.push(primarySearchPlane(`slot-${i}`, 'duckduckgo', {}, 3, hold.signal));
     }
-    while (searchPlaneLedgerSnapshot().ledgered < 3) {
-      await new Promise((r) => setTimeout(r, 5));
-    }
-    // Fill the queue to its cap (32).
     const queued = [];
-    for (let i = 0; i < 32; i++) {
-      queued.push(primarySearchPlane(`q-${i}`, 'duckduckgo', {}, 3, hold.signal));
+    try {
+      await waitFor(() => searchPlaneLedgerSnapshot().ledgered >= 3, { what: 'slot admission' });
+      // Fill the queue to its cap (32). Registration is synchronous per call.
+      for (let i = 0; i < 32; i++) {
+        queued.push(primarySearchPlane(`q-${i}`, 'duckduckgo', {}, 3, hold.signal));
+      }
+      await flush();
+      // The next caller must fail loudly with the saturation error (no silent
+      // native fallback for excess work).
+      await assert.rejects(
+        primarySearchPlane('over-cap', 'duckduckgo', {}, 3, hold.signal),
+        (err) => err.name === 'SearchPlaneQueueSaturated'
+      );
+    } finally {
+      releaseGate();
+      hold.abort();
+      await Promise.allSettled([...inFlight, ...queued]).catch(() => {});
     }
-    await new Promise((r) => setTimeout(r, 20));
-    // The next caller must fail loudly with the saturation error (no silent
-    // native fallback for excess work).
-    await assert.rejects(
-      primarySearchPlane('over-cap', 'duckduckgo', {}, 3, hold.signal),
-      (err) => err.name === 'SearchPlaneQueueSaturated'
-    );
-    releaseGate();
-    hold.abort();
-    await Promise.allSettled([...inFlight, ...queued]);
   });
 
   it('rejects fetch_content answer-mode with graceful guidance (boundary D3)', async () => {
