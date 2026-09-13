@@ -54,7 +54,7 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     // Vendored-path discriminator: the vendored module builds the URL with
     // URL.searchParams (spaces → '+') and serves it in exactly one fetch —
     // a native fallback would fetch a second time with %20 encoding.
-    assert.equal(seen.length, 1, 'single fetch: vendored plane served, no native fallback');
+    assert.equal(seen.length, 1, `single fetch: vendored plane served, no native fallback — seen: ${JSON.stringify(seen)}`);
     assert.ok(
       seen[0].includes('q=tokamak+benchmarks'),
       'vendored URL construction (native parser encodes spaces as %20)'
@@ -72,11 +72,8 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
 
   it('falls back to the native seam entry when the vendored plane fails', async () => {
     // Break the vendored resolution path: no fixture fetch (native fetch fails).
-    const seen = [];
-    globalThis.fetch = (async (url) => {
-      seen.push(String(url));
-      return new Response('no parseable results here', { status: 200 });
-    });
+    globalThis.fetch = (async () =>
+      new Response('no parseable results here', { status: 200 }));
     const origSearch = MultiSearchProvider.search;
     let nativeCalled = false;
     MultiSearchProvider.search = async (query, provider) => {
@@ -109,6 +106,75 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     } finally {
       MultiSearchProvider.search = origSearch;
     }
+  });
+
+  it('removes an aborted caller from the admission queue — no post-cancel execution', async () => {
+    stubFixtureFetch();
+    // Saturate all 3 slots with long-lived calls.
+    const hold = new AbortController();
+    const seen = [];
+    let releaseGate;
+    const blockUntilReleased = new Promise((r) => { releaseGate = r; });
+    globalThis.fetch = (async (url) => {
+      seen.push(String(url));
+      await blockUntilReleased;
+      return new Response(DDG_ONE_RESULT, { status: 200 });
+    });
+    const inFlight = [];
+    for (let i = 0; i < 3; i++) {
+      inFlight.push(primarySearchPlane(`slot-${i}`, 'duckduckgo', {}, 3, hold.signal));
+    }
+    while (searchPlaneLedgerSnapshot().ledgered < 3) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // Queue a fourth caller, then abort it while queued.
+    const queuedSignal = new AbortController();
+    const queued = primarySearchPlane('queued-but-aborted', 'duckduckgo', {}, 3, queuedSignal.signal);
+    await new Promise((r) => setTimeout(r, 10));
+    const queuedBefore = searchPlaneLedgerSnapshot().ledgered;
+    queuedSignal.abort();
+    await assert.rejects(queued, /abort/i, 'aborted waiter rejected, never executed');
+    // Release the gate; the held calls complete. The aborted caller must NOT
+    // have executed (seen only ever holds the 3 slot queries).
+    releaseGate();
+    const settled = await Promise.allSettled(inFlight);
+    assert.ok(settled.every((s) => s.status === 'fulfilled'));
+    assert.equal(seen.length, 3, `no post-cancel execution — seen: ${JSON.stringify(seen)}`);
+    assert.equal(searchPlaneLedgerSnapshot().ledgered, queuedBefore, 'aborted caller never admitted');
+    assert.equal(searchPlaneLedgerSnapshot().active, 0, 'gate fully released');
+  });
+
+  it('caps the admission queue: saturation fails loudly instead of degrading silently', async () => {
+    stubFixtureFetch();
+    const hold = new AbortController();
+    let releaseGate;
+    const blockUntilReleased = new Promise((r) => { releaseGate = r; });
+    globalThis.fetch = (async () => {
+      await blockUntilReleased;
+      return new Response(DDG_ONE_RESULT, { status: 200 });
+    });
+    const inFlight = [];
+    for (let i = 0; i < 3; i++) {
+      inFlight.push(primarySearchPlane(`slot-${i}`, 'duckduckgo', {}, 3, hold.signal));
+    }
+    while (searchPlaneLedgerSnapshot().ledgered < 3) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // Fill the queue to its cap (32).
+    const queued = [];
+    for (let i = 0; i < 32; i++) {
+      queued.push(primarySearchPlane(`q-${i}`, 'duckduckgo', {}, 3, hold.signal));
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    // The next caller must fail loudly with the saturation error (no silent
+    // native fallback for excess work).
+    await assert.rejects(
+      primarySearchPlane('over-cap', 'duckduckgo', {}, 3, hold.signal),
+      (err) => err.name === 'SearchPlaneQueueSaturated'
+    );
+    releaseGate();
+    hold.abort();
+    await Promise.allSettled([...inFlight, ...queued]);
   });
 
   it('rejects fetch_content answer-mode with graceful guidance (boundary D3)', async () => {

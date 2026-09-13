@@ -39,35 +39,92 @@ const VENDOR_ROOT = path.join(__dirname, '..', 'vendor', 'pi');
  * vendored search stack's own query fan-out cap). */
 const PLANE_CONCURRENCY = 3;
 
-let cachedResolver: PlaneResolver | null = null;
-let activePlaneCalls = 0;
-let ledgeredCalls = 0;
-const waiters: Array<() => void> = [];
+/** Bounded admission queue: callers beyond this cap fail loudly instead of
+ * queueing without limit (memory boundedness) or degrading silently. */
+const PLANE_MAX_QUEUE = 32;
 
-async function acquireSlot(): Promise<void> {
-  if (activePlaneCalls >= PLANE_CONCURRENCY) {
-    await new Promise<void>((resolve) => waiters.push(resolve));
+interface PlaneWaiter {
+  resolve: () => void;
+  reject: (err: unknown) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+function abortError(): Error {
+  return new DOMException('This operation was aborted', 'AbortError');
+}
+
+class PlaneGate {
+  active = 0;
+  ledgered = 0;
+  private waiters: PlaneWaiter[] = [];
+
+  /** Admits one caller. Abort-aware: a caller that aborts while queued is
+   * removed and rejected, and a slot granted to an already-aborted caller is
+   * handed on rather than used. */
+  async acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw abortError();
+    if (this.active < PLANE_CONCURRENCY) {
+      this.active += 1;
+      return;
+    }
+    if (this.waiters.length >= PLANE_MAX_QUEUE) {
+      const err = new Error('[searchPlane] admission queue saturated');
+      err.name = 'SearchPlaneQueueSaturated';
+      throw err;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const waiter: PlaneWaiter = { resolve, reject, signal };
+      if (signal) {
+        waiter.onAbort = () => {
+          const i = this.waiters.indexOf(waiter);
+          if (i >= 0) this.waiters.splice(i, 1);
+          reject(abortError());
+        };
+        signal.addEventListener('abort', waiter.onAbort, { once: true });
+      }
+      this.waiters.push(waiter);
+    });
+    // Granted: take ownership of the slot, then re-check cancellation — the
+    // grant may have raced an abort between resolution and resume.
+    this.active += 1;
+    if (signal?.aborted) {
+      this.release();
+      throw abortError();
+    }
   }
-  activePlaneCalls += 1;
-  ledgeredCalls += 1;
+
+  /** Releases one held slot and grants the next queued waiter (if any). */
+  release(): void {
+    this.active -= 1;
+    const next = this.waiters.shift();
+    if (!next) return;
+    if (next.onAbort && next.signal) {
+      next.signal.removeEventListener('abort', next.onAbort);
+    }
+    next.resolve();
+  }
+
+  reset(): void {
+    this.active = 0;
+    this.ledgered = 0;
+    this.waiters = [];
+  }
 }
 
-function releaseSlot(): void {
-  activePlaneCalls -= 1;
-  const next = waiters.shift();
-  if (next) next();
-}
+const gate = new PlaneGate();
+
+let cachedResolver: PlaneResolver | null = null;
 
 /** Plane ledger snapshot: proves (and surfaces) every retrieval admission. */
 export function searchPlaneLedgerSnapshot(): { active: number; ledgered: number } {
-  return { active: activePlaneCalls, ledgered: ledgeredCalls };
+  return { active: gate.active, ledgered: gate.ledgered };
 }
 
 /** Resets the adapter cache and ledger counters (test seam). */
 export function resetSearchPlane(): void {
   cachedResolver = null;
-  activePlaneCalls = 0;
-  ledgeredCalls = 0;
+  gate.reset();
 }
 
 /**
@@ -107,12 +164,14 @@ async function serveThroughPlane(
   signal?: AbortSignal
 ): Promise<SearchResultItem[]> {
   if (signal?.aborted) return [];
-  await acquireSlot();
+  await gate.acquire(signal);
   try {
+    gate.ledgered += 1;
+    if (signal?.aborted) return [];
     const resolver = await loadPlaneResolver();
     return await resolver(query, maxResults, signal);
   } finally {
-    releaseSlot();
+    gate.release();
   }
 }
 
@@ -146,11 +205,13 @@ export async function primarySearchPlane(
   // fallback on any plane failure. The fallback goes through the canonical
   // native seam entry (`MultiSearchProvider.search`), so module-level stubs
   // of the native seam intercept it — one interception point for the plane.
-  // Caller aborts propagate (native semantic).
+  // Caller aborts propagate (native semantic); queue saturation fails
+  // loudly instead of degrading silently.
   try {
     return await serveThroughPlane(cleanQuery, maxResults, signal);
   } catch (err) {
     if (signal?.aborted) throw err;
+    if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') throw err;
     console.warn(
       '[searchPlane] vendored plane failed — falling back to native DDG:',
       String(err).slice(0, 300)
