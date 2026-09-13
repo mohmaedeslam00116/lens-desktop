@@ -177,13 +177,19 @@ export interface LiveEvent {
     researcherId: string;
     role: string;
     facet: string;
-    phase: 'started' | 'completed' | 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity';
+    phase: 'started' | 'completed' | 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity'
+      | 'role_selected';
     counts: {
       facetIndex: number;
       facetCount: number;
       /** URLs this researcher skipped because another already fetched them. */
       dedupeShared?: number;
+      /** Re-specialization marker (ticket #93). */
+      respecialization?: boolean;
+      rationale?: string;
     };
+    /** Why this role was chosen (ticket #93). */
+    rationale?: string;
     todoProjection?: Array<{
       id: number;
       subject: string;

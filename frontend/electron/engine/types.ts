@@ -137,7 +137,8 @@ export interface ResearcherTelemetry {
   role: string;
   /** The research facet (milestone query) assigned to this researcher. */
   facet: string;
-  phase: 'started' | 'completed' | 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity';
+  phase: 'started' | 'completed' | 'run_started' | 'run_completed' | 'retrieval' | 'tool_activity'
+    | 'role_selected';
   counts: {
     facetIndex: number;
     facetCount: number;
@@ -145,7 +146,15 @@ export interface ResearcherTelemetry {
      * fetched them (cross-researcher dedupe, ticket #90). Optional —
      * assignment-lifecycle events omit it. */
     dedupeShared?: number;
+    /** Re-specialization marker + rationale (ticket #93): present on
+     * role_selected events for deficit-driven follow-up researchers. */
+    respecialization?: boolean;
+    rationale?: string;
   };
+  /** Why this role was chosen (ticket #93): deterministic keyword mapping
+   * for plan facets, or the coverage-deficit reason for re-specialized
+   * follow-ups. Optional additive surface. */
+  rationale?: string;
   /** Read-only todo-plan projection at emission time (parent-owned state).
    * Size-capped by the engine; see todoProjectionTruncated. */
   todoProjection?: TodoTaskProjection[];

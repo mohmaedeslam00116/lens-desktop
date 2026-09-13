@@ -240,7 +240,7 @@ describe('Parent passes compression_mode to researchers (offline e2e)', () => {
           toolPackages: false,
           searchFn: async () => [],
         });
-      });
+      }, { respecialization: false });
     await parent.run(baseRequest({ researcher_mode: true, compression_mode: true }));
     assert.deepEqual(flagsSeen, [true]);
     const finished = emitted.find((e) => e.type === 'finished');

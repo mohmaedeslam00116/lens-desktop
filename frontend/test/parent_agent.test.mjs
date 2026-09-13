@@ -66,8 +66,8 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
   it('derives facet assignments 1:1 from the approved plan in plan order', () => {
     const assignments = deriveFacetAssignments(approvedPlan);
     assert.deepEqual(assignments, [
-      { facetIndex: 0, facet: 'fusion energy basics' },
-      { facetIndex: 1, facet: 'tokamak benchmarks 2026' },
+      { facetIndex: 0, facet: 'fusion energy basics', role: 'primary' },
+      { facetIndex: 1, facet: 'tokamak benchmarks 2026', role: 'technical' },
     ]);
   });
 
@@ -80,20 +80,23 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
     const agent = new ParentResearchAgent('s-agency', (e) => emitted.push(e));
     await agent.run(baseRequest());
 
-    // Lifecycle: one started + one completed telemetry event per facet.
+    // Lifecycle: one role_selected + one started + one completed per facet
+    // (role selection precedes the assignment lifecycle, #93).
     const telemetry = emitted.filter((e) => e.type === 'researcher_telemetry');
-    assert.equal(telemetry.length, 4);
-    assert.deepEqual(telemetry.map((e) => e.researcherTelemetry.phase), ['started', 'started', 'completed', 'completed']);
-    assert.deepEqual(telemetry.map((e) => e.researcherTelemetry.facet), ['fusion energy basics', 'tokamak benchmarks 2026', 'fusion energy basics', 'tokamak benchmarks 2026']);
+    assert.equal(telemetry.length, 6);
+    assert.deepEqual(telemetry.map((e) => e.researcherTelemetry.phase), ['role_selected', 'role_selected', 'started', 'started', 'completed', 'completed']);
+    assert.deepEqual(telemetry.map((e) => e.researcherTelemetry.facet), ['fusion energy basics', 'tokamak benchmarks 2026', 'fusion energy basics', 'tokamak benchmarks 2026', 'fusion energy basics', 'tokamak benchmarks 2026']);
     for (const e of telemetry) {
-      assert.equal(e.researcherTelemetry.role, 'primary');
+      const expectedRole = e.researcherTelemetry.facet === 'tokamak benchmarks 2026' ? 'technical' : 'primary';
+      assert.equal(e.researcherTelemetry.role, expectedRole);
       assert.equal(e.researcherTelemetry.counts.facetCount, 2);
       assert.match(e.researcherTelemetry.researcherId, /^researcher_s-agency_[12]$/);
     }
 
     // Todo plan is parent-owned engine truth surfaced as read-only projection:
     // tasks progress create(pending) → in_progress → completed.
-    const startedProjection = telemetry[0].researcherTelemetry.todoProjection;
+    const startedProjection = telemetry.find((e) => e.researcherTelemetry.phase === 'started')
+      .researcherTelemetry.todoProjection;
     assert.ok(Array.isArray(startedProjection) && startedProjection.length === 2, 'expected a two-task todo projection');
     assert.deepEqual(startedProjection.map((t) => t.status), ['in_progress', 'in_progress']);
     const completedProjection = telemetry.at(-1).researcherTelemetry.todoProjection;
@@ -213,9 +216,11 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
 
     // The delegated loop must not have produced a report stream, and the
     // lifecycle must stop at the first started event (no telemetry for the
-    // remaining facets after the callback aborted the signal).
+    // remaining facets after the callback aborted the signal). Ticket #93:
+    // the role_selected events for the plan's facets precede the started
+    // lifecycle, so they are part of the pre-abort telemetry.
     assert.equal(emitted.filter((e) => e.type === 'report_chunk').length, 0);
-    assert.equal(emitted.filter((e) => e.type === 'researcher_telemetry').length, 1);
+    assert.equal(emitted.filter((e) => e.type === 'researcher_telemetry').length, 3);
     // Store-level truth: abandoned tasks are back to pending — no stale
     // in_progress survives the cancellation.
     const { loadTodoPlanStore } = await import('../dist-electron/engine/piPackages.js');

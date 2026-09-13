@@ -6,6 +6,7 @@ import { LLMToolDefinition, ToolCallHandler } from './models';
 import { SkillActivationManager } from './skills';
 import { buildResearchPackageTools } from './piResearchTools';
 import { claimAndShare } from './fetchLedger';
+import { ResearcherRole, roleBrief } from './researcherRoles';
 
 /**
  * researcherAgent.ts — single in-process researcher subagent (ADR-0010 phase 2,
@@ -69,6 +70,9 @@ export interface ResearcherOptions {
   proxyBaseUrl?: string;
   /** Degradation notices collected by the parent's lease acquisition. */
   compressionNotices?: string[];
+  /** Specialist role from the closed catalog (ADR-0010 decision 5, ticket
+   * #93). Defaults to 'primary' (the v1 pass-through role). */
+  role?: ResearcherRole;
 }
 
 export interface ResearcherRunResult {
@@ -103,7 +107,8 @@ export class ResearcherAgent {
       type: 'researcher_telemetry',
       researcherTelemetry: {
         researcherId: this.options.researcherId,
-        role: 'primary',
+        // Closed-catalog role (ticket #93); 'primary' is the v1 default.
+        role: this.options.role ?? 'primary',
         facet: this.options.facet,
         phase,
         counts: {
@@ -267,9 +272,12 @@ export class ResearcherAgent {
         const maxToolRounds = Number.isFinite(requestedToolRounds)
           ? Math.min(MAX_TOOL_ROUNDS, Math.max(0, Math.floor(requestedToolRounds)))
           : 2;
+        const language: 'ar' | 'en' = request.language === 'ar' ? 'ar' : 'en';
+        const role = this.options.role ?? 'primary';
         const systemPrompt = [
           `You are a specialized research subagent.`,
           `Your assigned research facet (topic ${this.options.facetIndex + 1}/${this.options.facetCount}): "${this.options.facet}".`,
+          roleBrief(role, language),
           `Investigate ONLY this facet. Use the provided web tools to search for, fetch, and verify sources relevant to the facet.`,
           `Be concise: report the key facts you verified with their sources. Do not write a full report — the parent agent synthesizes.`,
           this.options.activationManager?.getPromptContext() || '',
