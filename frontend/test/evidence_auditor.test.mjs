@@ -156,7 +156,8 @@ describe('Audit integration in research runs (advisory — parity preserved)', (
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
     const emitted = [];
-    const parent = new ParentResearchAgent('s-91-agency', (e) => emitted.push(e));
+    const parent = new ParentResearchAgent('s-91-agency', (e) => emitted.push(e), undefined,
+      undefined, { respecialization: false });
     // researcher_mode on: the audit must run after the researcher fan-out.
     await parent.run(baseRequest({ researcher_mode: true }));
 

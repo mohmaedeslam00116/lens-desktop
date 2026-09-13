@@ -117,7 +117,7 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
     const tracking = trackingFor((i) => hits(i));
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-par', (e) => emitted.push(e), undefined,
-      instrumentConcurrency(makeOfflineFactory(tracking), tracking));
+      instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
     const plan = makePlan(6);
     await parent.run(baseRequest(plan));
 
@@ -139,7 +139,7 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
     const tracking = trackingFor(() => []);
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-clamp', (e) => emitted.push(e), undefined,
-      instrumentConcurrency(makeOfflineFactory(tracking), tracking));
+      instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
     // 6 facets so the ceiling is 4; the override can only lower it.
     await parent.run(baseRequest(makePlan(6), { researcher_concurrency: 9 }));
     assert.equal(emitted.find((e) => e.type === 'fanout_telemetry').fanoutTelemetry.concurrencyLimit, 4);
@@ -147,7 +147,7 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
     const emitted2 = [];
     tracking.maxActive = 0; // per-run observation, not cumulative
     const parent2 = new ParentResearchAgent('s-90-clamp2', (e) => emitted2.push(e), undefined,
-      instrumentConcurrency(makeOfflineFactory(tracking), tracking));
+      instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
     await parent2.run(baseRequest(makePlan(2), { researcher_concurrency: 1 }));
     assert.equal(emitted2.find((e) => e.type === 'fanout_telemetry').fanoutTelemetry.concurrencyLimit, 1);
     assert.equal(tracking.maxActive, 1);
@@ -167,7 +167,7 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
     const tracking = trackingFor(hitsFor);
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-dedupe', (e) => emitted.push(e), undefined,
-      instrumentConcurrency(makeOfflineFactory(tracking), tracking));
+      instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
     await parent.run(baseRequest(makePlan(3)));
 
     // Each URL was fetched exactly once across the fan-out.
@@ -211,7 +211,7 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
     const tracking = trackingFor(hitsFor);
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-cap', (e) => emitted.push(e), undefined,
-      instrumentConcurrency(makeOfflineFactory(tracking), tracking));
+      instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
     await parent.run(baseRequest(makePlan(9)));
 
     const fan = emitted.find((e) => e.type === 'fanout_telemetry').fanoutTelemetry;
@@ -228,7 +228,7 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
     const tracking = trackingFor((i) => [{ url: `https://cov-${i}.example/a-${i + 1}`, title: 'S', snippet: 'x' }]);
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-cov', (e) => emitted.push(e), undefined,
-      instrumentConcurrency(makeOfflineFactory(tracking), tracking));
+      instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
     const plan = makePlan(2);
     await parent.run(baseRequest(plan));
 

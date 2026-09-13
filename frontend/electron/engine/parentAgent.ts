@@ -6,6 +6,8 @@ import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
 import { auditEvidenceCoverage } from './evidenceCoverage';
 import { resetFetchLedger } from './fetchLedger';
 import { routeCompression, disposeCompression } from './compressionRouting';
+import { assignRoles, planRespecialization, ResearcherRole, ROLE_LABELS } from './researcherRoles';
+import { tokenizeBilingual } from './bm25';
 
 /** Researcher construction seam (pi-subagents-shaped): the default factory
  * builds in-process researchers; tests and later phases can supply
@@ -50,6 +52,9 @@ const MAX_PROJECTION_TASKS = 50;
  * session teardown) — repeated runs for one session share the allowance. */
 const MAX_RESEARCHERS_PER_SESSION = 8;
 const MAX_RESEARCHER_FINDINGS_PER_SESSION = 48;
+/** Re-specialization cap per run (ADR-0010 decision 5: bounded so it can
+ * never loop). */
+const MAX_RESPECIALIZATIONS_PER_RUN = 4;
 
 /** Parallel fan-out concurrency (ADR-0010 decision 8): researchers run
  * concurrently up to min(#facets, 4); the underlying BoundedScraperPool
@@ -103,6 +108,9 @@ async function runPool<T>(
 export interface FacetAssignment {
   facetIndex: number;
   facet: string;
+  /** Closed-catalog role for this facet (ADR-0010 decision 5, ticket #93).
+   * Deterministic: the same plan always yields the same role. */
+  role?: ResearcherRole;
   /** rpiv-todo task id assigned by the store at creation time. Set during
    * run() when the todo plan store is available; consumers must treat it as
    * optional (the store may degrade to telemetry-only tracking). */
@@ -111,18 +119,26 @@ export interface FacetAssignment {
 
 /**
  * Derives facet assignments from the approved plan — the v1 contract is a
- * strict 1:1 milestone-to-facet pass-through in plan order.
+ * strict 1:1 milestone-to-facet pass-through in plan order, now tagged with
+ * the deterministic closed-catalog role per facet (ticket #93).
  */
 export function deriveFacetAssignments(plan: ResearchPlan): FacetAssignment[] {
+  const roles = assignRoles(plan, tokenizeBilingual);
   return plan.milestones.map((milestone, index) => ({
     facetIndex: index,
     facet: milestone.query,
+    role: roles[index],
   }));
 }
 
 /** Stable researcher id (v1: one sequential researcher per facet). */
 function researcherId(sessionId: string, facetIndex: number): string {
   return `researcher_${sessionId}_${facetIndex + 1}`;
+}
+
+/** Stable researcher id for re-specialization follow-ups (ticket #93). */
+function respecializationResearcherId(sessionId: string, facetIndex: number, pass: number): string {
+  return `researcher_${sessionId}_${facetIndex + 1}_rs${pass}`;
 }
 
 export class ParentResearchAgent {
@@ -132,16 +148,22 @@ export class ParentResearchAgent {
 
   private researcherFactory: ResearcherFactory;
 
+  /** Deficit-driven re-specialization gate (ADR-0010 decision 5, #93):
+   * on by default; tests and ops may opt out for deterministic runs. */
+  private respecializationEnabled: boolean;
+
   constructor(
     sessionId: string,
     emitEvent: (event: LiveEvent) => void,
     activationManager?: SkillActivationManager,
-    researcherFactory: ResearcherFactory = defaultResearcherFactory
+    researcherFactory: ResearcherFactory = defaultResearcherFactory,
+    options?: { respecialization?: boolean }
   ) {
     this.sessionId = sessionId;
     this.emitEvent = emitEvent;
     this.activationManager = activationManager;
     this.researcherFactory = researcherFactory;
+    this.respecializationEnabled = options?.respecialization !== false;
   }
 
   /** Emits one researcher_telemetry lifecycle event with the (optional,
@@ -164,8 +186,9 @@ export class ParentResearchAgent {
       type: 'researcher_telemetry',
       researcherTelemetry: {
         researcherId: researcherId(this.sessionId, assignment.facetIndex),
-        // v1 pass-through role; the closed 5-role catalog lands with #93.
-        role: 'primary',
+        // Closed-catalog role (ticket #93); 'primary' when no roles are
+        // supplied (non-researcher runs).
+        role: assignment.role ?? 'primary',
         facet: assignment.facet,
         phase,
         counts: { facetIndex: assignment.facetIndex, facetCount },
@@ -264,6 +287,24 @@ export class ParentResearchAgent {
         }
       }
 
+      // Role selection telemetry (ticket #93) precedes the assignment
+      // lifecycle: selection happens before assignment, and consumers read
+      // the events in that order.
+      const roleLanguage: 'ar' | 'en' = request.language === 'ar' ? 'ar' : 'en';
+      void roleLanguage;
+      for (const a of assignments) {
+        this.emitEvent({
+          type: 'researcher_telemetry',
+          researcherTelemetry: {
+            researcherId: researcherId(this.sessionId, a.facetIndex),
+            role: a.role ?? 'primary',
+            facet: a.facet,
+            phase: 'role_selected',
+            counts: { facetIndex: a.facetIndex, facetCount },
+          },
+        });
+      }
+
       for (const a of assignments) {
         this.emitTelemetry(a, facetCount, 'started', todoStore);
         // The consumer's emit callback may abort the signal synchronously;
@@ -350,6 +391,7 @@ export class ParentResearchAgent {
               facetCount,
               milestoneId: approvedPlan.milestones[a.facetIndex]?.id || `m${a.facetIndex + 1}`,
               milestoneTitle: approvedPlan.milestones[a.facetIndex]?.query || a.facet,
+              role: a.role,
             toolPackages: true,
             activationManager: this.activationManager,
             searchProvider: request.search_provider,
@@ -402,6 +444,85 @@ export class ParentResearchAgent {
             r.findings.map((f) => ({ content: f.content, domain: f.domain })),
             { language: request.language === 'ar' ? 'ar' : 'en' }
           ).overallScore;
+        }
+
+        // Deficit-driven re-specialization (ADR-0010 decision 5, ticket #93):
+        // budget-bounded follow-up researchers for deficit facets, mapped
+        // deterministically from the deficit kind. Bounded so it can never
+        // loop; the delegated loop still runs afterward regardless.
+        const facetRoles = assignments.map((a) => ({
+          facetIndex: a.facetIndex,
+          facet: a.facet,
+          role: (a.role ?? 'primary') as ResearcherRole,
+        }));
+        const existingRoleCounts = facetRoles.reduce(
+          (acc, fr) => {
+            acc[fr.role] = (acc[fr.role] ?? 0) + 1;
+            return acc;
+          },
+          { primary: 0, technical: 0, opposing: 0, recent_news: 0, source_verifier: 0 } as Record<ResearcherRole, number>
+        );
+        const proposals = planRespecialization({
+          coverageByFacet,
+          facetRoles,
+          existingRoleCounts,
+          maxRespecializations: MAX_RESPECIALIZATIONS_PER_RUN,
+        });
+        // Constructor opt-out: pre-#93 fixtures and ops runs keep their
+        // deterministic contracts when deficit follow-ups are not wanted.
+        if (!this.respecializationEnabled) {
+          console.warn('[ParentResearchAgent] re-specialization disabled for this run; deficit follow-ups skipped.');
+        }
+        for (const p of this.respecializationEnabled ? proposals : []) {
+          if (signal?.aborted) break;
+          if (budget.researchersLaunched >= MAX_RESEARCHERS_PER_SESSION
+            || budget.findingsAdmitted >= MAX_RESEARCHER_FINDINGS_PER_SESSION) {
+            console.warn('[ParentResearchAgent] re-specialization bounded by the session budget.');
+            break;
+          }
+          budget.researchersLaunched += 1;
+          researchersLaunched += 1;
+          this.emitEvent({
+            type: 'researcher_telemetry',
+            researcherTelemetry: {
+              researcherId: respecializationResearcherId(this.sessionId, p.facetIndex, 1),
+              role: p.role,
+              facet: p.facet,
+              phase: 'role_selected',
+              counts: { facetIndex: p.facetIndex, facetCount, respecialization: true, rationale: p.reason },
+            },
+          });
+          const researcher = this.researcherFactory(this.sessionId, this.emitEvent, {
+            researcherId: respecializationResearcherId(this.sessionId, p.facetIndex, 1),
+            facetIndex: p.facetIndex,
+            facet: p.facet,
+            facetCount,
+            milestoneId: approvedPlan.milestones[p.facetIndex]?.id || `m${p.facetIndex + 1}`,
+            milestoneTitle: approvedPlan.milestones[p.facetIndex]?.query || p.facet,
+            role: p.role,
+            toolPackages: true,
+            activationManager: this.activationManager,
+            searchProvider: request.search_provider,
+            proxyBaseUrl,
+            compressionNotices,
+          });
+          let result: ResearcherRunResult;
+          try {
+            result = await researcher.run(request, signal);
+          } catch (err) {
+            if (signal?.aborted) break;
+            researchersFailed += 1;
+            console.warn(`[ParentResearchAgent] re-specialization researcher failed for facet ${p.facetIndex}:`, err);
+            continue;
+          }
+          if (signal?.aborted) break;
+          researchersCompleted += 1;
+          const remaining = MAX_RESEARCHER_FINDINGS_PER_SESSION - budget.findingsAdmitted;
+          const admitted = result.findings.slice(0, Math.max(0, remaining));
+          budget.findingsAdmitted += admitted.length;
+          seed[p.facetIndex] = seed[p.facetIndex]
+            ? { ...seed[p.facetIndex], findings: [...seed[p.facetIndex].findings, ...admitted] }
+            : { ...result, findings: admitted };
         }
         this.emitEvent({
           type: 'fanout_telemetry',
