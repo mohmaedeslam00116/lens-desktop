@@ -223,6 +223,9 @@ The closed five-role set (primary/web, technical/deep-dive, opposing/independent
 ### Deficit-Driven Respecialization
 The bounded mechanism by which the Parent Research Agent spawns additional role-tagged Researchers in response to coverage-audit gaps, always constrained by the remaining session evidence budget so it cannot loop.
 
+### Parity Harness
+The regression gate (`engine/parityHarness.ts`, ADR-0011) that replays golden offline fixture runs through the legacy loop and both agency paths (delegation + researcher fan-out) and diffs coverage score, citation-grounding audit, admission sets, and the shared LiveEvent backbone against documented thresholds. It protects the agency default flip, auditor gating, and fan-out constant tuning.
+
 ### ResearcherTelemetry
 The additive live-event projection (`researcher_telemetry`, following the `wide_telemetry` precedent) carrying researcher lifecycle and progress — identity, role, facet, phase, and running counts. Evidence found by researchers flows as ordinary source events, never inside telemetry.
 
