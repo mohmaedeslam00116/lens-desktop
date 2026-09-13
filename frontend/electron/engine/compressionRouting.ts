@@ -23,6 +23,8 @@ export interface CompressionRoutingOptions {
   /** Test seam: stub the child executable (no bundled billion-context, no real network). */
   binary?: string;
   healthTimeoutMs?: number;
+  /** Cancellation: forwarded into proxy startup and its health probes. */
+  signal?: AbortSignal;
 }
 
 export interface CompressionRoutingResult {
@@ -37,6 +39,8 @@ export interface CompressionRoutingResult {
 /**
  * Starts the compression proxy and returns the routing decision. Never
  * throws: every failure mode degrades to the uncompressed run with a notice.
+ * Cancellation is honored: an aborted signal during startup stops the wait
+ * and degrades immediately instead of blocking for the full timeout.
  */
 export async function routeCompression(
   options: CompressionRoutingOptions = {}
@@ -50,6 +54,7 @@ export async function routeCompression(
       port: options.port,
       binary: options.binary,
       healthTimeoutMs: options.healthTimeoutMs,
+      signal: options.signal,
     });
     if (!handle || !handle.healthy) {
       // startBillionContext already reaped any lingering child on timeout;

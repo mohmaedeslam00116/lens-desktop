@@ -5,6 +5,7 @@ import { SkillActivationManager } from './skills';
 import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
 import { auditEvidenceCoverage } from './evidenceCoverage';
 import { resetFetchLedger } from './fetchLedger';
+import { routeCompression, disposeCompression } from './compressionRouting';
 
 /** Researcher construction seam (pi-subagents-shaped): the default factory
  * builds in-process researchers; tests and later phases can supply
@@ -287,6 +288,27 @@ export class ParentResearchAgent {
       // admission, dedupe, and the single session budget stay authoritative.
       const researcherMode = (request as { researcher_mode?: boolean }).researcher_mode === true;
       if (researcherMode) {
+        // Compression lease (ticket #92): acquired ONCE at parent scope for
+        // the whole fan-out — researchers run concurrently against the
+        // process-wide supervisor, so per-researcher acquire/release would
+        // leak children. Released in a finally block after the fan-out.
+        let proxyBaseUrl: string | undefined;
+        let compressionNotices: string[] = [];
+        let ownsProxyLease = false;
+        if ((request as { compression_mode?: boolean }).compression_mode === true) {
+          const lease = await routeCompression({
+            enabled: true,
+            signal,
+          });
+          proxyBaseUrl = lease.proxyBaseUrl ?? undefined;
+          compressionNotices = lease.notices;
+          ownsProxyLease = lease.ownsProxy;
+          for (const notice of compressionNotices) {
+            this.emitEvent({ type: 'status', message: notice, step: 'compression' });
+          }
+        }
+
+        try {
         const budget = researcherBudgets.get(this.sessionId) ?? { researchersLaunched: 0, findingsAdmitted: 0 };
         researcherBudgets.set(this.sessionId, budget);
 
@@ -329,12 +351,10 @@ export class ParentResearchAgent {
             toolPackages: true,
             activationManager: this.activationManager,
             searchProvider: request.search_provider,
-            // Ticket #92: opt-in compression routing for researcher
-            // long-context traffic; degrades gracefully to uncompressed.
-            compressionEnabled:
-              (request as { compression_mode?: boolean }).compression_mode === true,
-            onNotice: (notice) =>
-              this.emitEvent({ type: 'status', message: notice, step: 'compression' }),
+            // Ticket #92: consume the parent's compression lease URL (absent
+            // = uncompressed; degradation notices were already emitted).
+            proxyBaseUrl,
+            compressionNotices,
           });
             // A transient researcher failure must not prevent the delegated
             // retrieval/synthesis path from running: contain it and leave the
@@ -402,6 +422,13 @@ export class ParentResearchAgent {
           ...((request as { scraped_sources?: unknown[] }).scraped_sources ?? []),
           ...seed.flatMap((r) => (r ? r.findings : [])),
         ];
+        } finally {
+          // Release the compression lease on every path (success, failure,
+          // abort) so the supervised child never outlives the fan-out.
+          if (ownsProxyLease) {
+            await disposeCompression();
+          }
+        }
       }
 
       // Delegate retrieval + synthesis verbatim to the legacy loop. The request

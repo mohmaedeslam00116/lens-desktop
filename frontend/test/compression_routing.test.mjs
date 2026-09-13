@@ -5,7 +5,7 @@ import { once } from 'node:events';
 
 import { proxyPrefixUrl, applyProxyToModel } from '../dist-electron/engine/piAdapter.js';
 import { routeCompression, disposeCompression } from '../dist-electron/engine/compressionRouting.js';
-import { disposeBillion } from '../dist-electron/engine/billionContext.js';
+import { disposeBillion, getBillionHandle } from '../dist-electron/engine/billionContext.js';
 import { ResearcherAgent } from '../dist-electron/engine/researcherAgent.js';
 import { ParentResearchAgent } from '../dist-electron/engine/parentAgent.js';
 import { setActiveCore, resetActiveCore } from '../dist-electron/engine/modelGateway.js';
@@ -55,25 +55,39 @@ server.listen(${port}, '127.0.0.1', () => console.log('stub up'));
 `;
 }
 
+/** Allocates an available loopback port (free-port race avoidance). */
+async function freePort() {
+  const net = await import('node:net');
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+    server.on('error', reject);
+  });
+}
+
 /** Runs a stub proxy child through the real supervisor by overriding the
  * binary path with an inline node script file. */
-async function withStubProxy({ healthy = true, port = 8791 } = {}) {
+async function withStubProxy({ healthy = true, port } = {}) {
   // Isolate the supervisor's process-wide singleton between tests.
   await disposeBillion();
+  port = port ?? (await freePort());
   const fs = await import('node:fs/promises');
   const os = await import('node:os');
   const path = await import('node:path');
   const dir = await fs.mkdtemp(await path.join(os.tmpdir(), 'bili-stub-'));
   const bin = await path.join(dir, 'stub-bili.cjs');
-  await fs.writeFile(bin, stubBinaryScript(port, healthy), 'utf8');
-  return {
-    binary: bin,
-    port,
-    async cleanup() {
-      await disposeBillion();
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
+  await fs.writeFile(bin, stubBinaryScript(port, healthy), 'utf8');    return {
+      binary: bin,
+      port,
+      dir,
+      async cleanup() {
+        await disposeBillion();
+        await fs.rm(dir, { recursive: true, force: true });
+      },
+    };
 }
 
 describe('Proxy URL-prefix routing (pi adapter)', () => {
@@ -114,9 +128,9 @@ describe('Compression routing (supervisor seam, stub binary — no real network)
   });
 
   it('healthy stub proxy: routing returns the proxy base URL', async () => {
-    // Distinct ports per test: on Windows a just-killed listener's socket can
-    // linger briefly, so a same-port successor would race its bind.
-    const stub = await withStubProxy({ port: 8792 });
+    // Free ports per test: a just-killed listener's socket can linger
+    // briefly, and fixed ports can be occupied by other processes.
+    const stub = await withStubProxy();
     try {
       const result = await routeCompression({ enabled: true, binary: stub.binary, port: stub.port, healthTimeoutMs: 4000 });
       assert.equal(result.proxyBaseUrl, `http://127.0.0.1:${stub.port}`);
@@ -128,7 +142,7 @@ describe('Compression routing (supervisor seam, stub binary — no real network)
   });
 
   it('unhealthy proxy: degrades to uncompressed with a telemetry notice', async () => {
-    const stub = await withStubProxy({ healthy: false, port: 8793 });
+    const stub = await withStubProxy({ healthy: false });
     try {
       const result = await routeCompression({ enabled: true, binary: stub.binary, port: stub.port, healthTimeoutMs: 2500 });
       assert.equal(result.proxyBaseUrl, null);
@@ -153,51 +167,50 @@ describe('Researcher compression integration (offline, stubbed seams)', () => {
     globalThis.fetch = realFetch;
   });
 
-  it('researcher with compression disabled never consults the proxy', async () => {
+  it('researcher without a proxy lease runs uncompressed (no notices, no child)', async () => {
     stubFetchEmpty();
     const ai = await pi();
     const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
     faux.setResponses([ai.fauxAssistantMessage('DONE')]);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
-    const notices = [];
     const researcher = new ResearcherAgent('s-92-off', () => {}, {
       researcherId: 'researcher_s-92-off_1', facetIndex: 0, facet: 'f', facetCount: 1,
       milestoneId: 'm1', milestoneTitle: 'f', toolPackages: true,
-      compressionEnabled: false,
-      onNotice: (n) => notices.push(n),
       searchFn: async () => [],
       packageToolsFactory: async () => ({ tools: [], handler: async () => ({ success: true, result: 'ok' }) }),
     });
-    await researcher.run({ query: 'Q', embedding_enabled: false });
-    assert.deepEqual(notices, []);
+    const result = await researcher.run({ query: 'Q', embedding_enabled: false });
+    assert.ok(result, 'uncompressed run completes');
+    assert.equal(getBillionHandle(), null, 'no proxy child was started');
   });
 
-  it('researcher with compression enabled routes generate() through the proxy option (healthy path)', async () => {
+  it('researcher consumes the parent-leased proxy URL; the lease owner reaps it', async () => {
     stubFetchEmpty();
     const ai = await pi();
     const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
     faux.setResponses([ai.fauxAssistantMessage('DONE')]);
-    // Capture the per-request gateway options: proxyBaseUrl must be present.
-    const seen = [];
-    setActiveCore('pi', {
-      overrideFactory: async () => faux.provider,
-    });
+    setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
-    const researcher = new ResearcherAgent('s-92-on', () => {}, {
-      researcherId: 'researcher_s-92-on_1', facetIndex: 0, facet: 'f', facetCount: 1,
-      milestoneId: 'm1', milestoneTitle: 'f', toolPackages: true,
-      compressionEnabled: true,
-      compressionBinary: '/nonexistent/bili-stub-xyz.cjs',
-      onNotice: (n) => seen.push(n),
-      searchFn: async () => [],
-      packageToolsFactory: async () => ({ tools: [], handler: async () => ({ success: true, result: 'ok' }) }),
-    });
-    // Missing binary -> degrade path; the researcher must complete
-    // uncompressed and surface the notice (the acceptance contract).
-    const result = await researcher.run({ query: 'Q', embedding_enabled: false });
-    assert.ok(result, 'run completes uncompressed');
-    assert.equal(seen.filter((n) => /without compression/i.test(n)).length, 1);
+    const stub = await withStubProxy();
+    try {
+      const routing = await routeCompression({ enabled: true, binary: stub.binary, port: stub.port, healthTimeoutMs: 4000 });
+      assert.equal(routing.ownsProxy, true);
+      const researcher = new ResearcherAgent('s-92-on', () => {}, {
+        researcherId: 'researcher_s-92-on_1', facetIndex: 0, facet: 'f', facetCount: 1,
+        milestoneId: 'm1', milestoneTitle: 'f', toolPackages: true,
+        proxyBaseUrl: routing.proxyBaseUrl,
+        compressionNotices: routing.notices,
+        searchFn: async () => [],
+        packageToolsFactory: async () => ({ tools: [], handler: async () => ({ success: true, result: 'ok' }) }),
+      });
+      const result = await researcher.run({ query: 'Q', embedding_enabled: false });
+      assert.ok(result, 'proxied run completes');
+      assert.ok(getBillionHandle(), 'proxy child alive during the leased run');
+    } finally {
+      await disposeBillion();
+      await (await import('node:fs/promises')).rm(stub.dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -218,8 +231,9 @@ describe('Parent passes compression_mode to researchers (offline e2e)', () => {
     const flagsSeen = [];
     const parent = new ParentResearchAgent('s-92-parent', (e) => emitted.push(e), undefined,
       (sessionId, emit, options) => {
-        flagsSeen.push(options.compressionEnabled);
-        // Offline researcher: no search hits, no tool loop — the flag
+        // The researcher must receive the leased proxy URL (compression on).
+        flagsSeen.push(options.proxyBaseUrl !== undefined);
+        // Offline researcher: no search hits, no tool loop — the lease
         // pass-through is the contract under test.
         return new ResearcherAgent(sessionId, emit, {
           ...options,
@@ -231,5 +245,7 @@ describe('Parent passes compression_mode to researchers (offline e2e)', () => {
     assert.deepEqual(flagsSeen, [true]);
     const finished = emitted.find((e) => e.type === 'finished');
     assert.ok(finished, 'run completes');
+    // The parent released the compression lease after the fan-out.
+    assert.equal(getBillionHandle(), null, 'proxy child reaped after the run');
   });
 });

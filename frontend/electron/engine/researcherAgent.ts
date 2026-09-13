@@ -6,7 +6,6 @@ import { LLMToolDefinition, ToolCallHandler } from './models';
 import { SkillActivationManager } from './skills';
 import { buildResearchPackageTools } from './piResearchTools';
 import { claimAndShare } from './fetchLedger';
-import { routeCompression } from './compressionRouting';
 
 /**
  * researcherAgent.ts — single in-process researcher subagent (ADR-0010 phase 2,
@@ -62,14 +61,14 @@ export interface ResearcherOptions {
    * bridge). Tests supply a faux toolset to exercise the model-driven
    * retrieval path offline. */
   packageToolsFactory?: typeof import('./piResearchTools').buildResearchPackageTools;
-  /** Opt-in: route this researcher's model traffic through the supervised
-   * billion-context compression proxy (ADR-0010, ticket #92). Degrades
-   * gracefully to uncompressed on any proxy failure. */
-  compressionEnabled?: boolean;
-  /** Test seam: stub the proxy child binary (no real network). */
-  compressionBinary?: string;
-  /** Test seam: observe degradation notices. */
-  onNotice?: (notice: string) => void;
+  /** Compression proxy base URL leased by the PARENT for the whole fan-out
+   * (ADR-0010, ticket #92); absent = uncompressed. The researcher never
+   * starts or stops the supervised proxy itself — researchers run
+   * concurrently against a process-wide supervisor, so the lease is owned at
+   * parent/session scope and released after the run. */
+  proxyBaseUrl?: string;
+  /** Degradation notices collected by the parent's lease acquisition. */
+  compressionNotices?: string[];
 }
 
 export interface ResearcherRunResult {
@@ -223,22 +222,9 @@ export class ResearcherAgent {
     // Phase B — model-driven retrieval through the pi-web-access toolset
     // (supplementary plane; the adapter runs its own depth-capped tool loop).
     if (this.options.toolPackages && !signal?.aborted) {
-      // Compression routing (ticket #92): when enabled, the proxy must be
-      // resolved BEFORE the first generate() so routing is deterministic.
-      // Unhealthy/missing proxy degrades to the uncompressed run with a
-      // telemetry notice — compression is an optimization, not a gate.
-      let proxyBaseUrl: string | undefined;
-      if (this.options.compressionEnabled) {
-        const routing = await routeCompression({
-          enabled: true,
-          binary: this.options.compressionBinary,
-        });
-        proxyBaseUrl = routing.proxyBaseUrl ?? undefined;
-        for (const notice of routing.notices) {
-          console.warn(`[ResearcherAgent] ${notice}`);
-          this.options.onNotice?.(notice);
-        }
-      }
+      // Compression routing (ticket #92): the proxy lease is acquired by the
+      // parent for the whole fan-out; the researcher only consumes its URL.
+      const proxyBaseUrl = this.options.proxyBaseUrl;
       try {
         const buildTools = this.options.packageToolsFactory
           ?? (await import('./piResearchTools')).buildResearchPackageTools;
