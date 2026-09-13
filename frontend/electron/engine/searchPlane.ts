@@ -60,8 +60,9 @@ class PlaneGate {
   private waiters: PlaneWaiter[] = [];
 
   /** Admits one caller. Abort-aware: a caller that aborts while queued is
-   * removed and rejected, and a slot granted to an already-aborted caller is
-   * handed on rather than used. */
+   * removed and rejected, and a granted-but-aborted caller hands its slot
+   * back rather than using it. A granted caller *inherits* the released slot
+   * (no second increment), so active never exceeds PLANE_CONCURRENCY. */
   async acquire(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw abortError();
     if (this.active < PLANE_CONCURRENCY) {
@@ -85,30 +86,36 @@ class PlaneGate {
       }
       this.waiters.push(waiter);
     });
-    // Granted: take ownership of the slot, then re-check cancellation — the
-    // grant may have raced an abort between resolution and resume.
-    this.active += 1;
+    // Granted: the slot was transferred by release() (active unchanged).
+    // Re-check cancellation — the grant may have raced an abort between
+    // resolution and resume; hand the inherited slot back if so.
     if (signal?.aborted) {
       this.release();
       throw abortError();
     }
   }
 
-  /** Releases one held slot and grants the next queued waiter (if any). */
+  /** Releases one held slot: transferred to the next queued waiter if one
+   * exists (active unchanged — the waiter inherits it), decremented otherwise. */
   release(): void {
-    this.active -= 1;
     const next = this.waiters.shift();
-    if (!next) return;
+    if (!next) {
+      this.active -= 1;
+      return;
+    }
     if (next.onAbort && next.signal) {
       next.signal.removeEventListener('abort', next.onAbort);
     }
     next.resolve();
   }
 
+  /** Resets the ledger counters (test seam). Requires an idle gate: resetting
+   * a live gate would strand queued waiters and corrupt slot accounting. */
   reset(): void {
-    this.active = 0;
+    if (this.active !== 0 || this.waiters.length !== 0) {
+      throw new Error('[searchPlane] cannot reset an active gate');
+    }
     this.ledgered = 0;
-    this.waiters = [];
   }
 }
 
@@ -157,17 +164,18 @@ async function loadPlaneResolver(): Promise<PlaneResolver> {
   return cachedResolver;
 }
 
-/** Serves one query through the vendored plane under the concurrency gate. */
+/** Serves one query through the vendored plane under the concurrency gate.
+ * Cancellation propagates as AbortError — never a successful empty result. */
 async function serveThroughPlane(
   query: string,
   maxResults: number,
   signal?: AbortSignal
 ): Promise<SearchResultItem[]> {
-  if (signal?.aborted) return [];
+  if (signal?.aborted) throw abortError();
   await gate.acquire(signal);
   try {
     gate.ledgered += 1;
-    if (signal?.aborted) return [];
+    if (signal?.aborted) throw abortError();
     const resolver = await loadPlaneResolver();
     return await resolver(query, maxResults, signal);
   } finally {
@@ -186,9 +194,11 @@ export async function primarySearchPlane(
   maxResults = 8,
   signal?: AbortSignal
 ): Promise<SearchResultItem[]> {
+  // Cancellation propagates (caller-abort contract) — checked before the
+  // empty-query short-circuit so an aborted caller never sees a fake success.
+  if (signal?.aborted) throw abortError();
   const cleanQuery = query.trim();
   if (!cleanQuery) return [];
-  if (signal?.aborted) return [];
 
   const keys = apiKeys || {};
 
