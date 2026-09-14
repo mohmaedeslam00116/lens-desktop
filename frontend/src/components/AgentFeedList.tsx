@@ -12,17 +12,14 @@ interface AgentFeedListProps {
 /** Elapsed-time display with Arabic unit parity (CodeRabbit finding). */
 function formatElapsed(ms: number, isArabic: boolean): string {
   const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
   if (isArabic) {
     if (s < 60) return `${s} ث`;
-    const m = Math.floor(s / 60);
-    const rem = s % 60;
     if (m < 60) return `${m} د ${rem} ث`;
     return `${Math.floor(m / 60)} س ${m % 60} د`;
   }
-  const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
   if (m < 60) return `${m}m ${rem}s`;
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }

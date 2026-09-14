@@ -58,7 +58,7 @@ const PROVIDER_KEY_FIELD: Record<string, string> = {
  * work. Keyed-provider engine errors still surface mid-run via `fail()`; this
  * guard only removes the guaranteed-hang case (visibility fix, ticket #119). */
 export function providerAdmissionGuard(body: Partial<WideResearchRequest> | undefined): string | null {
-  const provider = (body?.llm_provider || 'gemini').toLowerCase();
+  const provider = (body?.llm_provider || 'gemini').trim().toLowerCase();
   if (provider === 'ollama') {
     const endpoint = (body?.ollama_endpoint || '').trim();
     if (!endpoint) {

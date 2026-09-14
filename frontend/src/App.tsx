@@ -614,11 +614,12 @@ export function App() {
   };
 
   const handleDiscardPlan = async (reason?: string) => {
+    runTerminatedRef.current = true;
     setIsPlanModalOpen(false);
     setIsSearching(false);
     setCurrentStatus(language === 'ar' ? 'تم إلغاء خطة البحث.' : 'Research plan discarded.');
     await sendPlanAction('plan_rejected', { reason: reason || 'User discarded plan' }, '/api/research/plan/reject');
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
       wsRef.current.close();
     }
   };
