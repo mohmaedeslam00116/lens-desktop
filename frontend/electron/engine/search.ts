@@ -42,7 +42,9 @@ async function readBoundedJson<T = any>(res: Response, maxBytes = 2 * 1024 * 102
 
 /** Reads at most `maxBytes` of a (typically error) response body, cancelling
  * the stream beyond the cap — an error path must never buffer an unbounded
- * body just to quote its first 200 characters. */
+ * body just to quote its first 200 characters. Retains the byte prefix of
+ * the chunk that overflows the cap; when bounded streaming is unavailable
+ * (no body reader), returns an empty diagnostic rather than buffering. */
 async function readBoundedText(res: Response, maxBytes = 4096): Promise<string> {
   const contentLengthStr = res.headers.get('content-length');
   if (contentLengthStr && parseInt(contentLengthStr, 10) > maxBytes) {
@@ -52,33 +54,34 @@ async function readBoundedText(res: Response, maxBytes = 4096): Promise<string> 
   if (res.body && typeof (res.body as any).getReader === 'function') {
     const reader = (res.body as any).getReader();
     const chunks: Uint8Array[] = [];
-    let totalBytes = 0;
-    while (true) {
+    let retained = 0;
+    while (retained < maxBytes) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value) {
-        totalBytes += value.byteLength;
-        if (totalBytes > maxBytes) {
-          try { await reader.cancel(); } catch {}
-          break;
+      if (!value) continue;
+      const remaining = maxBytes - retained;
+      if (value.byteLength > remaining) {
+        if (remaining > 0) {
+          chunks.push(value.subarray(0, remaining));
+          retained += remaining;
         }
-        chunks.push(value);
-      }
-    }
-    const merged = new Uint8Array(Math.min(totalBytes, maxBytes));
-    let offset = 0;
-    for (const chunk of chunks) {
-      if (offset + chunk.byteLength > maxBytes) {
-        merged.set(chunk.subarray(0, maxBytes - offset), offset);
+        try { await reader.cancel(); } catch {}
         break;
       }
+      chunks.push(value);
+      retained += value.byteLength;
+    }
+    if (retained === 0) return '';
+    const merged = new Uint8Array(retained);
+    let offset = 0;
+    for (const chunk of chunks) {
       merged.set(chunk, offset);
       offset += chunk.byteLength;
     }
     return new TextDecoder('utf-8').decode(merged);
   }
-  const text = await res.text();
-  return text.length > maxBytes ? text.slice(0, maxBytes) : text;
+  // No bounded stream available: refuse to buffer an unbounded body.
+  return '';
 }
 
 export class MultiSearchProvider {
