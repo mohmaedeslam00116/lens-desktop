@@ -57,6 +57,33 @@ The boundary was locked as nine decisions:
 9. **Recording — this ADR lands in the swap PR** with the first implementation
    that honors the boundary.
 
+## Contract state (amended at ticket #112 — config seam, D2 complete)
+
+The keyed provider implementations (Tavily / Serper HTTP clients) retired:
+keyed search serves through the vendored providers (`searchWithTavily` /
+`searchWithSerper` via jiti) under the same gate and ledger as the keyless
+plane — D2's contract is complete, and `MultiSearchProvider.search` reduces
+to a delegation to the plane. Provisioning:
+
+- **LENS settings → `web-search.json` write-through** (`engine/configSeam.ts`):
+  merge-on-write (vendored-managed fields like `ssrf`/`fetch` are preserved),
+  empty-means-remove (clearing a key in LENS removes the field and the env
+  export), and a `0o700`/`0o600` best-effort safe file. With no keys
+  configured, NO file is written — zero-config parity pinned by test.
+- **Immediate effect**: the seam also exports `TAVILY_API_KEY` /
+  `SERPER_API_KEY` to the process environment (in-process only); the vendored
+  credential resolver reads env per call, so a fresh key works without a
+  restart even though the vendored module caches its config at first read.
+  Key-file precedence still wins (vendored contract: config > env).
+- **No-leak clause enforced**: the engine API (`/api/settings/search-keys`)
+  returns only redacted summaries (`{ set, cleared }` / boolean status); warn
+  paths pass errors through `redactKeyMaterial` before logging; keys never
+  appear in logs or telemetry. The plane's caller-key override rides a
+  one-call env set/restore.
+- **Failure semantics**: a keyed vendored failure degrades to the keyless DDG
+  plane (native semantic); the keyless path never re-enters the keyed path
+  (terminal, no cycle); aborts and saturation propagate as before.
+
 ## Contract state (amended at ticket #111 — scrape plane)
 
 The second increment moved page retrieval onto the plane: pi-web-access

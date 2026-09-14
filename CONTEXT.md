@@ -209,7 +209,10 @@ The immutable tasking envelope the Parent Research Agent hands to a Researcher: 
 The execution mode in which a research run is driven by the Parent Research Agent orchestrating parallel Researchers. Since the ADR-0012 default flip (ticket #95) it is the standard research path, and since the contract closure (ticket #104) it is the ONLY standard path — the legacy single-loop route and its `legacy_mode` escape flag were removed (silently dropped on requests; see ADR-0012's amendment).
 
 ### Primary Retrieval Plane
-The retrieval architecture (ADR-0013) in which pi-web-access serves as the primary search AND scrape plane behind the engine's search and scrape seams, while LENS remains authoritative for evidence admission, dedupe, budgets, telemetry boundaries, concurrency/fetch controls, and evidence preservation. Every vendored-plane retrieval is ledgered — admitted through bounded gates; no unledgered retrieval is allowed. Keyed search providers route natively until the settings-to-`web-search.json` config seam lands.
+The retrieval architecture (ADR-0013) in which pi-web-access serves as the primary search AND scrape plane behind the engine's search and scrape seams, while LENS remains authoritative for evidence admission, dedupe, budgets, telemetry boundaries, concurrency/fetch controls, and evidence preservation. Every vendored-plane retrieval is ledgered — admitted through bounded gates; no unledgered retrieval is allowed. Keyed providers serve through the vendored modules, provisioned via the settings-to-`web-search.json` config seam.
+
+### Config Seam
+The LENS settings → `web-search.json` write-through (ADR-0013 D2) that makes keyed pi-web-access providers opt-in. Merge-on-write preserves vendored-managed fields; empty-means-remove; with no keys configured no file is written (zero-config parity). Keys never appear in logs, telemetry, or API responses.
 
 ### Plane Ledger
 The admission counter and bounded concurrency gate through which every vendored-plane retrieval call passes (bounded admission + call count), the enforcement point proving no retrieval bypasses LENS's controls. Ledger gates double as vacuity detectors: a parity-harness run with zero ledgered admissions is a broken run, not a passing one.

@@ -25,6 +25,7 @@
 import * as path from 'node:path';
 import { MultiSearchProvider } from './search';
 import { SearchResultItem } from './types';
+import { hasProvisionedKey, readProvisionedKey, redactKeyMaterial } from './configSeam';
 
 /** Resolver shape the vendored DDG module is adapted to. */
 type PlaneResolver = (
@@ -132,6 +133,8 @@ export function searchPlaneLedgerSnapshot(): { active: number; ledgered: number 
 /** Resets the adapter cache and ledger counters (test seam). */
 export function resetSearchPlane(): void {
   cachedResolver = null;
+  cachedKeyed = null;
+  keyedOverride = null;
   gate.reset();
 }
 
@@ -143,6 +146,10 @@ export function resetSearchPlane(): void {
  * duration of one call only; the process-wide fetch stays untouched.
  */
 export const __testSeams = {
+  /** Overrides the vendored keyed search modules (offline keyed-path tests). */
+  setKeyedOverride(override: { tavily?: KeyedSearchFn; serper?: KeyedSearchFn } | null): void {
+    keyedOverride = override;
+  },
   async searchWithDuckDuckGo(
     query: string,
     options?: {
@@ -228,6 +235,111 @@ async function serveThroughPlane(
   }
 }
 
+/** Vendored keyed-provider module cache (config is read once per module). */
+interface KeyedSearchResponse {
+  results?: Array<{ title?: string; url?: string; content?: string }>;
+  organic?: Array<{ title?: string; link?: string; snippet?: string }>;
+}
+type KeyedSearchFn = (
+  query: string,
+  options?: { numResults?: number; signal?: AbortSignal }
+) => Promise<KeyedSearchResponse>;
+let cachedKeyed: { tavily?: KeyedSearchFn; serper?: KeyedSearchFn } | null = null;
+
+/**
+ * Test seam: overrides the vendored keyed search modules (offline keyed-path
+ * tests). Pass `null` to clear. Reset alongside `resetSearchPlane`.
+ */
+let keyedOverride: { tavily?: KeyedSearchFn; serper?: KeyedSearchFn } | null = null;
+
+async function loadKeyedSearch(): Promise<{ tavily?: KeyedSearchFn; serper?: KeyedSearchFn }> {
+  if (keyedOverride) return keyedOverride;
+  if (cachedKeyed) return cachedKeyed;
+  const piPackages = await import('./piPackages');
+  const loader = await piPackages.getJitiLoader();
+  if (!loader) throw new Error('jiti loader unavailable');
+  const tavilyMod = (await loader(path.join(VENDOR_ROOT, 'web-access', 'tavily.ts'))) as {
+    searchWithTavily?: unknown;
+  };
+  const serperMod = (await loader(path.join(VENDOR_ROOT, 'web-access', 'serper.ts'))) as {
+    searchWithSerper?: unknown;
+  };
+  const keyed: { tavily?: KeyedSearchFn; serper?: KeyedSearchFn } = {};
+  if (typeof tavilyMod?.searchWithTavily === 'function') {
+    keyed.tavily = tavilyMod.searchWithTavily as KeyedSearchFn;
+  }
+  if (typeof serperMod?.searchWithSerper === 'function') {
+    keyed.serper = serperMod.searchWithSerper as KeyedSearchFn;
+  }
+  if (!keyed.tavily && !keyed.serper) {
+    throw new Error('vendored keyed search modules expose no search functions');
+  }
+  cachedKeyed = keyed;
+  return keyed;
+}
+
+/** Serializes the one-call env override: `process.env` is process-global,
+ * and concurrent keyed calls (the gate admits 3) would otherwise capture
+ * each other's keys as "prior values" — crossing keys between calls and
+ * leaking the override after completion. A promise-chain mutex keeps the
+ * set/call/restore triple atomic per provider family. */
+const keyedEnvChains: Map<string, Promise<void>> = new Map();
+
+async function withKeyedEnv<T>(envName: string, key: string, run: () => Promise<T>): Promise<T> {
+  const previousChain = keyedEnvChains.get(envName) ?? Promise.resolve();
+  let release!: () => void;
+  const chain = new Promise<void>((r) => { release = r; });
+  keyedEnvChains.set(envName, chain);
+  await previousChain;
+  const previous = process.env[envName];
+  process.env[envName] = key;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env[envName];
+    else process.env[envName] = previous;
+    if (keyedEnvChains.get(envName) === chain) keyedEnvChains.delete(envName);
+    release();
+  }
+}
+
+/** Serves one query through the vendored KEYED providers under the same gate
+ * and ledger as the keyless plane (D5: no unledgered retrieval). The caller's
+ * key rides a serialized one-call env override — never logged, never leaked. */
+async function serveThroughKeyedPlane(
+  provider: 'tavily' | 'serper',
+  key: string,
+  query: string,
+  maxResults: number,
+  signal?: AbortSignal
+): Promise<SearchResultItem[]> {
+  if (signal?.aborted) throw abortError();
+  const keyed = await loadKeyedSearch();
+  const run: KeyedSearchFn | undefined = provider === 'tavily' ? keyed.tavily : keyed.serper;
+  if (typeof run !== 'function') throw new Error(`vendored ${provider} search unavailable`);
+  const envName = provider === 'tavily' ? 'TAVILY_API_KEY' : 'SERPER_API_KEY';
+  await gate.acquire(signal);
+  try {
+    gate.ledgered += 1;
+    if (signal?.aborted) throw abortError();
+    const response = await withKeyedEnv(envName, key, () => run(query, { numResults: maxResults, signal }));
+    if (provider === 'tavily') {
+      return (response.results ?? []).map((r) => ({
+        title: r.title || r.url || '',
+        url: r.url || '',
+        snippet: r.content || '',
+      })).filter((r) => r.url);
+    }
+    return (response.organic ?? []).map((r) => ({
+      title: r.title || r.link || '',
+      url: r.link || '',
+      snippet: r.snippet || '',
+    })).filter((r) => r.url);
+  } finally {
+    gate.release();
+  }
+}
+
 /**
  * The primary search plane. Signature-compatible with
  * `MultiSearchProvider.search`, so it slots behind the engine's search seam.
@@ -247,38 +359,39 @@ export async function primarySearchPlane(
 
   const keys = apiKeys || {};
 
-  // Keyed providers keep the native path (fallback guard, D2/D6): the
-  // config seam (#112) will later provision these through web-search.json.
-  if (provider === 'tavily' && keys.tavily) {
-    return MultiSearchProvider.search(query, provider, apiKeys, maxResults, signal);
+  // Keyed providers (post-#112): served through the vendored keyed providers
+  // (D2 contract complete). The caller's key rides as a one-call env override;
+  // absent a caller key, a config-seam-provisioned key is used. A keyed
+  // failure degrades to the keyless plane (native semantic); the keyless path
+  // never re-enters the keyed path (terminal, no cycle).
+  if (provider === 'tavily' && (keys.tavily || hasProvisionedKey('tavily'))) {
+    const key = keys.tavily || readProvisionedKey('tavily');
+    if (key) {
+      try {
+        return await serveThroughKeyedPlane('tavily', key, cleanQuery, maxResults, signal);
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') throw err;
+        // Redacted warn (no-leak clause): never echoes key material.
+        console.warn('[searchPlane] vendored tavily failed — falling back to the keyless plane:', redactKeyMaterial(err, key));
+      }
+    }
   }
-  if ((provider === 'serper' || provider === 'google') && keys.serper) {
-    return MultiSearchProvider.search(query, provider, apiKeys, maxResults, signal);
+  if ((provider === 'serper' || provider === 'google') && (keys.serper || hasProvisionedKey('serper'))) {
+    const key = keys.serper || readProvisionedKey('serper');
+    if (key) {
+      try {
+        return await serveThroughKeyedPlane('serper', key, cleanQuery, maxResults, signal);
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') throw err;
+        console.warn('[searchPlane] vendored serper failed — falling back to the keyless plane:', redactKeyMaterial(err, key));
+      }
+    }
   }
 
-  // DDG keyless (or unknown provider) → the vendored plane. Post-contract
-  // (ticket #110) the plane IS the keyless path — the native DDG
-  // implementation retired — so a plane failure falls back only to the
-  // caller's keyed providers (direct static calls, bypassing `search()` to
-  // keep one terminal hop and no plane↔native re-entry cycle); with no keys
-  // the error propagates to the caller's existing per-query handling.
-  // Caller aborts propagate (native semantic); queue saturation fails
-  // loudly instead of degrading silently.
-  try {
-    return await serveThroughPlane(cleanQuery, maxResults, signal);
-  } catch (err) {
-    if (signal?.aborted) throw err;
-    if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') throw err;
-    if (keys.tavily || keys.serper) {
-      console.warn(
-        '[searchPlane] vendored plane failed — falling back to the caller\'s keyed provider:',
-        String(err).slice(0, 300)
-      );
-      if (keys.serper) {
-        return MultiSearchProvider.searchSerper(cleanQuery, keys.serper, maxResults, signal);
-      }
-      return MultiSearchProvider.searchTavily(cleanQuery, keys.tavily, maxResults, signal);
-    }
-    throw err;
-  }
+  // DDG keyless (or keyed-failure fallback): the vendored keyless plane.
+  // Terminal in both directions — a keyless failure with no other key
+  // propagates; it NEVER re-enters the keyed or native path (no cycle).
+  return serveThroughPlane(cleanQuery, maxResults, signal);
 }

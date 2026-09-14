@@ -429,6 +429,27 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           return;
         }
 
+        // Settings → web-search.json write-through (ADR-0013 D2/D7, #112):
+        // keyed pi-web-access providers become opt-in. Keys are NEVER echoed
+        // back — the response carries only the redacted change summary.
+        if (pathname === '/api/settings/search-keys' && req.method === 'POST') {
+          const body = await parseJsonBody<any>(req);
+          const { writeSearchKeysToVendorConfig } = await import('./configSeam');
+          const summary = writeSearchKeysToVendorConfig({
+            tavily: typeof body?.keys?.tavily === 'string' ? body.keys.tavily : undefined,
+            serper: typeof body?.keys?.serper === 'string' ? body.keys.serper : undefined,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, ...summary }));
+          return;
+        }
+        if (pathname === '/api/settings/search-keys' && req.method === 'GET') {
+          const { readSearchKeysStatus } = await import('./configSeam');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(readSearchKeysStatus()));
+          return;
+        }
+
         // Embedding Connection & Latency Test
         if (pathname === '/api/models/test-embedding' && req.method === 'POST') {
           const body = await parseJsonBody<any>(req);

@@ -346,6 +346,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleSave = () => {
     onSave(current);
+    // Settings → web-search.json write-through (ADR-0013 D2/D7, #112): keyed
+    // search providers become opt-in via the vendored config the engine reads.
+    // Fire-and-forget: the local write must not block or fail the settings
+    // save; the response carries only a redacted summary — never key material.
+    fetch(`${API_BASE}/api/settings/search-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: { tavily: current.keys.tavily || '', serper: current.keys.serper || '' } }),
+    }).catch(() => { /* engine unreachable: keys persist in LENS settings only */ });
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
