@@ -57,6 +57,41 @@ The boundary was locked as nine decisions:
 9. **Recording — this ADR lands in the swap PR** with the first implementation
    that honors the boundary.
 
+## Contract state (amended at ticket #111 — scrape plane)
+
+The second increment moved page retrieval onto the plane: pi-web-access
+`extractContent` (the engine of `fetch_content`) serves scrapes behind the
+engine's scrape seam (`scrapeFn` / the pool's default fetcher), and the native
+fetch/cheerio implementation is retired. `PageScraper.scrape` remains as a
+thin static facade over `primaryScrapePlane` — the seam tests stub to inject
+offline fixtures — so all three former direct-call sites (delegated loop,
+researchers, `BoundedScraperPool`) route through the plane unchanged.
+Boundary-preserving mappings the adapter pins:
+
+- **SSRF validation stays ON** (hardening over the native scraper, which
+  fetched any URL unvalidated): vendored `ssrf-protection` runs with its own
+  DNS resolution, so private/loopback addresses are blocked before any fetch.
+- **Error semantics preserved**: origin HTTP errors map to the native
+  `Content unavailable from … (HTTP N).` sentinel (the pool's rate-limit
+  backoff keys on it); transport failures (SSRF block, DNS, timeout) throw
+  the native `Failed to scrape …` error; caller aborts propagate as
+  `AbortError`; a vendored timeout maps to the native `Request timed out`.
+- **LENS-owned signals preserved**: `calculateCredibilityScore` provenance
+  and the ~6,000-character stored-content budget are applied LENS-side after
+  vendored extraction (the vendored HTTP cap is 5 MB).
+- **Every fetch is gate-admitted and ledgered** (D5):
+  `scrapePlaneLedgerSnapshot()` proves admission counts; the bounded gate
+  mirrors the search plane (abort-aware queue, waiter slot inheritance,
+  saturation fails loudly).
+- **Parity harness offline seams**: the harness runner resolves fixture
+  hostnames through the plane's lookup seam (real DNS never consulted;
+  non-fixture hostnames fail loudly) and its DDG route matcher decodes both
+  wire forms — the vendored plane encodes spaces as `+` while the retired
+  native implementation used `%20`, and since #109 the matcher only matched
+  the `%20` form, silently leaving the parity legs with empty search results
+  (the scrape-plane ledger gate exposed the vacuous runs; both legs degraded
+  identically, so the stages passed on nothing).
+
 ## Contract state (amended at ticket #110)
 
 The contract step retired the native DuckDuckGo HTML implementation and the
@@ -110,8 +145,9 @@ keyed routing through `search()` unchanged.
   from the native path it replaces (wire-identical request, same parser
   classes).
 - The plane ledger and bounded gate are the enforcement point for the
-  boundary clause; future retrieval paths (scrape-plane increment, tool-plane
-  migration) must admit through the same gates.
+  boundary clause; future retrieval paths (tool-plane migration) must admit
+  through the same gates. Ledger gates double as vacuity detectors: a parity
+  run with zero ledgered admissions is a broken run, not a passing one.
 - Re-vendor drift of pi-web-access remains a maintenance risk (mitigated by
   the vendoring script's upstream diff check).
 - The tool-plane migration remains fog on the

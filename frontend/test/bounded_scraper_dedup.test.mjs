@@ -1,6 +1,9 @@
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   normalizeCanonicalUrl,
@@ -14,6 +17,37 @@ import {
 import { BoundedScraperPool } from '../dist-electron/engine/scraperPool.js';
 import { PageScraper } from '../dist-electron/engine/scraper.js';
 import { MultiSearchProvider } from '../dist-electron/engine/search.js';
+import {
+  __testSeams as scrapeTestSeams,
+  resetScrapePlane,
+} from '../dist-electron/engine/scrapePlane.js';
+
+// ---------------------------------------------------------------------------
+// Vendored-plane environment seams (ticket #111): the scrape plane is the
+// engine's scrape path, backed by pi-web-access extractContent. Its SSRF
+// validation blocks loopback unless ssrf.allowRanges permits it (config seam:
+// PI_CODING_AGENT_DIR → web-search.json), and hostnames must resolve without
+// real DNS (lookup seam: __testSeams.setLookupOverride).
+// ---------------------------------------------------------------------------
+const SSRF_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'lens-ssrf-'));
+writeFileSync(
+  join(SSRF_CONFIG_DIR, 'web-search.json'),
+  JSON.stringify({ ssrf: { allowRanges: ['127.0.0.0/8', '::1/128'] } })
+);
+const PREV_PI_DIR = process.env.PI_CODING_AGENT_DIR;
+
+before(() => {
+  process.env.PI_CODING_AGENT_DIR = SSRF_CONFIG_DIR;
+  scrapeTestSeams.setLookupOverride(async () => [{ address: '93.184.216.34', family: 4 }]);
+});
+
+after(() => {
+  scrapeTestSeams.setLookupOverride(null);
+  if (PREV_PI_DIR === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = PREV_PI_DIR;
+  resetScrapePlane();
+  rmSync(SSRF_CONFIG_DIR, { recursive: true, force: true });
+});
 
 describe('Declared response size rejection', () => {
   it('cancels an oversized search body and preserves the size-limit error when cancellation fails', async () => {
@@ -42,27 +76,24 @@ describe('Declared response size rejection', () => {
     }
   });
 
-  it('cancels an oversized scrape body and preserves the size-limit error when cancellation fails', async () => {
+  it('rejects an oversized scrape body with the vendored size-limit error', async () => {
     const originalFetch = globalThis.fetch;
-    let cancelled = false;
     globalThis.fetch = async () => ({
       ok: true,
       status: 200,
-      headers: new Headers({ 'content-length': String(3 * 1024 * 1024) }),
-      body: {
-        cancel: async () => {
-          cancelled = true;
-          throw new Error('Cancellation failed');
-        }
-      }
+      // Vendored cap is 5 MB (native was 2 MB) — exceed it so the vendored
+      // content-length precheck fires before any body read.
+      headers: new Headers({ 'content-length': String(6 * 1024 * 1024) }),
+      body: null,
     });
 
     try {
+      // Vendored contract: content-length over the cap → error WITHOUT a
+      // status → the plane throws a transport-style scrape failure.
       await assert.rejects(
         PageScraper.scrape('https://example.com/oversized'),
-        /Content length exceeds maximum limit/
+        /Response too large/
       );
-      assert.equal(cancelled, true);
     } finally {
       globalThis.fetch = originalFetch;
     }

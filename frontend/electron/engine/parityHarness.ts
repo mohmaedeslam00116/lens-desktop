@@ -142,8 +142,16 @@ export function backboneOf(events: LiveEvent[]): string[] {
 export function makeFixtureFetch(fixture: ParityFixture): typeof fetch {
   const route = (url: string): string | null => {
     if (url.includes('html.duckduckgo.com')) {
+      // The vendored DDG plane encodes spaces as '+' (form encoding); the
+      // native implementation used encodeURIComponent ('%20'). Decode and
+      // normalize so both wire forms route to the fixture's results page.
+      // (#111: the '+' form previously 404'd silently, leaving the parity
+      // legs with empty search results — the scrape-plane gate exposed it.)
+      const decoded = (() => {
+        try { return decodeURIComponent(url).replace(/\+/g, ' ').toLowerCase(); } catch { return url.toLowerCase(); }
+      })();
       for (const [query, html] of Object.entries(fixture.searchHtml)) {
-        if (url.includes(encodeURIComponent(query))) return html;
+        if (decoded.includes(query.toLowerCase())) return html;
       }
       return null;
     }
@@ -202,6 +210,23 @@ async function runLeg(
   const request = makeRequest(fixture, path === 'fanout');
   const previousFetch = globalThis.fetch;
   globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
+  // Scrape-plane offline seam (#111): fixture hostnames must resolve for the
+  // vendored SSRF validator (real DNS never consulted). Non-fixture hostnames
+  // fail loudly — the offline contract is preserved, and the legs scrape the
+  // golden pages through the real vendored plane instead of degrading to
+  // identical-but-empty runs that would pass the stages vacuously.
+  const { __testSeams: scrapeSeams } = await import('./scrapePlane');
+  const fixtureHostnames = new Set(
+    Object.keys(fixture.pageHtml).map((u) => {
+      try { return new URL(u).hostname; } catch { return u; }
+    })
+  );
+  scrapeSeams.setLookupOverride(async (hostname) => {
+    if (!fixtureHostnames.has(hostname)) {
+      throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
+    }
+    return [{ address: '93.184.216.34', family: 4 }];
+  });
   resetActiveCore();
   setActiveCore('pi', { overrideFactory: async () => options.provider });
   try {
@@ -214,6 +239,7 @@ async function runLeg(
     ).run(request);
   } finally {
     globalThis.fetch = previousFetch;
+    scrapeSeams.setLookupOverride(null);
     resetActiveCore();
   }
   const finished = events.find((e) => e.type === 'finished') as LiveEvent | undefined;

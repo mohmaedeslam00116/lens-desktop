@@ -1,4 +1,4 @@
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -13,12 +13,25 @@ import {
   searchPlaneLedgerSnapshot,
   resetSearchPlane,
 } from '../dist-electron/engine/searchPlane.js';
+import {
+  scrapePlaneLedgerSnapshot,
+  resetScrapePlane,
+  __testSeams as scrapeTestSeams,
+} from '../dist-electron/engine/scrapePlane.js';
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
   resetActiveCore();
   resetSearchPlane();
+  resetScrapePlane();
+  scrapeTestSeams.setLookupOverride(null);
+});
+
+// Vendored scrape plane: fixture hostnames resolve without real DNS (offline
+// D6 requirement) — the vendored SSRF validation itself stays ON.
+beforeEach(() => {
+  scrapeTestSeams.setLookupOverride(async () => [{ address: '93.184.216.34', family: 4 }]);
 });
 
 async function pi() {
@@ -163,6 +176,13 @@ describe('Parity regression harness (ticket #94 — ADR-0010 phase-3 gate)', () 
     const ledger = searchPlaneLedgerSnapshot();
     assert.ok(ledger.ledgered > 0, 'parity fixture must exercise the vendored plane');
     assert.equal(ledger.active, 0, 'plane gate fully released after the run');
+
+    // Scrape-plane gate (#111): page retrieval also runs through the vendored
+    // plane (fetch_content behind the scrape seam) — every scrape admission
+    // ledgered (D5: no unledgered retrieval).
+    const scrapeLedger = scrapePlaneLedgerSnapshot();
+    assert.ok(scrapeLedger.ledgered > 0, 'parity fixture must exercise the vendored scrape plane');
+    assert.equal(scrapeLedger.active, 0, 'scrape gate fully released after the run');
 
     // Readable report: every fixture carries one line per documented stage.
     const STAGES = ['coverage', 'grounding', 'admissions', 'sequence'];
