@@ -50,29 +50,27 @@ after(() => {
 });
 
 describe('Declared response size rejection', () => {
-  it('cancels an oversized search body and preserves the size-limit error when cancellation fails', async () => {
-    const originalFetch = globalThis.fetch;
-    let cancelled = false;
-    globalThis.fetch = async () => ({
-      ok: true,
-      status: 200,
-      headers: new Headers({ 'content-length': String(3 * 1024 * 1024) }),
-      body: {
-        cancel: async () => {
-          cancelled = true;
-          throw new Error('Cancellation failed');
-        }
-      }
+  it('honors caller aborts on the keyed plane: pre-aborted calls fail fast without admission (#112)', async () => {
+    // The native keyed client's bounded-body contract retired with the
+    // native implementation (the vendored modules own their bounded reads).
+    // The LENS-owned contract on the keyed path is the caller-abort one,
+    // mirroring the keyless plane: aborts propagate, nothing is admitted.
+    const { __testSeams: searchSeams, searchPlaneLedgerSnapshot } = await import('../dist-electron/engine/searchPlane.js');
+    let keyedCalled = false;
+    searchSeams.setKeyedOverride({
+      tavily: async () => { keyedCalled = true; return { results: [] }; },
     });
-
+    const preAborted = new AbortController();
+    preAborted.abort();
     try {
       await assert.rejects(
-        MultiSearchProvider.searchTavily('bounded response', 'test-key'),
-        /Response body exceeds maximum size limit/
+        MultiSearchProvider.search('aborted keyed query', 'tavily', { tavily: 'test-key' }, 8, preAborted.signal),
+        (err) => err?.name === 'AbortError'
       );
-      assert.equal(cancelled, true);
+      assert.equal(keyedCalled, false, 'pre-aborted call never reached the keyed provider');
+      assert.equal(searchPlaneLedgerSnapshot().ledgered, 0, 'pre-aborted call never admitted through the gate');
     } finally {
-      globalThis.fetch = originalFetch;
+      searchSeams.setKeyedOverride(null);
     }
   });
 
