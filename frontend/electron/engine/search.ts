@@ -55,12 +55,14 @@ async function readBoundedText(res: Response, maxBytes = 4096): Promise<string> 
     const reader = (res.body as any).getReader();
     const chunks: Uint8Array[] = [];
     let retained = 0;
-    while (retained < maxBytes) {
+    while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
       const remaining = maxBytes - retained;
-      if (value.byteLength > remaining) {
+      // Equality cancels too: reaching the cap exactly must still release
+      // the connection, not exit the loop with the body open.
+      if (value.byteLength >= remaining) {
         if (remaining > 0) {
           chunks.push(value.subarray(0, remaining));
           retained += remaining;
