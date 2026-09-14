@@ -13,12 +13,13 @@
  * counted in the plane ledger (exposed for tests and telemetry) — so no
  * pi-web-access retrieval bypasses LENS's controls.
  *
- * Failure semantics (D2/D6, pinned by tests):
+ * Failure semantics (post-contract, ticket #110):
  *  - Keyed providers (Tavily/Serper keys present) keep the native path — no
  *    regression for keyed users until the config seam ticket (#112) lands.
  *  - The vendored DDG module unavailable (jiti failure, vendored entry
- *    missing) → native fallback.
- *  - The vendored provider errors → native fallback (caller aborts propagate).
+ *    missing) or the vendored provider errors → the caller's keyed provider
+ *    if keys are present, else the error propagates (no plane↔native
+ *    re-entry cycle; caller aborts propagate).
  */
 
 import * as path from 'node:path';
@@ -135,6 +136,50 @@ export function resetSearchPlane(): void {
 }
 
 /**
+ * Test seams for the retired native-DDG contract (ticket #110): the wide-mode
+ * abort contract previously pinned on `MultiSearchProvider.searchDuckDuckGo`
+ * (endpoint override, prompt AbortError on stalled bodies) now holds against
+ * the vendored plane's execution. `fetchImpl` overrides the transport for the
+ * duration of one call only; the process-wide fetch stays untouched.
+ */
+export const __testSeams = {
+  async searchWithDuckDuckGo(
+    query: string,
+    options?: {
+      numResults?: number;
+      signal?: AbortSignal;
+      fetchImpl?: typeof fetch;
+    }
+  ): Promise<{ results: Array<{ title: string; url: string; snippet: string }> }> {
+    const loader = await (await import('./piPackages')).getJitiLoader();
+    if (!loader) throw new Error('jiti loader unavailable');
+    const entryPath = path.join(VENDOR_ROOT, 'web-access', 'duckduckgo.ts');
+    const mod = (await loader(entryPath)) as {
+      searchWithDuckDuckGo?: (
+        query: string,
+        options?: { numResults?: number; signal?: AbortSignal }
+      ) => Promise<{ results?: Array<{ title: string; url: string; snippet: string }> }>;
+    };
+    const search = mod?.searchWithDuckDuckGo;
+    if (typeof search !== 'function') {
+      throw new Error('vendored DDG module exposes no searchWithDuckDuckGo');
+    }
+    if (!options?.fetchImpl) {
+      const direct = await search(query, { numResults: options?.numResults, signal: options?.signal });
+      return { results: direct.results ?? [] };
+    }
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = options.fetchImpl as typeof fetch;
+    try {
+      const r = await search(query, { numResults: options.numResults, signal: options.signal });
+      return { results: r.results ?? [] };
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  },
+};
+
+/**
  * Loads the vendored DuckDuckGo module through the package bridge's jiti
  * loader. The vendored module calls global `fetch`, which stays late-bound —
  * the parity harness swaps `globalThis.fetch`, so fixtures cover this plane
@@ -211,10 +256,12 @@ export async function primarySearchPlane(
     return MultiSearchProvider.search(query, provider, apiKeys, maxResults, signal);
   }
 
-  // DDG keyless (or unknown provider) → the vendored plane, with native
-  // fallback on any plane failure. The fallback goes through the canonical
-  // native seam entry (`MultiSearchProvider.search`), so module-level stubs
-  // of the native seam intercept it — one interception point for the plane.
+  // DDG keyless (or unknown provider) → the vendored plane. Post-contract
+  // (ticket #110) the plane IS the keyless path — the native DDG
+  // implementation retired — so a plane failure falls back only to the
+  // caller's keyed providers (direct static calls, bypassing `search()` to
+  // keep one terminal hop and no plane↔native re-entry cycle); with no keys
+  // the error propagates to the caller's existing per-query handling.
   // Caller aborts propagate (native semantic); queue saturation fails
   // loudly instead of degrading silently.
   try {
@@ -222,10 +269,16 @@ export async function primarySearchPlane(
   } catch (err) {
     if (signal?.aborted) throw err;
     if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') throw err;
-    console.warn(
-      '[searchPlane] vendored plane failed — falling back to native DDG:',
-      String(err).slice(0, 300)
-    );
-    return MultiSearchProvider.search(cleanQuery, 'duckduckgo', apiKeys, maxResults, signal);
+    if (keys.tavily || keys.serper) {
+      console.warn(
+        '[searchPlane] vendored plane failed — falling back to the caller\'s keyed provider:',
+        String(err).slice(0, 300)
+      );
+      if (keys.serper) {
+        return MultiSearchProvider.searchSerper(cleanQuery, keys.serper, maxResults, signal);
+      }
+      return MultiSearchProvider.searchTavily(cleanQuery, keys.tavily, maxResults, signal);
+    }
+    throw err;
   }
 }

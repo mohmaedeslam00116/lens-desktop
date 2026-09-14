@@ -57,6 +57,19 @@ The boundary was locked as nine decisions:
 9. **Recording — this ADR lands in the swap PR** with the first implementation
    that honors the boundary.
 
+## Contract state (amended at ticket #110)
+
+The contract step retired the native DuckDuckGo HTML implementation and the
+unused Instant-Answer module: the vendored plane is the **only** keyless
+search path. The native `search()` seam remains as the keyed-provider entry
+(Tavily/Serper retire at the #112 config seam); its keyless fallback routes
+to the primary plane, and the plane's failure fallback goes straight to the
+caller's keyed provider or propagates — the seam is terminal in both
+directions, so no plane↔native re-entry cycle exists (an earlier draft that
+fell back through `search()` hung the suite on a 39k-iteration fallback
+cycle; the terminal-fallback design is load-bearing). Wide mode keeps its
+keyed routing through `search()` unchanged.
+
 ## Implementation shape (first increment, #109)
 
 - `engine/searchPlane.ts`: the primary plane adapter — signature-compatible
@@ -67,9 +80,12 @@ The boundary was locked as nine decisions:
   ledger (`searchPlaneLedgerSnapshot`), proving no unledgered retrieval.
 - Keyed providers (Tavily/Serper keys present) keep the native path until the
   config seam (#112) provisions them through `web-search.json`.
-- Fallback: any vendored-plane failure falls back through the canonical native
-  seam entry (`MultiSearchProvider.search`), keeping one interception point;
-  caller aborts propagate.
+- Fallback: post-contract, the plane IS the keyless path — a vendored-plane
+  failure falls back **directly** to the caller's keyed provider (static
+  `searchTavily`/`searchSerper` calls) or propagates when no keys exist.
+  Never through `MultiSearchProvider.search()`: that would re-enter the
+  plane and cycle (see the contract-state amendment). Caller aborts
+  propagate.
 - Answer-mode guard: the package tool handler intercepts `fetch_content`
   `mode: 'answer'` calls pre-dispatch and returns guidance text.
 - The parity harness runs through the vendored plane (fixtures already serve

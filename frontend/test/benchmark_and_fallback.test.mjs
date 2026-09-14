@@ -53,20 +53,27 @@ describe('Fallback Mechanism Under 5 Failure Conditions', () => {
     const events = [];
     const agent = new DeepResearchAgent('test-session', (event) => events.push(event));
 
-    // Mock search and scraper to return pre-scraped sources immediately
+    // Mock search and scraper to return pre-scraped sources immediately.
+    // Post-contract (#110) the engine enters search through the primary
+    // plane (searchPlane), so the stub pins the plane entry — the native
+    // seam stub remains for any keyed path.
     const searchModule = require('../dist-electron/engine/search.js');
+    const searchPlaneModule = require('../dist-electron/engine/searchPlane.js');
     const scraperModule = require('../dist-electron/engine/scraper.js');
     const gatewayModule = require('../dist-electron/engine/modelGateway.js');
 
     const origSearch = searchModule.MultiSearchProvider.search;
+    const origPlaneSearch = searchPlaneModule.primarySearchPlane;
     const origScrape = scraperModule.PageScraper.scrape;
     const origGenerate = gatewayModule.generate;
 
     let scrapeIndex = 0;
-    searchModule.MultiSearchProvider.search = async () => [
+    const stubbedHits = () => [
       { title: mockScraped[0].title, url: mockScraped[0].url, snippet: 'snippet 1' },
       { title: mockScraped[1].title, url: mockScraped[1].url, snippet: 'snippet 2' }
     ];
+    searchPlaneModule.primarySearchPlane = async () => stubbedHits();
+    searchModule.MultiSearchProvider.search = async () => stubbedHits();
     scraperModule.PageScraper.scrape = async (url) => {
       const src = mockScraped.find(s => s.url === url) || mockScraped[scrapeIndex++ % mockScraped.length];
       return src;
@@ -88,6 +95,7 @@ describe('Fallback Mechanism Under 5 Failure Conditions', () => {
         ...requestOverrides
       });
     } finally {
+      searchPlaneModule.primarySearchPlane = origPlaneSearch;
       searchModule.MultiSearchProvider.search = origSearch;
       scraperModule.PageScraper.scrape = origScrape;
       gatewayModule.generate = origGenerate;

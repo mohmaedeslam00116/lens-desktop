@@ -1,5 +1,4 @@
 import { SearchResultItem } from './types';
-import * as cheerio from 'cheerio';
 
 async function readBoundedJson<T = any>(res: Response, maxBytes = 2 * 1024 * 1024): Promise<T> {
   const contentLengthStr = res.headers.get('content-length');
@@ -41,9 +40,67 @@ async function readBoundedJson<T = any>(res: Response, maxBytes = 2 * 1024 * 102
   return JSON.parse(text);
 }
 
+/** Reads at most `maxBytes` of a (typically error) response body, cancelling
+ * the stream beyond the cap — an error path must never buffer an unbounded
+ * body just to quote its first 200 characters. Retains the byte prefix of
+ * the chunk that overflows the cap; when bounded streaming is unavailable
+ * (no body reader), returns an empty diagnostic rather than buffering. */
+async function readBoundedText(res: Response, maxBytes = 4096): Promise<string> {
+  const contentLengthStr = res.headers.get('content-length');
+  if (contentLengthStr && parseInt(contentLengthStr, 10) > maxBytes) {
+    try { await res.body?.cancel(); } catch {}
+    return '';
+  }
+  if (res.body && typeof (res.body as any).getReader === 'function') {
+    const reader = (res.body as any).getReader();
+    const chunks: Uint8Array[] = [];
+    let retained = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      const remaining = maxBytes - retained;
+      // Equality cancels too: reaching the cap exactly must still release
+      // the connection, not exit the loop with the body open.
+      if (value.byteLength >= remaining) {
+        if (remaining > 0) {
+          chunks.push(value.subarray(0, remaining));
+          retained += remaining;
+        }
+        try { await reader.cancel(); } catch {}
+        break;
+      }
+      chunks.push(value);
+      retained += value.byteLength;
+    }
+    if (retained === 0) return '';
+    const merged = new Uint8Array(retained);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder('utf-8').decode(merged);
+  }
+  // No bounded stream available: refuse to buffer an unbounded body.
+  return '';
+}
+
 export class MultiSearchProvider {
   /**
-   * Searches web using requested provider with automatic DuckDuckGo fallback.
+   * Native keyed-provider search path (ADR-0013 contract state, ticket #110).
+   *
+   * The native DuckDuckGo HTML implementation retired at the ADR-0013
+   * contract step: the vendored pi-web-access plane (searchPlane.ts) is the
+   * only keyless search path, with native fallback routed through this
+   * canonical seam entry. Remaining here: the keyed providers (Tavily /
+   * Serper), which stay until the config seam (#112) provisions them through
+   * pi-web-access's `web-search.json` — then they retire too.
+   *
+ * Keyed provider fails or is unkeyed → the keyless primary plane serves
+ * the query (graceful degradation, native semantic). The plane's own
+ * failure fallback never re-enters `search()`, so no plane↔native cycle
+ * exists.
    */
   static async search(
     query: string,
@@ -64,7 +121,7 @@ export class MultiSearchProvider {
         if (results.length > 0) return results;
       } catch (err) {
         if (signal?.aborted) throw err;
-        console.warn('[MultiSearch] Tavily failed, falling back to DuckDuckGo:', err);
+        console.warn('[MultiSearch] Tavily failed, falling back to the primary plane:', err);
       }
     } else if ((provider === 'serper' || provider === 'google') && keys.serper) {
       try {
@@ -72,162 +129,17 @@ export class MultiSearchProvider {
         if (results.length > 0) return results;
       } catch (err) {
         if (signal?.aborted) throw err;
-        console.warn('[MultiSearch] Serper failed, falling back to DuckDuckGo:', err);
+        console.warn('[MultiSearch] Serper failed, falling back to the primary plane:', err);
       }
     }
 
-    // Default & reliable fallback: DuckDuckGo HTML search
-    return await this.searchDuckDuckGo(cleanQuery, maxResults, signal);
+    // Keyless fallback: the vendored pi-web-access primary plane.
+    const { primarySearchPlane } = await import('./searchPlane');
+    return primarySearchPlane(cleanQuery, 'duckduckgo', apiKeys, maxResults, signal);
   }
 
   /**
-   * DuckDuckGo free search without API keys.
-   */
-  static async searchDuckDuckGo(
-    query: string,
-    maxResults = 8,
-    signal?: AbortSignal,
-    endpoint = 'https://html.duckduckgo.com/html/'
-  ): Promise<SearchResultItem[]> {
-    if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
-    let timedOut = false;
-    try {
-      const url = `${endpoint.includes('?') ? endpoint + '&' : endpoint + '?'}q=${encodeURIComponent(query)}`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, 9000);
-
-      const onCallerAbort = () => controller.abort();
-      if (signal) {
-        signal.addEventListener('abort', onCallerAbort, { once: true });
-      }
-
-      let html = '';
-      try {
-        const res = await fetch(url, {
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
-          }
-        });
-
-        if (!res.ok) {
-          throw new Error(`DuckDuckGo returned HTTP ${res.status}`);
-        }
-
-        html = await res.text();
-      } finally {
-        clearTimeout(timeoutId);
-        if (signal) {
-          signal.removeEventListener('abort', onCallerAbort);
-        }
-      }
-
-      const $ = cheerio.load(html);
-      const results: SearchResultItem[] = [];
-
-      $('.result').each((_, el) => {
-        if (results.length >= maxResults) return;
-
-        const titleEl = $(el).find('.result__a');
-        const snippetEl = $(el).find('.result__snippet');
-
-        let href = titleEl.attr('href') || '';
-        // Decode DDG redirect URL (/l/?uddg=...)
-        if (href.includes('uddg=')) {
-          try {
-            const parsedUrl = new URL(href, 'https://duckduckgo.com');
-            const uddg = parsedUrl.searchParams.get('uddg');
-            if (uddg) href = decodeURIComponent(uddg);
-          } catch {
-            // keep raw href
-          }
-        }
-
-        // Exclude ads and non-http links
-        if (!href.startsWith('http')) return;
-        if (href.includes('duckduckgo.com/y.js')) return;
-
-        const title = titleEl.text().trim();
-        const snippet = snippetEl.text().trim();
-
-        if (title && href) {
-          results.push({ title, url: href, snippet });
-        }
-      });
-
-      if (results.length > 0) return results;
-
-      // Secondary fallback: DuckDuckGo Instant Answer API
-      return await this.searchDuckDuckGoInstantApi(query, maxResults, signal);
-    } catch (err: any) {
-      if (signal?.aborted) throw err;
-      if (!timedOut && (err?.name === 'AbortError' || err?.message?.includes('aborted'))) throw err;
-      console.warn('[MultiSearch] DuckDuckGo HTML scraping error:', err);
-      return await this.searchDuckDuckGoInstantApi(query, maxResults, signal);
-    }
-  }
-
-  /**
-   * DuckDuckGo Instant Answer JSON API fallback
-   */
-  static async searchDuckDuckGoInstantApi(query: string, maxResults = 8, signal?: AbortSignal, timeoutMs = 6000): Promise<SearchResultItem[]> {
-    if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    const onCallerAbort = () => controller.abort();
-    if (signal) {
-      signal.addEventListener('abort', onCallerAbort, { once: true });
-    }
-
-    try {
-      const apiUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const res = await fetch(apiUrl, { signal: controller.signal });
-      if (!res.ok) return [];
-
-      const data = await res.json() as any;
-      const results: SearchResultItem[] = [];
-
-      if (data.AbstractURL && data.AbstractText) {
-        results.push({
-          title: data.Heading || query,
-          url: data.AbstractURL,
-          snippet: data.AbstractText
-        });
-      }
-
-      if (Array.isArray(data.RelatedTopics)) {
-        for (const topic of data.RelatedTopics) {
-          if (results.length >= maxResults) break;
-          if (topic.FirstURL && topic.Text) {
-            results.push({
-              title: topic.Text.split(' - ')[0] || query,
-              url: topic.FirstURL,
-              snippet: topic.Text
-            });
-          }
-        }
-      }
-
-      return results;
-    } catch (err: any) {
-      if (signal?.aborted) throw err;
-      return [];
-    } finally {
-      clearTimeout(timeoutId);
-      if (signal) {
-        signal.removeEventListener('abort', onCallerAbort);
-      }
-    }
-  }
-
-  /**
-   * Tavily Search API
+   * Keyed provider: Tavily search (retires at the #112 config seam).
    */
   static async searchTavily(query: string, apiKey: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
     if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
@@ -246,36 +158,42 @@ export class MultiSearchProvider {
       const res = await fetch('https://api.tavily.com/search', {
         method: 'POST',
         signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
         body: JSON.stringify({
-          api_key: apiKey,
           query,
-          search_depth: 'advanced',
           max_results: maxResults,
-          include_answer: false
-        })
+          include_answer: false,
+          include_raw_content: false,
+        }),
       });
 
       if (!res.ok) {
-        throw new Error(`Tavily API responded with status ${res.status}`);
+        const body = await readBoundedText(res, 4096).catch(() => '');
+        throw new Error(`Tavily returned HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
       }
 
-      const data = await readBoundedJson(res);
-      return (data.results || []).map((r: any) => ({
-        title: r.title || query,
-        url: r.url,
-        snippet: r.content || ''
-      }));
+      const data = await readBoundedJson<{ results?: Array<{ title?: string; url?: string; content?: string }> }>(res);
+      const results: SearchResultItem[] = [];
+      for (const r of data.results || []) {
+        if (!r.url) continue;
+        results.push({
+          title: r.title || r.url,
+          url: r.url,
+          snippet: r.content || '',
+        });
+      }
+      return results;
     } finally {
       clearTimeout(timeoutId);
-      if (signal) {
-        signal.removeEventListener('abort', onCallerAbort);
-      }
+      if (signal) signal.removeEventListener('abort', onCallerAbort);
     }
   }
 
   /**
-   * Serper Google Search API
+   * Keyed provider: Serper (Google) search (retires at the #112 config seam).
    */
   static async searchSerper(query: string, apiKey: string, maxResults = 8, signal?: AbortSignal): Promise<SearchResultItem[]> {
     if (signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
@@ -296,26 +214,30 @@ export class MultiSearchProvider {
         signal: controller.signal,
         headers: {
           'X-API-KEY': apiKey,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ q: query, num: maxResults })
+        body: JSON.stringify({ q: query, num: maxResults }),
       });
 
       if (!res.ok) {
-        throw new Error(`Serper API responded with status ${res.status}`);
+        const body = await readBoundedText(res, 4096).catch(() => '');
+        throw new Error(`Serper returned HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
       }
 
-      const data = await readBoundedJson(res);
-      return (data.organic || []).map((r: any) => ({
-        title: r.title || query,
-        url: r.link,
-        snippet: r.snippet || ''
-      }));
+      const data = await readBoundedJson<{ organic?: Array<{ title?: string; link?: string; snippet?: string }> }>(res);
+      const results: SearchResultItem[] = [];
+      for (const r of data.organic || []) {
+        if (!r.link) continue;
+        results.push({
+          title: r.title || r.link,
+          url: r.link,
+          snippet: r.snippet || '',
+        });
+      }
+      return results;
     } finally {
       clearTimeout(timeoutId);
-      if (signal) {
-        signal.removeEventListener('abort', onCallerAbort);
-      }
+      if (signal) signal.removeEventListener('abort', onCallerAbort);
     }
   }
 }
