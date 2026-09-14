@@ -278,11 +278,34 @@ async function loadKeyedSearch(): Promise<{ tavily?: KeyedSearchFn; serper?: Key
   return keyed;
 }
 
+/** Serializes the one-call env override: `process.env` is process-global,
+ * and concurrent keyed calls (the gate admits 3) would otherwise capture
+ * each other's keys as "prior values" — crossing keys between calls and
+ * leaking the override after completion. A promise-chain mutex keeps the
+ * set/call/restore triple atomic per provider family. */
+const keyedEnvChains: Map<string, Promise<void>> = new Map();
+
+async function withKeyedEnv<T>(envName: string, key: string, run: () => Promise<T>): Promise<T> {
+  const previousChain = keyedEnvChains.get(envName) ?? Promise.resolve();
+  let release!: () => void;
+  const chain = new Promise<void>((r) => { release = r; });
+  keyedEnvChains.set(envName, chain);
+  await previousChain;
+  const previous = process.env[envName];
+  process.env[envName] = key;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env[envName];
+    else process.env[envName] = previous;
+    if (keyedEnvChains.get(envName) === chain) keyedEnvChains.delete(envName);
+    release();
+  }
+}
+
 /** Serves one query through the vendored KEYED providers under the same gate
  * and ledger as the keyless plane (D5: no unledgered retrieval). The caller's
- * key is exported to the matching env var for the duration of the call —
- * the vendored credential resolver reads env per call; the key is restored
- * in `finally` and never logged. */
+ * key rides a serialized one-call env override — never logged, never leaked. */
 async function serveThroughKeyedPlane(
   provider: 'tavily' | 'serper',
   key: string,
@@ -295,13 +318,11 @@ async function serveThroughKeyedPlane(
   const run: KeyedSearchFn | undefined = provider === 'tavily' ? keyed.tavily : keyed.serper;
   if (typeof run !== 'function') throw new Error(`vendored ${provider} search unavailable`);
   const envName = provider === 'tavily' ? 'TAVILY_API_KEY' : 'SERPER_API_KEY';
-  const previous = process.env[envName];
   await gate.acquire(signal);
   try {
     gate.ledgered += 1;
     if (signal?.aborted) throw abortError();
-    process.env[envName] = key;
-    const response = await run(query, { numResults: maxResults, signal });
+    const response = await withKeyedEnv(envName, key, () => run(query, { numResults: maxResults, signal }));
     if (provider === 'tavily') {
       return (response.results ?? []).map((r) => ({
         title: r.title || r.url || '',
@@ -315,10 +336,6 @@ async function serveThroughKeyedPlane(
       snippet: r.snippet || '',
     })).filter((r) => r.url);
   } finally {
-    // Restore the prior env value (or delete it) — the override lives for
-    // exactly one call and never appears in logs or telemetry.
-    if (previous === undefined) delete process.env[envName];
-    else process.env[envName] = previous;
     gate.release();
   }
 }

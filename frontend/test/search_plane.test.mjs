@@ -119,6 +119,41 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     }
   });
 
+  it('serializes the keyed env override: concurrent calls with different keys never cross or leak (#112 race)', async () => {
+    // process.env is process-global, so keyed calls with DIFFERENT keys must
+    // never overlap on the env override: each call sees exactly its own key,
+    // and env is clean after both complete (the pre-fix race captured the
+    // other caller's key as the "prior value" and leaked the override).
+    const observed = [];
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    __testSeams.setKeyedOverride({
+      tavily: async () => {
+        inFlight += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        observed.push(process.env.TAVILY_API_KEY);
+        await new Promise((r) => setTimeout(r, 20));
+        observed.push(process.env.TAVILY_API_KEY);
+        inFlight -= 1;
+        return { results: [{ title: 'k', url: 'https://keyed.example/', content: 's' }] };
+      },
+    });
+    try {
+      const results = await Promise.all([
+        primarySearchPlane('q1', 'tavily', { tavily: 'key-A' }, 3),
+        primarySearchPlane('q2', 'tavily', { tavily: 'key-B' }, 3),
+      ]);
+      assert.equal(results.length, 2);
+      for (const seen of observed) {
+        assert.ok(seen === 'key-A' || seen === 'key-B', `no crossed/leaked key observed: ${seen}`);
+      }
+      assert.ok(observed.includes('key-A') && observed.includes('key-B'), 'both keys served their own calls');
+      assert.equal(process.env.TAVILY_API_KEY, undefined, 'env clean after both calls');
+    } finally {
+      __testSeams.setKeyedOverride(null);
+    }
+  });
+
   it('degrades a keyed failure to the keyless plane; keyless never re-enters the keyed path (terminal)', async () => {
     let tavilyCalls = 0;
     __testSeams.setKeyedOverride({

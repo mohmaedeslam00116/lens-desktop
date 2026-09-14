@@ -74,6 +74,13 @@ export function redactKeyMaterial(err: unknown, keys: string | string[]): string
   return text;
 }
 
+/** Best-effort 0o600: writeFileSync applies `mode` only on creation, and the
+ * vendored package may have created the file world-readable — the explicit
+ * chmod re-tightens it on every write (no-op where POSIX modes don't apply). */
+function tightenFileMode(file: string): void {
+  try { fs.chmodSync(file, 0o600); } catch { /* non-POSIX platforms */ }
+}
+
 /**
  * Writes LENS-managed provider keys into the vendored `web-search.json`.
  * Creates/updates the file merge-safely; removes empty/undefined keys;
@@ -120,6 +127,7 @@ export function writeSearchKeysToVendorConfig(
           fs.rmSync(file, { force: true });
         } else {
           fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
+          tightenFileMode(file);
         }
       }
     } catch {
@@ -146,6 +154,7 @@ export function writeSearchKeysToVendorConfig(
       }
     }
     fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
+    tightenFileMode(file);
     return { set, cleared, wrote: true };
   } catch {
     throw new Error(redact(undefined));
