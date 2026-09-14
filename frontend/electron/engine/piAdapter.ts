@@ -47,6 +47,13 @@ export interface PiAdapterOptions {
    * an empty baseUrl are left untouched.
    */
   proxyBaseUrl?: string;
+  /**
+   * Idle-watchdog window for provider streams (visibility fix, ticket #119).
+   * A stream that delivers no event within this window fails the generation
+   * loudly instead of hanging the session. Test seam for fast watchdog
+   * assertions; production default is `DEFAULT_STREAM_IDLE_TIMEOUT_MS`.
+   */
+  streamIdleTimeoutMs?: number;
 }
 
 export const DEFAULT_PI_MODELS = {
@@ -231,18 +238,74 @@ export function piToolResultText(result: { success: boolean; result?: any; error
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+/** Default idle watchdog: a stream that produces NO event (not even a first
+ * token) within this window fails the generation loudly instead of hanging the
+ * research session forever (visibility fix, map ticket #119). pi-ai's stream
+ * is lazy — a stalled provider handshake or a hung body yields zero events and
+ * never resolves; the deadline resets on every real event, so long generations
+ * are never cut — only *silence* is. */
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+/** Races a stream's async iterator against an idle watchdog. The watchdog is
+ * re-armed after every delivered event; when it fires, the iterator is closed
+ * (`return()`) so the underlying provider transport can release, and a loud
+ * error propagates to the session lifecycle (user-visible failure — never
+ * silent waiting). The `onEvent` callback returns `true` to stop consumption
+ * (the `done` event). */
+async function readStreamWithWatchdog(
+  stream: any,
+  onEvent: (event: any) => boolean | void,
+  idleTimeoutMs: number,
+): Promise<void> {
+  const iterator = stream[Symbol.asyncIterator]();
+  let timer: NodeJS.Timeout | undefined;
+  let rejectStalled: ((err: Error) => void) | undefined;
+  const stalled = new Promise<never>((_, reject) => {
+    rejectStalled = reject;
+  });
+  const armWatchdog = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      rejectStalled?.(new Error(`[PiAdapter] stream stalled: no event within ${idleTimeoutMs}ms (watchdog)`));
+    }, idleTimeoutMs);
+  };
+  armWatchdog();
+  try {
+    while (true) {
+      const next = await Promise.race([iterator.next(), stalled]);
+      if (next.done) break;
+      armWatchdog(); // reset the deadline on every real event
+      if (onEvent(next.value) === true) break;
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    // `for await` implicitly closes the iterator on any early exit (break,
+    // throw, timeout) — preserve that transport-release contract here, but
+    // never await it: a lazy stream whose setup never settles would hang the
+    // release (and swallow the watchdog rejection) forever.
+    try {
+      void Promise.resolve(iterator.return?.()).catch(() => {
+        /* best-effort transport release */
+      });
+    } catch {
+      /* best-effort transport release */
+    }
+  }
+}
+
 async function readStream(
   stream: any,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  idleTimeoutMs: number = DEFAULT_STREAM_IDLE_TIMEOUT_MS,
 ): Promise<any> {
   let lastMessage: any = undefined;
-  for await (const event of stream) {
+  await readStreamWithWatchdog(stream, (event) => {
     if (event?.type === 'text_delta' && typeof event.delta === 'string') {
       onChunk?.(event.delta);
     }
     if (event?.type === 'done') {
       lastMessage = event.message;
-      break;
+      return true; // stop consuming — the message is complete
     }
     if (event?.type === 'error') {
       const detail = event.reason === 'aborted' ? 'aborted' : event.error?.errorMessage || 'pi-ai stream error';
@@ -251,7 +314,8 @@ async function readStream(
     if (event?.type === 'text_end' || event?.type === 'toolcall_end') {
       lastMessage = event.partial || lastMessage;
     }
-  }
+    return false;
+  }, idleTimeoutMs);
   return lastMessage;
 }
 
@@ -309,7 +373,7 @@ export async function generateWithPi(
       ...(apiKey ? { apiKey } : {}),
       ...(signal ? { signal } : {}),
     });
-    const message = await readStream(stream, options.onChunk);
+    const message = await readStream(stream, options.onChunk, adapterOptions?.streamIdleTimeoutMs);
     text += textOf(message);
 
     const calls = toolCallsOf(message);

@@ -26,6 +26,8 @@ import { AgentWorkspace } from './AgentWorkspace';
 import { GraphView } from './GraphView';
 import { FacetGroupedShelf } from '../research/FacetGroupedShelf';
 import { EvidenceInspectionDrawer } from '../research/EvidenceInspectionDrawer';
+import { AgentFeedList } from '../AgentFeedList';
+import { AgentFeedState } from '../../utils/liveFeed';
 import { SourceItem, ResearchStep, Language, ResearchPlan, WideResearchTelemetry } from '../../types';
 import { WideResearchTelemetry as WideResearchTelemetryPanel } from '../research/WideResearchTelemetry';
 import { extractTables, tableToCSV } from '../../utils/markdownArtifacts';
@@ -42,6 +44,9 @@ interface MessageBoxProps {
   onFollowUp: (q: string) => void;
   wideTelemetry?: WideResearchTelemetry | null;
   wideExpansionHistory?: WideResearchTelemetry[];
+  /** Per-agent activity cards (visibility fix, ticket #119). */
+  agents?: AgentFeedState[];
+  agentEventCount?: number;
 }
 
 export const MessageBox: React.FC<MessageBoxProps> = ({
@@ -56,6 +61,8 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   onFollowUp,
   wideTelemetry,
   wideExpansionHistory,
+  agents,
+  agentEventCount,
 }) => {
   const isArabic = language === 'ar';
   const [viewMode, setViewMode] = useState<'report' | 'shelf' | 'workspace' | 'graph'>('report');
@@ -153,6 +160,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
         loading={loading} 
         language={language} 
       />
+      {loading && <AgentFeedList agents={agents || []} language={language} eventCount={agentEventCount} />}
       {wideTelemetry && <WideResearchTelemetryPanel telemetry={wideTelemetry} language={language} expansionHistory={wideExpansionHistory} />}
 
       {/* 3. Post-Research Workspace View Mode Switcher */}

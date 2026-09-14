@@ -26,6 +26,7 @@ import {
 } from './types';
 import { buildResearchStartPayload } from './utils/researchRequest.mjs';
 import { resolveReportTelemetry } from './utils/reportTelemetry.mjs';
+import { telemetryStep, AgentFeedState, LiveEventLike } from './utils/liveFeed';
 
 const API_BASE = 'http://127.0.0.1:8000';
 const WS_BASE = 'ws://127.0.0.1:8000';
@@ -95,6 +96,19 @@ export function App() {
   const [settings, setSettings] = useState<ApiSettings>(DEFAULT_SETTINGS);
 
   const wsRef = useRef<WebSocket | null>(null);
+  // Live-connection resilience (visibility fix, ticket #119): track the last
+  // delivered engine eventId for delta replay, bound reconnect attempts, and
+  // mark terminal outcomes so onclose never resurrects a finished run.
+  // Per-agent workspace cards (visibility fix, ticket #119): one card per
+  // researcher/agentic worker, driven by researcher_telemetry events.
+  const [agents, setAgents] = useState<AgentFeedState[]>([]);
+  const [agentEventCount, setAgentEventCount] = useState(0);
+  // Live report text accumulated from report_chunk events while the run is
+  // active (the finished event supersedes it with the final report).
+  const [liveReport, setLiveReport] = useState('');
+  const lastEventIdRef = useRef(0);
+  const reconnectAttemptsRef = useRef(0);
+  const runTerminatedRef = useRef(false);
   const wideExpansionHistoryRef = useRef<WideResearchTelemetry[]>([]);
   const wideTelemetryRef = useRef<WideResearchTelemetry | null>(null);
   const approvedPlanRef = useRef<ResearchPlan | null>(null);
@@ -106,6 +120,25 @@ export function App() {
     document.documentElement.lang = language;
     try { localStorage.setItem('lens_language', language); } catch { /* Preferences are optional. */ }
   }, [language]);
+
+  // Agent-card elapsed clock (visibility fix, ticket #119): advances while any
+  // card is running, freezes terminal cards (their elapsedMs was captured on
+  // completion). 1s cadence; cheap — a few cards at most.
+  useEffect(() => {
+    if (!isSearching) return;
+    const iv = window.setInterval(() => {
+      const now = Date.now();
+      setAgents((prev) => {
+        if (prev.length === 0) return prev;
+        return prev.map((a) =>
+          a.status === 'success' || a.status === 'failed'
+            ? a
+            : { ...a, elapsedMs: now - a.startedAt },
+        );
+      });
+    }, 1000);
+    return () => window.clearInterval(iv);
+  }, [isSearching]);
 
   // Theme sync
   useEffect(() => {
@@ -185,6 +218,9 @@ export function App() {
     setGraphNodes([]);
     setWideTelemetry(null);
     setWideExpansionHistory([]);
+    setAgents([]);
+    setAgentEventCount(0);
+    setLiveReport('');
     setProposedPlan(null);
     setIsPlanModalOpen(false);
     setIsRegeneratingPlan(false);
@@ -222,6 +258,9 @@ export function App() {
     setGraphNodes([]);
     setWideTelemetry(null);
     setWideExpansionHistory([]);
+    setAgents([]);
+    setAgentEventCount(0);
+    setLiveReport('');
     wideTelemetryRef.current = null;
     wideExpansionHistoryRef.current = [];
 
@@ -276,6 +315,9 @@ export function App() {
       const sessionId = data.session_id;
       setActiveSessionId(sessionId);
 
+      reconnectAttemptsRef.current = 0;
+      runTerminatedRef.current = false;
+      lastEventIdRef.current = 0;
       const ws = new WebSocket(`${WS_BASE}/ws/research/${sessionId}`);
       wsRef.current = ws;
 
@@ -287,6 +329,71 @@ export function App() {
         if (sessionGeneration !== sessionGenerationRef.current) return;
         try {
           const payload = JSON.parse(event.data);
+          if (typeof payload.eventId === 'number') {
+            lastEventIdRef.current = Math.max(lastEventIdRef.current, payload.eventId);
+          }
+          reconnectAttemptsRef.current = 0;
+
+          const telemetryFeedStep = telemetryStep(payload as LiveEventLike, language === 'ar');
+          if (telemetryFeedStep) {
+            setThoughts((prev) => [...prev, telemetryFeedStep]);
+          }
+
+          // Per-agent card state (researcher_telemetry drives the cards; every
+          // telemetry event counts as liveness for the elapsed clock).
+          if (payload.type === 'researcher_telemetry' && payload.researcherTelemetry?.researcherId) {
+            const t = payload.researcherTelemetry;
+            setAgents((prev) => {
+              const idx = prev.findIndex((a) => a.id === t.researcherId);
+              const isArabic = language === 'ar';
+              const label = isArabic
+                ? `باحث ${t.counts?.facetIndex != null ? (t.counts.facetIndex + 1) + '/' + t.counts.facetCount : ''}`.trim()
+                : `Researcher ${t.counts?.facetIndex != null ? (t.counts.facetIndex + 1) + '/' + t.counts.facetCount : ''}`.trim();
+              const phaseLabel: Record<string, { ar: string; en: string }> = {
+                started: { ar: 'انطلق', en: 'started' },
+                role_selected: { ar: 'تم اختيار الدور', en: 'role selected' },
+                retrieval: { ar: 'جارٍ الاسترجاع', en: 'retrieving' },
+                tool_activity: { ar: 'نشاط أدوات', en: 'tool activity' },
+                run_started: { ar: 'بدأت الحلقة', en: 'loop started' },
+                run_completed: { ar: 'أنجز', en: 'finished' },
+                completed: { ar: 'اكتمل', en: 'completed' },
+              };
+              const status: AgentFeedState['status'] =
+                t.phase === 'completed' || t.phase === 'run_completed' ? 'success'
+                  : t.phase === 'started' || t.phase === 'run_started' ? 'running'
+                  : 'running';
+              const activity = phaseLabel[t.phase]?.[isArabic ? 'ar' : 'en'] || t.phase || '';
+              if (idx === -1) {
+                return [...prev, {
+                  id: t.researcherId,
+                  role: t.role || 'primary',
+                  label,
+                  facet: t.facet,
+                  phase: t.phase || '',
+                  startedAt: Date.now(),
+                  elapsedMs: 0,
+                  lastActivity: activity,
+                  lastActivityAt: Date.now(),
+                  status,
+                }];
+              }
+              const next = [...prev];
+              const card = next[idx];
+              const terminal = t.phase === 'completed' || t.phase === 'run_completed';
+              next[idx] = {
+                ...card,
+                role: t.role || card.role,
+                facet: t.facet || card.facet,
+                phase: t.phase || card.phase,
+                lastActivity: activity,
+                lastActivityAt: Date.now(),
+                elapsedMs: terminal ? Date.now() - card.startedAt : card.elapsedMs,
+                status,
+              };
+              return next;
+            });
+            setAgentEventCount((c) => c + 1);
+          }
 
           if (payload.type === 'plan_proposed' || payload.type === 'plan_created') {
             if (payload.plan) {
@@ -327,6 +434,14 @@ export function App() {
             if (payload.node) {
               setGraphNodes((prev) => [...prev, payload.node]);
             }
+          } else if (payload.type === 'report_chunk') {
+            // Progressive report streaming: the workspace shows the report
+            // growing as the engine synthesizes it (visibility fix, #119).
+            if (typeof payload.chunk === 'string' && payload.chunk) {
+              setLiveReport((prev) => prev + payload.chunk);
+            }
+          } else if (payload.type === 'skill_activated') {
+            setThoughts((prev) => [...prev, payload.message || (language === 'ar' ? 'تم تفعيل مهارة' : 'Skill activated')]);
           } else if (payload.type === 'wide_telemetry' && payload.wideTelemetry) {
             sessionTelemetry = payload.wideTelemetry;
             wideTelemetryRef.current = payload.wideTelemetry;
@@ -347,6 +462,9 @@ export function App() {
           } else if (payload.type === 'finished') {
             const formattedSources = (payload.sources || []).map((s: any) => {
               if (typeof s === 'string') return { url: s, title: s, credibilityScore: 85 };
+              if (s && !s.credibilityScore && typeof s.credibility === 'number') {
+                return { ...s, credibilityScore: s.credibility };
+              }
               return s;
             });
 
@@ -384,12 +502,26 @@ export function App() {
               return updated;
             });
 
-            ws.close();
+            runTerminatedRef.current = true;
+            wsRef.current?.close();
           } else if (payload.type === 'error') {
             setCurrentStatus(payload.message || 'Error occurred');
             setResearchError(payload.message || (language === 'ar' ? 'تعذر إكمال البحث. يمكنك المحاولة مجددًا.' : 'Research could not finish. Please try again.'));
             setIsSearching(false);
-            ws.close();
+            runTerminatedRef.current = true;
+            wsRef.current?.close();
+          } else if (payload.type === 'cancelled') {
+            setCurrentStatus(payload.message || (language === 'ar' ? 'أُلغي البحث.' : 'Research cancelled.'));
+            setResearchError(payload.message || (language === 'ar' ? 'أُلغي البحث.' : 'Research cancelled.'));
+            setIsSearching(false);
+            runTerminatedRef.current = true;
+            wsRef.current?.close();
+          } else if (payload.type === 'budget_exhausted') {
+            setCurrentStatus(payload.message || (language === 'ar' ? 'استُهلكت ميزانية البحث. زيّد الحد في الإعدادات ثم أعد المحاولة.' : 'Research budget exhausted. Raise the limit in Settings and retry.'));
+            setResearchError(payload.message || (language === 'ar' ? 'استُهلكت ميزانية البحث. زيّد الحد في الإعدادات ثم أعد المحاولة.' : 'Research budget exhausted. Raise the limit in Settings and retry.'));
+            setIsSearching(false);
+            runTerminatedRef.current = true;
+            wsRef.current?.close();
           }
         } catch (err) {
           console.error('Error parsing WS message:', err);
@@ -401,6 +533,33 @@ export function App() {
         console.error('WebSocket error:', err);
         setResearchError(language === 'ar' ? 'انقطع اتصال البحث. تحقق من تشغيل التطبيق ثم أعد المحاولة.' : 'Research connection lost. Check that the desktop app is running, then try again.');
         setIsSearching(false);
+      };
+
+      // Abnormal close while a run is active: the run may still be alive in the
+      // engine (which buffers events and replays deltas via ?since=). Reconnect
+      // with bounded exponential backoff instead of silently abandoning it.
+      ws.onclose = (ev) => {
+        if (sessionGeneration !== sessionGenerationRef.current) return;
+        wsRef.current = null;
+        if (runTerminatedRef.current) return; // finished/cancelled/error closed intentionally
+        if (ev.code === 1008) return; // engine rejected: session unknown
+        if (reconnectAttemptsRef.current >= 5) {
+          setResearchError(language === 'ar'
+            ? 'انقطع الاتصال المباشر بشكل متكرر. قد يستمر البحث في الخلفية — تحقق من النتائج بعد قليل أو أعد المحاولة.'
+            : 'Live connection kept dropping. The research may still be running in the background — check back shortly or retry.');
+          setIsSearching(false);
+          return;
+        }
+        reconnectAttemptsRef.current += 1;
+        const backoffMs = Math.min(30000, 500 * 2 ** (reconnectAttemptsRef.current - 1));
+        window.setTimeout(() => {
+          if (sessionGeneration !== sessionGenerationRef.current || runTerminatedRef.current) return;
+          const retry = new WebSocket(`${WS_BASE}/ws/research/${sessionId}?since=${lastEventIdRef.current}`);
+          retry.onmessage = ws.onmessage;
+          retry.onerror = ws.onerror;
+          retry.onclose = ws.onclose;
+          wsRef.current = retry;
+        }, backoffMs);
       };
     } catch (err: any) {
       if (sessionGeneration !== sessionGenerationRef.current) return;
@@ -511,7 +670,7 @@ export function App() {
   ];
 
   const currentSources = activeReport?.sources || visitedSources;
-  const currentContent = activeReport?.content || '';
+  const currentContent = activeReport?.content || liveReport;
 
   return (
     <div className="app-shell">
@@ -578,6 +737,8 @@ export function App() {
                       onFollowUp={(q) => handleStartResearch(q)}
                       wideTelemetry={resolved.wideTelemetry}
                       wideExpansionHistory={resolved.wideExpansionHistory}
+                      agents={agents}
+                      agentEventCount={agentEventCount}
                     />
                   );
                 })()}

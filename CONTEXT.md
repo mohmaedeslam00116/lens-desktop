@@ -220,6 +220,15 @@ The admission counter and bounded concurrency gate through which every vendored-
 ### Answer-Mode Non-Support
 The boundary rule that `fetch_content` `mode: 'answer'` is explicitly unsupported in LENS — it requires a model and would split synthesis ownership, which stays exclusively with the Parent Research Agent; the bridge intercepts such calls and returns graceful guidance.
 
+### Event Faithfulness
+The rendering rule (visibility contract) that every engine `LiveEvent` type reaches the user: multi-agent telemetry, session-state transitions, progressive report chunks, and terminal outcomes (`finished`, `error`, `cancelled`, `budget_exhausted`) all surface in the live interface. Silent dropping of engine events is a defect, not a simplification.
+
+### Provider Admission Guard
+The start-time check that a research session can plausibly run: cloud providers require a usable key and Ollama requires a configured endpoint, else the session is rejected with a bilingual, user-actionable message instead of starting a run that can only hang.
+
+### Stream Idle Watchdog
+The liveness guarantee on model streams: a provider stream producing no events within the idle window fails the generation loudly (deadline reset on every real event, so only silence — never long generation — is cut). The mechanism that turns a hung provider connection into a user-visible failure.
+
 ### Evidence Auditor
 A verification stage that runs after researcher fan-out and checks that every important claim maps to retrieved sources, producing structured verdicts. Verdicts annotate admission by default; gating admission is a settings-gated escalation proven safe by the parity harness.
 
