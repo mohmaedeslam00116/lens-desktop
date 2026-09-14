@@ -93,6 +93,31 @@ describe('Stream idle watchdog (visibility fix, ticket #119)', () => {
     );
   });
 
+  it('caller abort beats the watchdog on a stalled iterator (immediate cancellation)', async () => {
+    const ai = await import('@earendil-works/pi-ai');
+    const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
+    const stalled = Object.create(faux.provider);
+    stalled.streamSimple = () => ({
+      [Symbol.asyncIterator]() {
+        return { next: () => new Promise(() => {}) };
+      },
+    });
+    const controller = new AbortController();
+    const pending = generateWithPi(
+      {
+        provider: 'openai',
+        model: 'test-model',
+        apiKey: 'test-key',
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+      { overrideFactory: async () => stalled, streamIdleTimeoutMs: 60_000, signal: controller.signal },
+    );
+    const start = Date.now();
+    setTimeout(() => controller.abort(), 50);
+    await assert.rejects(() => pending, /aborted/);
+    assert.ok(Date.now() - start < 5000, 'abort must be immediate, not wait the idle window');
+  });
+
   it('a healthy fast stream is never cut by the watchdog (faux provider, generous window)', async () => {
     const ai = await import('@earendil-works/pi-ai');
     const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });

@@ -104,8 +104,11 @@ export function App() {
   const [agents, setAgents] = useState<AgentFeedState[]>([]);
   const [agentEventCount, setAgentEventCount] = useState(0);
   // Live report text accumulated from report_chunk events while the run is
-  // active (the finished event supersedes it with the final report).
+  // active (the finished event supersedes it with the final report). The ref
+  // mirrors the state so terminal handlers read the accumulated text even if
+  // the final event omits a report payload.
   const [liveReport, setLiveReport] = useState('');
+  const liveReportRef = useRef('');
   const lastEventIdRef = useRef(0);
   const reconnectAttemptsRef = useRef(0);
   const runTerminatedRef = useRef(false);
@@ -221,6 +224,7 @@ export function App() {
     setAgents([]);
     setAgentEventCount(0);
     setLiveReport('');
+    liveReportRef.current = '';
     setProposedPlan(null);
     setIsPlanModalOpen(false);
     setIsRegeneratingPlan(false);
@@ -261,6 +265,7 @@ export function App() {
     setAgents([]);
     setAgentEventCount(0);
     setLiveReport('');
+    liveReportRef.current = '';
     wideTelemetryRef.current = null;
     wideExpansionHistoryRef.current = [];
 
@@ -438,7 +443,8 @@ export function App() {
             // Progressive report streaming: the workspace shows the report
             // growing as the engine synthesizes it (visibility fix, #119).
             if (typeof payload.chunk === 'string' && payload.chunk) {
-              setLiveReport((prev) => prev + payload.chunk);
+              liveReportRef.current += payload.chunk;
+              setLiveReport(liveReportRef.current);
             }
           } else if (payload.type === 'skill_activated') {
             setThoughts((prev) => [...prev, payload.message || (language === 'ar' ? 'تم تفعيل مهارة' : 'Skill activated')]);
@@ -478,7 +484,7 @@ export function App() {
               id: sessionId,
               query: trimmed,
               title: trimmed,
-              content: payload.report || '',
+              content: payload.report || liveReportRef.current || '',
               sources: formattedSources.length > 0 ? formattedSources : accumulatedSources,
               depth,
               perspective,
@@ -529,10 +535,12 @@ export function App() {
       };
 
       ws.onerror = (err) => {
+        // Terminal UI state is NOT set here: transient errors are recovered by
+        // onclose (reconnect with delta replay). Only exhausting all reconnect
+        // attempts (or a terminal event) may end the run — otherwise a
+        // recoverable blip would stop the agent feed mid-run.
         if (sessionGeneration !== sessionGenerationRef.current) return;
         console.error('WebSocket error:', err);
-        setResearchError(language === 'ar' ? 'انقطع اتصال البحث. تحقق من تشغيل التطبيق ثم أعد المحاولة.' : 'Research connection lost. Check that the desktop app is running, then try again.');
-        setIsSearching(false);
       };
 
       // Abnormal close while a run is active: the run may still be alive in the
@@ -544,6 +552,7 @@ export function App() {
         if (runTerminatedRef.current) return; // finished/cancelled/error closed intentionally
         if (ev.code === 1008) return; // engine rejected: session unknown
         if (reconnectAttemptsRef.current >= 5) {
+          runTerminatedRef.current = true;
           setResearchError(language === 'ar'
             ? 'انقطع الاتصال المباشر بشكل متكرر. قد يستمر البحث في الخلفية — تحقق من النتائج بعد قليل أو أعد المحاولة.'
             : 'Live connection kept dropping. The research may still be running in the background — check back shortly or retry.');

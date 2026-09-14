@@ -246,23 +246,36 @@ export function piToolResultText(result: { success: boolean; result?: any; error
  * are never cut — only *silence* is. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 
-/** Races a stream's async iterator against an idle watchdog. The watchdog is
- * re-armed after every delivered event; when it fires, the iterator is closed
- * (`return()`) so the underlying provider transport can release, and a loud
- * error propagates to the session lifecycle (user-visible failure — never
- * silent waiting). The `onEvent` callback returns `true` to stop consumption
- * (the `done` event). */
+/** Races a stream's async iterator against an idle watchdog AND the caller's
+ * abort signal. The watchdog re-arms after every delivered event; when it
+ * fires (or the caller aborts), a loud error propagates to the session
+ * lifecycle (user-visible failure — never silent waiting) and the iterator is
+ * closed (`return()`, fire-and-forget) so the provider transport can release.
+ * `Promise.race` does not observe AbortSignal, so the abort promise must be
+ * raced explicitly — otherwise cancelling a run stuck on a silent provider
+ * would wait out the full idle window. The `onEvent` callback returns `true`
+ * to stop consumption (the `done` event). */
 async function readStreamWithWatchdog(
   stream: any,
   onEvent: (event: any) => boolean | void,
   idleTimeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   const iterator = stream[Symbol.asyncIterator]();
   let timer: NodeJS.Timeout | undefined;
   let rejectStalled: ((err: Error) => void) | undefined;
+  let rejectAborted: ((err: Error) => void) | undefined;
   const stalled = new Promise<never>((_, reject) => {
     rejectStalled = reject;
   });
+  const aborted = new Promise<never>((_, reject) => {
+    rejectAborted = reject;
+  });
+  const onAbort = () => rejectAborted?.(new Error('[PiAdapter] aborted during stream read'));
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
   const armWatchdog = () => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
@@ -272,17 +285,18 @@ async function readStreamWithWatchdog(
   armWatchdog();
   try {
     while (true) {
-      const next = await Promise.race([iterator.next(), stalled]);
+      const next = await Promise.race([iterator.next(), stalled, aborted]);
       if (next.done) break;
       armWatchdog(); // reset the deadline on every real event
       if (onEvent(next.value) === true) break;
     }
   } finally {
     if (timer) clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onAbort);
     // `for await` implicitly closes the iterator on any early exit (break,
-    // throw, timeout) — preserve that transport-release contract here, but
-    // never await it: a lazy stream whose setup never settles would hang the
-    // release (and swallow the watchdog rejection) forever.
+    // throw, timeout, abort) — preserve that transport-release contract here,
+    // but never await it: a lazy stream whose setup never settles would hang
+    // the release (and swallow the rejection) forever.
     try {
       void Promise.resolve(iterator.return?.()).catch(() => {
         /* best-effort transport release */
@@ -297,6 +311,7 @@ async function readStream(
   stream: any,
   onChunk?: (chunk: string) => void,
   idleTimeoutMs: number = DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<any> {
   let lastMessage: any = undefined;
   await readStreamWithWatchdog(stream, (event) => {
@@ -315,7 +330,7 @@ async function readStream(
       lastMessage = event.partial || lastMessage;
     }
     return false;
-  }, idleTimeoutMs);
+  }, idleTimeoutMs, signal);
   return lastMessage;
 }
 
@@ -373,7 +388,7 @@ export async function generateWithPi(
       ...(apiKey ? { apiKey } : {}),
       ...(signal ? { signal } : {}),
     });
-    const message = await readStream(stream, options.onChunk, adapterOptions?.streamIdleTimeoutMs);
+    const message = await readStream(stream, options.onChunk, adapterOptions?.streamIdleTimeoutMs, signal);
     text += textOf(message);
 
     const calls = toolCallsOf(message);
