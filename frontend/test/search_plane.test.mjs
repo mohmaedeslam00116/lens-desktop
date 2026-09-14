@@ -112,7 +112,10 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     try {
       const results = await primarySearchPlane('keyed query', 'tavily', { tavily: 'k-test' }, 3);
       assert.equal(results[0].url, 'https://keyed.example/');
-      assert.deepEqual(seenKeys, ['k-test'], 'the caller key was visible during the call');
+      // Narrow assertions only: a failing assertion must never render the
+      // key value into CI output (no-leak clause extends to test logs).
+      assert.equal(seenKeys.length, 1, 'the caller key was visible once');
+      assert.ok(seenKeys[0] === 'k-test', 'the caller key matched the override');
       assert.equal(process.env.TAVILY_API_KEY, undefined, 'key override restored after the call (no leak)');
     } finally {
       __testSeams.setKeyedOverride(null);
@@ -144,8 +147,9 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
         primarySearchPlane('q2', 'tavily', { tavily: 'key-B' }, 3),
       ]);
       assert.equal(results.length, 2);
+      assert.equal(maxConcurrent, 1, 'keyed environment overrides must be serialized');
       for (const seen of observed) {
-        assert.ok(seen === 'key-A' || seen === 'key-B', `no crossed/leaked key observed: ${seen}`);
+        assert.ok(seen === 'key-A' || seen === 'key-B', 'no crossed or leaked key observed');
       }
       assert.ok(observed.includes('key-A') && observed.includes('key-B'), 'both keys served their own calls');
       assert.equal(process.env.TAVILY_API_KEY, undefined, 'env clean after both calls');
