@@ -42,6 +42,39 @@ export function normalizeResearchRequest(body: WideResearchRequest): WideResearc
   };
 }
 
+const PROVIDER_KEY_FIELD: Record<string, string> = {
+  openai: 'openai',
+  gemini: 'gemini',
+  anthropic: 'anthropic',
+  groq: 'groq',
+  deepseek: 'deepseek',
+  openrouter: 'openrouter',
+  mistral: 'mistral',
+};
+
+/** Start-time admission guard: cloud providers require a usable key (settings
+ * key or direct field), Ollama requires a reachable endpoint. Returns a
+ * bilingual, user-presentable message or null when the provider can plausibly
+ * work. Keyed-provider engine errors still surface mid-run via `fail()`; this
+ * guard only removes the guaranteed-hang case (visibility fix, ticket #119). */
+export function providerAdmissionGuard(body: Partial<WideResearchRequest> | undefined): string | null {
+  const provider = (body?.llm_provider || 'gemini').trim().toLowerCase();
+  if (provider === 'ollama') {
+    const endpoint = (body?.ollama_endpoint || '').trim();
+    if (!endpoint) {
+      return 'No Ollama endpoint configured. Open Settings → add your Ollama server URL (e.g. http://127.0.0.1:11434), then retry. | لم يتم إعداد خادم Ollama. افتح الإعدادات ← أضف عنوان الخادم (مثال: http://127.0.0.1:11434) ثم أعد المحاولة.';
+    }
+    return null;
+  }
+  const keyField = PROVIDER_KEY_FIELD[provider];
+  if (!keyField) return null; // unknown provider id: let the engine fail with its own precise error
+  const key = (body?.api_keys?.[keyField] || '').trim();
+  if (!key) {
+    return `No API key configured for "${provider}". Open Settings → paste your ${provider} key, then retry. | لا يوجد مفتاح API للمزود "${provider}". افتح الإعدادات ← أضف المفتاح ثم أعد المحاولة.`;
+  }
+  return null;
+}
+
 export function createResearchAgent(
   request: WideResearchRequest,
   sessionId: string,
@@ -265,7 +298,13 @@ function startAuthorizedExecution(session: ActiveSession, approvedPlan?: Researc
       if (session.researchSession.signal.aborted) {
         return;
       }
-      session.researchSession.fail(err);
+      const raw = err?.message || String(err);
+      // Watchdog/idle failures arrive as AbortError-ish messages; reword them
+      // into a user-actionable sentence instead of a bare "aborted".
+      const userMessage = /stalled|aborted/i.test(raw)
+        ? 'Model request stalled or was interrupted. Check your provider connection and try again. | تعذر استجابة النموذج — تحقق من الاتصال بالمزود ثم أعد المحاولة.'
+        : raw;
+      session.researchSession.fail(new Error(userMessage));
     }
   });
 }
@@ -487,6 +526,15 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
         // Start Deep Research Task
         if (pathname === '/api/research/start' && req.method === 'POST') {
           const body = await parseJsonBody<WideResearchRequest>(req);
+          // Fail loudly at admission when no usable model provider is configured:
+          // without this guard the run hangs silently (no provider → no tokens,
+          // no exception) — the reported "stuck at checking" experience.
+          const providerGuard = providerAdmissionGuard(body);
+          if (providerGuard) {
+            res.writeHead(422, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: providerGuard }));
+            return;
+          }
           const normalizedRequest = normalizeResearchRequest(body);
           const researchSession = sessionManager.createSession(normalizedRequest);
           const sessionId = researchSession.id;

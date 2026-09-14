@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Engine + UI (visibility fix — map ticket #119, ADR-harness work)**: the stuck-run diagnosis and foundational streaming visibility. Engine: a per-stream idle watchdog on the pi adapter (no stream event within 120s fails the generation loudly instead of hanging the session forever; the deadline resets on every real event, long generations are never cut — only silence is; iterator `return()` releases the transport fire-and-forget so a lazy stream can never swallow the rejection), a start-time **provider admission guard** (`/api/research/start` returns HTTP 422 with a bilingual message when a cloud provider has no usable key or Ollama has no endpoint — previously a guaranteed silent hang), and watchdog failures reworded into user-actionable sentences before `fail()`. Renderer: all previously dropped events are now surfaced — `researcher_telemetry`/`fanout_telemetry`/`audit_telemetry`/`session_state` feed a bilingual live-activity feed via a new `utils/liveFeed.ts` mapping, `researcher_telemetry` drives per-agent workspace cards (new `AgentFeedList` component: role, facet, phase, last activity, elapsed clock frozen at terminal phases), `report_chunk` streams the report progressively while the run is active, `skill_activated` joins the thought feed, and the previously silent-drop terminal events `cancelled` and `budget_exhausted` now end the run UI state explicitly. The WebSocket now reconnects on abnormal close with bounded exponential backoff (5 attempts) using the engine's existing `?since=<eventId>` delta replay (per-event `eventId` tracking, reset counters on every message; 1008 rejections and terminal outcomes are not resurrected). Full suite green (461/461).
+
 ## [1.2.0] - 2026-09-14
 
 **Research Agency & the Primary Retrieval Plane** — this release completes the
