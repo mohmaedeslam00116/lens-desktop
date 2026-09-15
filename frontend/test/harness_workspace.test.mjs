@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url);
@@ -43,5 +44,18 @@ describe('Harness workspace model', () => {
       deriveHarnessSessionCard({ loading: false, status: '', error: 'Connection failed' })?.status,
       'failed',
     );
+  });
+});
+
+describe('Harness artifact inspector contract', () => {
+  it('renders only real artifact tabs and exposes a close action', async () => {
+    const inspector = await readFile(
+      new URL('../src/components/harness/HarnessArtifactInspector.tsx', import.meta.url),
+      'utf8',
+    );
+
+    assert.match(inspector, /availableTabs\.map/);
+    assert.match(inspector, /onClose/);
+    assert.doesNotMatch(inspector, /Antigravity|Pull request|Terminal|Repository/);
   });
 });
