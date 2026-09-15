@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, Eye, FileText, History, PanelRightClose, Plus } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Eye, FileText, History, PanelLeft, Plus } from 'lucide-react';
 import { BrandLogo } from '../brand/BrandLogo';
 import { EmptyChatMessageInput } from '../vane/EmptyChatMessageInput';
 import { MessageBox } from '../vane/MessageBox';
@@ -107,6 +107,7 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
   const availableTabs = useMemo(() => availableHarnessArtifacts(artifactInput), [artifactInput]);
   const [selectedTab, setSelectedTab] = useState<HarnessArtifactTab | null>(() => defaultHarnessArtifact(artifactInput));
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
+  const [isRailOpen, setIsRailOpen] = useState(false);
 
   useEffect(() => {
     if (availableTabs.length === 0) {
@@ -125,11 +126,11 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
 
   return (
     <div className="lens-harness" data-testid="lens-harness" dir={ar ? 'rtl' : 'ltr'}>
-      <aside className="harness-rail" aria-label={ar ? 'سجل البحث والتنقل' : 'Research history and navigation'}>
+      <aside className={`harness-rail${isRailOpen ? ' is-open' : ''}`} aria-label={ar ? 'سجل البحث والتنقل' : 'Research history and navigation'}>
         <button className="harness-brand" type="button" onClick={onNewResearch} aria-label={ar ? 'LENS — بحث جديد' : 'LENS — New research'}>
           <BrandLogo />
         </button>
-        <button className="harness-new-research" type="button" onClick={onNewResearch}>
+        <button className="harness-new-research" type="button" onClick={() => { onNewResearch(); setIsRailOpen(false); }}>
           <Plus size={16} />
           <span>{ar ? 'بحث جديد' : 'New research'}</span>
         </button>
@@ -148,7 +149,7 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
                   <button
                     type="button"
                     aria-current={item.query === currentQuery ? 'page' : undefined}
-                    onClick={() => onSelectReport(item)}
+                    onClick={() => { onSelectReport(item); setIsRailOpen(false); }}
                     title={item.query}
                   >
                     <FileText size={14} />
@@ -165,6 +166,15 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
         <header className="harness-utility-bar">
           <div className="harness-location"><span dir="ltr">LENS</span><span aria-hidden="true">/</span><strong>{ar ? 'مساحة البحث' : 'Research workspace'}</strong></div>
           <div className="harness-utility-actions">
+            <button
+              type="button"
+              className="harness-utility-button harness-rail-toggle"
+              onClick={() => setIsRailOpen((open) => !open)}
+              aria-label={ar ? 'تبديل سجل البحث' : 'Toggle research history'}
+            >
+              <PanelLeft size={15} />
+              <span>{ar ? 'السجل' : 'History'}</span>
+            </button>
             {availableTabs.length > 0 && !isInspectorOpen && (
               <button type="button" className="harness-utility-button" onClick={() => setIsInspectorOpen(true)}>
                 <Eye size={15} />

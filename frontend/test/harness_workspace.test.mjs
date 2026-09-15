@@ -71,6 +71,8 @@ describe('Lens harness shell contract', () => {
     assert.match(harness, /onStartResearch/);
     assert.match(harness, /onSelectReport/);
     assert.match(harness, /HarnessArtifactInspector/);
+    assert.match(harness, /isRailOpen/);
+    assert.match(harness, /Toggle research history/);
     assert.doesNotMatch(harness, /Antigravity|Pull request|Terminal|Repository|Open IDE/);
   });
 
@@ -81,5 +83,18 @@ describe('Lens harness shell contract', () => {
     assert.match(styles, /\.harness-rail/);
     assert.match(styles, /min-width:\s*1280px/);
     assert.match(styles, /border-inline-end/);
+  });
+});
+
+describe('Harness preview integration contract', () => {
+  it('keeps the preview opt-in and records transport retry state without creating synthetic agents', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const sidebar = await readFile(new URL('../src/components/vane/Sidebar.tsx', import.meta.url), 'utf8');
+
+    assert.match(app, /isHarnessPreviewOpen/);
+    assert.match(app, /<LensHarnessWorkspace/);
+    assert.match(app, /updateNonTerminalAgentStatus\('retrying'\)/);
+    assert.match(sidebar, /onOpenHarness/);
+    assert.match(sidebar, /Workspace preview/);
   });
 });

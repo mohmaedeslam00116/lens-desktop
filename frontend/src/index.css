@@ -150,6 +150,7 @@
 .harness-utility-actions { gap: 5px; }
 .harness-utility-button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 7px; border-radius: 6px; color: rgb(var(--ink-secondary)); font-size: 11px; }
 .harness-utility-button:hover { background: rgb(var(--surface)); color: rgb(var(--ink)); }
+.harness-rail-toggle { display: none; }
 .harness-canvas { min-width: 0; min-height: 0; flex: 1; overflow: auto; }
 .harness-empty-state { width: min(100%, 760px); padding: clamp(40px, 10vh, 110px) 24px 40px; margin-inline: auto; }
 .harness-empty-intro { max-width: 540px; margin: 0 auto 30px; text-align: center; }
@@ -188,7 +189,10 @@
 
 @media (max-width: 700px) {
   .lens-harness { grid-template-columns: minmax(0, 1fr); }
-  .harness-rail { display: none; }
+  .harness-rail { position: fixed; z-index: 60; inset-block: 0; inset-inline-start: 0; width: min(280px, calc(100vw - 44px)); transform: translateX(-110%); transition: transform .18s ease-out; box-shadow: 10px 0 24px rgb(0 0 0 / .14); }
+  [dir='rtl'] .harness-rail { transform: translateX(110%); }
+  .harness-rail.is-open { transform: translateX(0); }
+  .harness-rail-toggle { display: inline-flex; }
   .harness-utility-bar { padding-inline: 14px; }
   .harness-utility-button span { display: none; }
   .harness-empty-state, .harness-active-state { padding-inline: 16px; }
