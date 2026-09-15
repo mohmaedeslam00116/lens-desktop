@@ -59,3 +59,27 @@ describe('Harness artifact inspector contract', () => {
     assert.doesNotMatch(inspector, /Antigravity|Pull request|Terminal|Repository/);
   });
 });
+
+describe('Lens harness shell contract', () => {
+  it('connects the copied shell to existing research callbacks and the conditional inspector', async () => {
+    const harness = await readFile(
+      new URL('../src/components/harness/LensHarnessWorkspace.tsx', import.meta.url),
+      'utf8',
+    );
+
+    assert.match(harness, /data-testid="lens-harness"/);
+    assert.match(harness, /onStartResearch/);
+    assert.match(harness, /onSelectReport/);
+    assert.match(harness, /HarnessArtifactInspector/);
+    assert.doesNotMatch(harness, /Antigravity|Pull request|Terminal|Repository|Open IDE/);
+  });
+
+  it('defines wide, drawer, and narrow harness geometry with logical boundaries', async () => {
+    const styles = await readFile(new URL('../src/index.css', import.meta.url), 'utf8');
+
+    assert.match(styles, /\.lens-harness/);
+    assert.match(styles, /\.harness-rail/);
+    assert.match(styles, /min-width:\s*1280px/);
+    assert.match(styles, /border-inline-end/);
+  });
+});
