@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Home, Compass, BookOpen, Network, Sparkles, Settings, Globe, Moon, Sun } from 'lucide-react';
+import { Plus, Home, Compass, BookOpen, Network, Sparkles, Settings, Globe, Moon, Sun, PanelsTopLeft } from 'lucide-react';
 import { Language } from '../../types';
 import { BrandLogo } from '../brand/BrandLogo';
 
@@ -8,6 +8,7 @@ interface SidebarProps {
   onSelectTab: (tab: 'home' | 'discover' | 'history' | 'graph' | 'skills') => void;
   onNewResearch: () => void;
   onOpenSettings: () => void;
+  onOpenHarness: () => void;
   language: Language;
   onToggleLanguage: () => void;
   theme: 'dark' | 'light';
@@ -36,6 +37,15 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           </button>
         ))}
       </nav>
+      <button
+        className="rail-item rail-preview"
+        onClick={props.onOpenHarness}
+        title={ar ? 'معاينة مساحة العمل' : 'Workspace preview'}
+        aria-label={ar ? 'معاينة مساحة العمل' : 'Workspace preview'}
+      >
+        <PanelsTopLeft size={19} strokeWidth={1.65} />
+        <span>{ar ? 'معاينة' : 'Preview'}</span>
+      </button>
       <div className="rail-preferences">
         <button className="icon-button" onClick={props.onToggleLanguage} title={ar ? 'Switch to English' : 'التحويل للعربية'} aria-label={ar ? 'Switch to English' : 'التحويل للعربية'}><Globe size={18} /></button>
         <button className="icon-button" onClick={props.onToggleTheme} title={props.theme === 'dark' ? (ar ? 'الوضع الفاتح' : 'Light mode') : (ar ? 'الوضع الداكن' : 'Dark mode')} aria-label={props.theme === 'dark' ? (ar ? 'الوضع الفاتح' : 'Light mode') : (ar ? 'الوضع الداكن' : 'Dark mode')}>

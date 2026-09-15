@@ -11,6 +11,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { CommandPalette } from './components/CommandPalette';
 import { PlanApprovalModal } from './components/research/PlanApprovalModal';
 import { SkillsManagerView } from './components/skills/SkillsManagerView';
+import { LensHarnessWorkspace } from './components/harness/LensHarnessWorkspace';
 import { 
   Language, 
   ResearchDepth, 
@@ -65,6 +66,7 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'discover' | 'history' | 'graph' | 'skills'>('home');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isHarnessPreviewOpen, setIsHarnessPreviewOpen] = useState(false);
 
   // Search Engine Parameters
   const [query, setQuery] = useState('');
@@ -198,6 +200,15 @@ export function App() {
   const saveSettings = (newSettings: ApiSettings) => {
     setSettings(newSettings);
     localStorage.setItem('deep_research_settings', JSON.stringify(newSettings));
+  };
+
+  /** Never add a card here: this only changes real researcher telemetry cards. */
+  const updateNonTerminalAgentStatus = (status: 'running' | 'retrying' | 'success' | 'failed') => {
+    setAgents((prev) => prev.map((agent) =>
+      agent.status === 'success' || agent.status === 'failed'
+        ? agent
+        : { ...agent, status, elapsedMs: status === 'success' || status === 'failed' ? Date.now() - agent.startedAt : agent.elapsedMs },
+    ));
   };
 
   const handleNewResearch = () => {
@@ -501,6 +512,7 @@ export function App() {
 
             setActiveReport(finalReport);
             setIsSearching(false);
+            updateNonTerminalAgentStatus('success');
 
             setHistory((prev) => {
               const updated = [finalReport, ...prev.filter((p) => p.id !== finalReport.id).slice(0, 49)];
@@ -514,18 +526,21 @@ export function App() {
             setCurrentStatus(payload.message || 'Error occurred');
             setResearchError(payload.message || (language === 'ar' ? 'تعذر إكمال البحث. يمكنك المحاولة مجددًا.' : 'Research could not finish. Please try again.'));
             setIsSearching(false);
+            updateNonTerminalAgentStatus('failed');
             runTerminatedRef.current = true;
             wsRef.current?.close();
           } else if (payload.type === 'cancelled') {
             setCurrentStatus(payload.message || (language === 'ar' ? 'أُلغي البحث.' : 'Research cancelled.'));
             setResearchError(payload.message || (language === 'ar' ? 'أُلغي البحث.' : 'Research cancelled.'));
             setIsSearching(false);
+            updateNonTerminalAgentStatus('failed');
             runTerminatedRef.current = true;
             wsRef.current?.close();
           } else if (payload.type === 'budget_exhausted') {
             setCurrentStatus(payload.message || (language === 'ar' ? 'استُهلكت ميزانية البحث. زيّد الحد في الإعدادات ثم أعد المحاولة.' : 'Research budget exhausted. Raise the limit in Settings and retry.'));
             setResearchError(payload.message || (language === 'ar' ? 'استُهلكت ميزانية البحث. زيّد الحد في الإعدادات ثم أعد المحاولة.' : 'Research budget exhausted. Raise the limit in Settings and retry.'));
             setIsSearching(false);
+            updateNonTerminalAgentStatus('failed');
             runTerminatedRef.current = true;
             wsRef.current?.close();
           }
@@ -550,20 +565,38 @@ export function App() {
         if (sessionGeneration !== sessionGenerationRef.current) return;
         wsRef.current = null;
         if (runTerminatedRef.current) return; // finished/cancelled/error closed intentionally
-        if (ev.code === 1008) return; // engine rejected: session unknown
+        if (ev.code === 1008) {
+          runTerminatedRef.current = true;
+          const sessionError = language === 'ar'
+            ? 'انتهت جلسة البحث المباشر. أعد المحاولة لبدء جلسة جديدة.'
+            : 'The live research session is no longer available. Start a new research to continue.';
+          setCurrentStatus(sessionError);
+          setResearchError(sessionError);
+          updateNonTerminalAgentStatus('failed');
+          setIsSearching(false);
+          return;
+        }
         if (reconnectAttemptsRef.current >= 5) {
           runTerminatedRef.current = true;
-          setResearchError(language === 'ar'
+          const reconnectError = language === 'ar'
             ? 'انقطع الاتصال المباشر بشكل متكرر. قد يستمر البحث في الخلفية — تحقق من النتائج بعد قليل أو أعد المحاولة.'
-            : 'Live connection kept dropping. The research may still be running in the background — check back shortly or retry.');
+            : 'Live connection kept dropping. The research may still be running in the background — check back shortly or retry.';
+          setResearchError(reconnectError);
+          updateNonTerminalAgentStatus('failed');
           setIsSearching(false);
           return;
         }
         reconnectAttemptsRef.current += 1;
+        setCurrentStatus(language === 'ar' ? 'جارٍ إعادة الاتصال بالبحث المباشر…' : 'Reconnecting to live research…');
+        updateNonTerminalAgentStatus('retrying');
         const backoffMs = Math.min(30000, 500 * 2 ** (reconnectAttemptsRef.current - 1));
         window.setTimeout(() => {
           if (sessionGeneration !== sessionGenerationRef.current || runTerminatedRef.current) return;
           const retry = new WebSocket(`${WS_BASE}/ws/research/${sessionId}?since=${lastEventIdRef.current}`);
+          retry.onopen = () => {
+            if (sessionGeneration !== sessionGenerationRef.current || runTerminatedRef.current) return;
+            setAgents((prev) => prev.map((agent) => agent.status === 'retrying' ? { ...agent, status: 'running' } : agent));
+          };
           retry.onmessage = ws.onmessage;
           retry.onerror = ws.onerror;
           retry.onclose = ws.onclose;
@@ -681,6 +714,102 @@ export function App() {
 
   const currentSources = activeReport?.sources || visitedSources;
   const currentContent = activeReport?.content || liveReport;
+  const resolvedTelemetry = resolveReportTelemetry(activeReport, wideTelemetry, wideExpansionHistory);
+
+  if (isHarnessPreviewOpen) {
+    return (
+      <>
+        <LensHarnessWorkspace
+          language={language}
+          query={query}
+          setQuery={setQuery}
+          settings={settings}
+          loading={isSearching}
+          optimizationMode={optimizationMode}
+          setOptimizationMode={setOptimizationMode}
+          sourceFocus={sourceFocus}
+          setSourceFocus={setSourceFocus}
+          researchMode={researchMode}
+          setResearchMode={setResearchMode}
+          currentQuery={currentQuery || activeReport?.query || ''}
+          currentStatus={currentStatus}
+          researchError={researchError}
+          report={currentContent}
+          sources={currentSources}
+          steps={compiledSteps}
+          plan={activeReport?.plan || proposedPlan}
+          graphNodes={activeReport?.graphNodes || graphNodes}
+          thoughts={thoughts}
+          subqueries={subqueries}
+          agents={agents}
+          agentEventCount={agentEventCount}
+          history={history}
+          wideTelemetry={resolvedTelemetry.wideTelemetry}
+          wideExpansionHistory={resolvedTelemetry.wideExpansionHistory}
+          onStartResearch={handleStartResearch}
+          onNewResearch={handleNewResearch}
+          onSelectReport={(report) => {
+            if (isSearching) return;
+            setActiveReport(report);
+            setCurrentQuery(report.query);
+            setQuery(report.query);
+            setCurrentStatus('');
+            setResearchError('');
+            setThoughts([]);
+            setSubqueries([]);
+            setVisitedSources([]);
+            setReflections(report.reflections || []);
+            setGraphNodes(report.graphNodes || []);
+            setAgents([]);
+            setAgentEventCount(0);
+            setLiveReport(report.content || '');
+            liveReportRef.current = report.content || '';
+            setWideTelemetry(report.wideTelemetry || null);
+            setWideExpansionHistory(report.wideExpansionHistory || []);
+            setProposedPlan(null);
+            setIsPlanModalOpen(false);
+          }}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onExport={handleExport}
+          onExit={() => setIsHarnessPreviewOpen(false)}
+        />
+
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          settings={settings}
+          onSave={saveSettings}
+          language={language}
+        />
+
+        <CommandPalette
+          isOpen={isCommandPaletteOpen}
+          onClose={() => setIsCommandPaletteOpen(false)}
+          language={language}
+          onNewResearch={handleNewResearch}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onToggleLanguage={() => setLanguage((l) => (l === 'en' ? 'ar' : 'en'))}
+          onExport={handleExport}
+          hasActiveReport={Boolean(activeReport)}
+          settings={settings}
+          onUpdateSettings={saveSettings}
+        />
+
+        {proposedPlan && (
+          <PlanApprovalModal
+            isOpen={isPlanModalOpen}
+            language={language}
+            plan={proposedPlan}
+            mode={researchMode}
+            onApprove={handleApprovePlan}
+            onRegenerate={handleRegeneratePlan}
+            onDiscard={handleDiscardPlan}
+            isRegenerating={isRegeneratingPlan}
+          />
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -690,6 +819,7 @@ export function App() {
         onSelectTab={setActiveTab}
         onNewResearch={handleNewResearch}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenHarness={() => setIsHarnessPreviewOpen(true)}
         language={language}
         onToggleLanguage={() => setLanguage((l) => (l === 'ar' ? 'en' : 'ar'))}
         theme={theme}
