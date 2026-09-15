@@ -137,7 +137,7 @@
 .harness-history { margin-top: 28px; }
 .harness-section-heading, .harness-utility-actions, .harness-location, .harness-tabs { display: flex; align-items: center; }
 .harness-section-heading { gap: 8px; padding: 0 8px 9px; color: rgb(var(--ink-muted)); }
-.harness-section-heading h2, .harness-eyebrow { margin: 0; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.harness-section-heading h2 { margin: 0; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 .harness-history-empty { margin: 0; padding: 9px 8px; color: rgb(var(--ink-muted)); font-size: 11px; line-height: 1.7; }
 .harness-history-list { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
 .harness-history-list button { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 9px 8px; border-radius: 6px; color: rgb(var(--ink-secondary)); text-align: start; font-size: 12px; line-height: 1.45; }
@@ -154,23 +154,23 @@
 .harness-canvas { min-width: 0; min-height: 0; flex: 1; overflow: auto; }
 .harness-empty-state { width: min(100%, 760px); padding: clamp(40px, 10vh, 110px) 24px 40px; margin-inline: auto; }
 .harness-empty-intro { max-width: 540px; margin: 0 auto 30px; text-align: center; }
-.harness-empty-intro h1 { margin: 12px 0 0; color: rgb(var(--ink)); font-size: clamp(25px, 3vw, 36px); font-weight: 500; line-height: 1.45; letter-spacing: -.03em; text-wrap: balance; }
+.harness-empty-intro h1 { margin: 0; color: rgb(var(--ink)); font-size: clamp(25px, 3vw, 36px); font-weight: 500; line-height: 1.45; letter-spacing: -.03em; text-wrap: balance; }
 :lang(ar) .harness-empty-intro h1 { font-weight: 600; letter-spacing: 0; }
 .harness-empty-intro > p:last-child { margin: 10px auto 0; color: rgb(var(--ink-muted)); font-size: 14px; line-height: 1.8; }
 .harness-active-state { width: min(100%, 1120px); padding: 24px 24px 40px; margin-inline: auto; }
 .harness-session-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid rgb(var(--line)); border-radius: 8px; background: rgb(var(--panel)); }
-.harness-session-card h1 { margin: 5px 0 0; color: rgb(var(--ink)); font-size: 18px; font-weight: 600; line-height: 1.5; }
-.harness-session-card p:not(.harness-eyebrow) { margin: 6px 0 0; color: rgb(var(--ink-muted)); font-size: 12px; line-height: 1.6; }
+.harness-session-card h1 { margin: 0; color: rgb(var(--ink)); font-size: 18px; font-weight: 600; line-height: 1.5; }
+.harness-session-card p { margin: 6px 0 0; color: rgb(var(--ink-muted)); font-size: 12px; line-height: 1.6; }
 .harness-session-card > span { flex-shrink: 0; font-size: 11px; }
 .harness-tool-activity, .harness-event-feed { margin-top: 14px; }
-.harness-tool-activity > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.harness-tool-activity > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .harness-tool-chip { max-width: 100%; padding: 5px 7px; overflow: hidden; border: 1px solid rgb(var(--line)); border-radius: 4px; color: rgb(var(--ink-secondary)); font-family: ui-monospace, Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .harness-event-feed { display: grid; gap: 5px; padding: 10px 12px; border-inline-start: 1px solid rgb(var(--line-strong)); color: rgb(var(--ink-muted)); font-size: 12px; line-height: 1.6; }
 .harness-event-feed p { margin: 0; }
 .harness-active-state > [data-testid='agent-feed'] { margin-top: 14px; }
 .harness-inspector { position: fixed; z-index: 50; inset-block: 0; inset-inline-end: 0; display: flex; flex-direction: column; width: min(384px, calc(100vw - 32px)); padding: 16px; background: rgb(var(--panel)); border-inline-start: 1px solid rgb(var(--line)); box-shadow: -10px 0 24px rgb(0 0 0 / .14); }
 .harness-inspector__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.harness-inspector__header h2 { margin: 5px 0 0; color: rgb(var(--ink)); font-size: 16px; font-weight: 600; }
+.harness-inspector__header h2 { margin: 0; color: rgb(var(--ink)); font-size: 16px; font-weight: 600; }
 .harness-tabs { gap: 4px; margin-top: 18px; padding-bottom: 12px; overflow-x: auto; border-bottom: 1px solid rgb(var(--line)); }
 .harness-tab { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border-radius: 6px; color: rgb(var(--ink-muted)); font-size: 11px; white-space: nowrap; }
 .harness-tab:hover, .harness-tab[aria-selected='true'] { background: rgb(var(--surface)); color: rgb(var(--ink)); }

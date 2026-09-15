@@ -72,7 +72,7 @@
   ],
   "narrative": {
     "northStar": "The Evidence Harness.",
-    "overview": "LENS is a bilingual desktop research harness. It takes the user-supplied Stitch workspace as an authorized starting point for hierarchy and rhythm, but maps it exclusively to LENS identity and live research data. The rail, canvas, and conditional inspector form a focused workspace rather than a fabricated IDE or permanent empty three-pane shell.",
+    "overview": "LENS is a bilingual desktop research harness. The user-supplied Stitch workspace is the authorized starting point for hierarchy and rhythm, mapped exclusively to LENS identity and live research data. The shipped rail, canvas, and conditional inspector form a focused workspace rather than a fabricated IDE or permanent empty three-pane shell.",
     "keyCharacteristics": [
       "Wide useful history rail, focused research canvas, and conditional inspector.",
       "Real research events, sources, plans, reports, and graphs only.",

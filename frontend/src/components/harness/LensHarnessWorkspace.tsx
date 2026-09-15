@@ -192,7 +192,6 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
           {!hasSession ? (
             <div className="harness-empty-state">
               <div className="harness-empty-intro">
-                <p className="harness-eyebrow">{ar ? 'بحث، في بؤرة التركيز.' : 'Research, in focus.'}</p>
                 <h1>{ar ? 'ابدأ بسؤال يستحق نظرة أعمق.' : 'Start with a question worth a closer look.'}</h1>
                 <p>{ar ? 'سيبقى الدليل ومسار البحث واضحين مع تقدّم الجلسة.' : 'Evidence and the research path remain clear as the session develops.'}</p>
               </div>
@@ -217,7 +216,6 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
               {sessionCard && (
                 <section className="harness-session-card" aria-live="polite">
                   <div>
-                    <p className="harness-eyebrow">{ar ? 'الجلسة الأصلية' : 'Parent session'}</p>
                     <h1>{currentQuery}</h1>
                     {sessionCard.detail && <p>{sessionCard.detail}</p>}
                   </div>
@@ -227,7 +225,6 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
 
               {subqueries.length > 0 && (
                 <section className="harness-tool-activity" aria-label={ar ? 'استعلامات البحث' : 'Research queries'}>
-                  <p className="harness-eyebrow">{ar ? 'استعلامات فعلية' : 'Live queries'}</p>
                   <div>{subqueries.map((subquery) => <span key={subquery} className="harness-tool-chip">{subquery}</span>)}</div>
                 </section>
               )}

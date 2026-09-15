@@ -708,43 +708,79 @@ export function App() {
 
   if (isHarnessPreviewOpen) {
     return (
-      <LensHarnessWorkspace
-        language={language}
-        query={query}
-        setQuery={setQuery}
-        settings={settings}
-        loading={isSearching}
-        optimizationMode={optimizationMode}
-        setOptimizationMode={setOptimizationMode}
-        sourceFocus={sourceFocus}
-        setSourceFocus={setSourceFocus}
-        researchMode={researchMode}
-        setResearchMode={setResearchMode}
-        currentQuery={currentQuery || activeReport?.query || ''}
-        currentStatus={currentStatus}
-        researchError={researchError}
-        report={currentContent}
-        sources={currentSources}
-        steps={compiledSteps}
-        plan={activeReport?.plan || proposedPlan}
-        graphNodes={activeReport?.graphNodes || graphNodes}
-        thoughts={thoughts}
-        subqueries={subqueries}
-        agents={agents}
-        agentEventCount={agentEventCount}
-        history={history}
-        wideTelemetry={resolvedTelemetry.wideTelemetry}
-        wideExpansionHistory={resolvedTelemetry.wideExpansionHistory}
-        onStartResearch={handleStartResearch}
-        onNewResearch={handleNewResearch}
-        onSelectReport={(report) => {
-          setActiveReport(report);
-          setCurrentQuery(report.query);
-        }}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onExport={handleExport}
-        onExit={() => setIsHarnessPreviewOpen(false)}
-      />
+      <>
+        <LensHarnessWorkspace
+          language={language}
+          query={query}
+          setQuery={setQuery}
+          settings={settings}
+          loading={isSearching}
+          optimizationMode={optimizationMode}
+          setOptimizationMode={setOptimizationMode}
+          sourceFocus={sourceFocus}
+          setSourceFocus={setSourceFocus}
+          researchMode={researchMode}
+          setResearchMode={setResearchMode}
+          currentQuery={currentQuery || activeReport?.query || ''}
+          currentStatus={currentStatus}
+          researchError={researchError}
+          report={currentContent}
+          sources={currentSources}
+          steps={compiledSteps}
+          plan={activeReport?.plan || proposedPlan}
+          graphNodes={activeReport?.graphNodes || graphNodes}
+          thoughts={thoughts}
+          subqueries={subqueries}
+          agents={agents}
+          agentEventCount={agentEventCount}
+          history={history}
+          wideTelemetry={resolvedTelemetry.wideTelemetry}
+          wideExpansionHistory={resolvedTelemetry.wideExpansionHistory}
+          onStartResearch={handleStartResearch}
+          onNewResearch={handleNewResearch}
+          onSelectReport={(report) => {
+            setActiveReport(report);
+            setCurrentQuery(report.query);
+          }}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onExport={handleExport}
+          onExit={() => setIsHarnessPreviewOpen(false)}
+        />
+
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          settings={settings}
+          onSave={saveSettings}
+          language={language}
+        />
+
+        <CommandPalette
+          isOpen={isCommandPaletteOpen}
+          onClose={() => setIsCommandPaletteOpen(false)}
+          language={language}
+          onNewResearch={handleNewResearch}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onToggleLanguage={() => setLanguage((l) => (l === 'en' ? 'ar' : 'en'))}
+          onExport={handleExport}
+          hasActiveReport={Boolean(activeReport)}
+          settings={settings}
+          onUpdateSettings={saveSettings}
+        />
+
+        {proposedPlan && (
+          <PlanApprovalModal
+            isOpen={isPlanModalOpen}
+            language={language}
+            plan={proposedPlan}
+            mode={researchMode}
+            onApprove={handleApprovePlan}
+            onRegenerate={handleRegeneratePlan}
+            onDiscard={handleDiscardPlan}
+            isRegenerating={isRegeneratingPlan}
+          />
+        )}
+      </>
     );
   }
 

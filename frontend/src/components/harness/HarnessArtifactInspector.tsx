@@ -43,8 +43,7 @@ export const HarnessArtifactInspector: React.FC<HarnessArtifactInspectorProps> =
     <aside className="harness-inspector" aria-label={ar ? 'مقتنيات البحث' : 'Research artifacts'}>
       <header className="harness-inspector__header">
         <div>
-          <p className="harness-eyebrow">{ar ? 'جلسة البحث' : 'Research session'}</p>
-          <h2>{label(selectedTab)}</h2>
+          <h2>{ar ? `مقتنيات البحث: ${label(selectedTab)}` : `Research artifacts: ${label(selectedTab)}`}</h2>
         </div>
         <button type="button" className="icon-button" onClick={onClose} aria-label={ar ? 'إغلاق المقتنيات' : 'Close artifacts'}>
           <X size={17} />

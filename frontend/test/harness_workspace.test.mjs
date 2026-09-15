@@ -97,4 +97,12 @@ describe('Harness preview integration contract', () => {
     assert.match(sidebar, /onOpenHarness/);
     assert.match(sidebar, /Workspace preview/);
   });
+
+  it('keeps settings and plan approval overlays available in preview mode', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+
+    assert.ok(app.split('<SettingsModal').length > 2, 'preview branch should render SettingsModal');
+    assert.ok(app.split('<CommandPalette').length > 2, 'preview branch should render CommandPalette');
+    assert.ok(app.split('<PlanApprovalModal').length > 2, 'preview branch should render PlanApprovalModal');
+  });
 });

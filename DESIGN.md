@@ -125,7 +125,7 @@ components:
 
 # Design System: LENS
 
-<!-- TARGET: This is the approved design direction for the research-harness work. The color and type primitives above are implemented today; the harness layout and component rows become implementation truth as Issue #121 lands. Regenerate this document from the completed interface with Impeccable after the UI ships. -->
+This document records the shipped, opt-in research-harness preview introduced for Issue #121. The harness components use the same semantic color and type primitives as the main LENS workspace.
 
 ## Overview
 
