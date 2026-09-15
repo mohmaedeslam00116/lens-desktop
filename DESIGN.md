@@ -1,6 +1,6 @@
 ---
 name: LENS
-description: Research, in focus. A bilingual monochrome research workspace.
+description: Research, in focus. A bilingual evidence-first desktop research harness.
 colors:
   dark-canvas: "rgb(17 17 17)"
   dark-rail: "rgb(13 13 13)"
@@ -88,175 +88,156 @@ spacing:
   gutter: "24px"
   section: "32px"
 components:
+  harness-rail:
+    backgroundColor: "{colors.dark-rail}"
+    textColor: "{colors.dark-ink-secondary}"
+    rounded: "{rounded.compact}"
+    padding: "12px"
+    width: "280px"
+  workspace-utility-bar:
+    backgroundColor: "{colors.dark-canvas}"
+    textColor: "{colors.dark-ink-secondary}"
+    typography: "{typography.label}"
+    height: "40px"
+  research-composer:
+    backgroundColor: "{colors.dark-panel}"
+    textColor: "{colors.dark-ink}"
+    rounded: "{rounded.composer}"
+    padding: "20px 20px 14px"
+  agent-card:
+    backgroundColor: "{colors.dark-surface}"
+    textColor: "{colors.dark-ink}"
+    rounded: "{rounded.control}"
+    padding: "10px 12px"
+  artifact-inspector:
+    backgroundColor: "{colors.dark-panel}"
+    textColor: "{colors.dark-ink}"
+    rounded: "{rounded.control}"
+    padding: "16px"
+    width: "384px"
   button-primary:
     backgroundColor: "{colors.dark-accent}"
     textColor: "{colors.dark-on-accent}"
     typography: "{typography.label}"
     rounded: "{rounded.action}"
     padding: "8px 13px"
-  button-primary-light:
-    backgroundColor: "{colors.light-accent}"
-    textColor: "{colors.light-on-accent}"
-    typography: "{typography.label}"
-    rounded: "{rounded.action}"
-    padding: "8px 13px"
-  button-disabled:
-    backgroundColor: "{colors.dark-surface}"
-    textColor: "{colors.dark-ink-muted}"
-    rounded: "{rounded.action}"
-  button-icon:
-    textColor: "{colors.dark-ink-muted}"
-    rounded: "{rounded.control}"
-    size: "36px"
-  research-composer:
-    backgroundColor: "{colors.dark-panel}"
-    textColor: "{colors.dark-ink}"
-    rounded: "{rounded.composer}"
-    padding: "20px 20px 14px"
-  library-search:
-    backgroundColor: "{colors.dark-panel}"
-    rounded: "{rounded.control}"
-    padding: "12px 16px 12px 40px"
-  navigation-item:
-    textColor: "{colors.dark-ink-muted}"
-    rounded: "{rounded.control}"
-    padding: "11px 2px"
-  workflow-template:
-    textColor: "{colors.dark-ink-secondary}"
-    rounded: "{rounded.action}"
-    padding: "6px 10px"
-  settings-panel:
-    backgroundColor: "{colors.dark-surface}"
-    rounded: "{rounded.dialog}"
-    padding: "16px"
 ---
 
 # Design System: LENS
 
+<!-- TARGET: This is the approved design direction for the research-harness work. The color and type primitives above are implemented today; the harness layout and component rows become implementation truth as Issue #121 lands. Regenerate this document from the completed interface with Impeccable after the UI ships. -->
+
 ## Overview
 
-**Creative North Star: "Research, in focus."**
+**Creative North Star: “The Evidence Harness.”**
 
-LENS frames a question, keeps its evidence legible, and provides a familiar workspace for revisiting research. Its chosen language is precise and restrained: charcoal and off-white surfaces, compact controls, a concentric lens mark, and quiet typography. The user pinned Vercel/Cursor-like monochrome colors and preservation of the approximate rail and central research layout.
+LENS is a desktop place to ask, watch, inspect, and return to research. The workspace makes the evolving evidence visible without turning research into a simulated developer console. Its visual starting point is the user-supplied Stitch workspace: a disciplined desktop frame, a substantial history rail, a focused work canvas, and a contextual right inspector. Its product identity is entirely LENS: monochrome, bilingual, calm, and truthful.
 
-This is an Operate refresh of the implemented application. Inter and Cairo are intentional incumbent choices, including an exception to generic design detectors that discourage Inter. The system modernizes actual research, library, graph, settings, and command controls; it does not prescribe the obsolete three-pane studio proposal.
+The harness is an intentional replacement for the narrow-rail, single-column home composition when a user is working with a research session. It is not a generic three-pane application. The right region exists only when LENS has an active report, plan, evidence shelf, or graph to show. The empty state remains a quiet invitation to begin research.
 
-**Key Characteristics:**
+**Key characteristics:**
 
-- Monochrome surfaces with semantic status color.
-- A compact rail and a readable central research area.
-- English and Arabic typography with direction-aware spacing.
-- Flat structure, explicit controls, and visible keyboard focus.
+- A wide, useful history and navigation rail rather than an icon strip.
+- One central question-and-evidence canvas with a persistent, capable composer.
+- A conditional inspector for real artifacts, never fabricated activity.
+- Inter for English, Cairo for Arabic, and direction-aware layout.
+- Neutral surfaces by default; status color carries meaning only.
 
-Source authority: `frontend/src/index.css`, `frontend/tailwind.config.js`, the brand component, and implemented components. This document records code, not an accessibility certification or an end-to-end research guarantee. Product truth lives in PRODUCT.md; identity rules live in BRAND.md. Extensions and isolated component previews live in `.impeccable/design.json`.
+`PRODUCT.md` defines product truth and `BRAND.md` defines identity authority. The supplied Stitch source is authorized implementation input for layout hierarchy and interaction rhythm, not a source of product claims, names, logos, repositories, terminals, PRs, tests, or demo data.
 
 ## Colors
 
-The palette combines neutral charcoal with subtly warm ink and paper. Frontmatter preserves the CSS source's RGB channels. Paired dark/light names describe the same semantic roles in each theme. Component frontmatter defaults to dark, with the primary light variant explicit; sidecar previews bind to active semantic CSS variables.
+LENS remains an off-black and off-white system. Canvas, rail, panel, surface, hover, boundary, and ink roles are defined in frontmatter and must be consumed through semantic theme channels. Dark and light themes retain the same hierarchy: rail is the most recessed persistent region; panel and surface distinguish work without a card wall.
 
 ### Primary
 
-The **inverted action** uses accent against on-accent: pale ink on the dark canvas, dark ink on the light canvas. This is the research submit and new-research treatment. It is not a colored brand accent.
+The inverted neutral action is the commitment treatment: pale ink on the dark theme and dark ink on the light theme. Use it for starting research, submitting a question, and one clearly primary action in a local context. It is not a brand-color substitute.
 
 ### Neutral
 
-- **Canvas** holds the workspace; **rail** slightly separates persistent navigation.
-- **Panel** frames the composer, search, and command dialog; **surface** distinguishes grouped settings and hovered or selected controls.
-- **Hover**, **line**, and **line-strong** provide progressively firmer interaction and boundary tones.
-- **Ink**, **secondary ink**, and **muted ink** establish reading priority. Muted ink also supplies theme-aware placeholders.
-- **Focus** supplies the keyboard outline and composer focus boundary.
+- **Canvas** is the reading and working field.
+- **Rail** holds durable navigation, recent research, and compact controls.
+- **Panel** frames the composer and inspector; **surface** groups a live agent card or evidence item.
+- **Line** and **line-strong** separate regions and sharpen an active input without shadows.
+- **Ink**, secondary ink, and muted ink express reading order; muted text never becomes the only status signal.
 
 ### Semantic status
 
-Emerald indicates completed or successful states, amber indicates a setup warning, and rose indicates failed or destructive states. Pair state color with an icon or text. Routine report and table actions use neutral controls. Status colors are existing Tailwind values, not a new brand palette; their presence does not mean every contrast combination has passed an audit.
+Success, warning, and error colors describe actual researcher or engine state. They always appear with a label, icon, or both. Discovery, report, navigation, and ordinary tool chips stay neutral.
 
-**The Meaningful Color Rule.** Reserve chromatic color for a meaningful status; keep brand, navigation, and routine report controls monochrome.
-
-The root light palette is overridden by the root `dark` class. Tailwind's `slate` and even `white` aliases map to semantic channels for incumbent components; literal white cannot be assumed from the class name. Older vscode, obsidian, dark, and light config groups remain compatibility material, not this system's palette authority.
+**The evidence-first color rule.** Color communicates a verified state; it never decorates an invented workflow or makes routine controls look important.
 
 ## Typography
 
-English uses Inter with Segoe UI and sans-serif fallbacks. Arabic uses Cairo with the same fallbacks through the root language attribute. Both fonts are requested from Google Fonts in `frontend/index.html`; offline availability depends on caching, with system fallbacks remaining valid. Tailwind's sans stack additionally contains Cairo and system-ui. Code uses system monospace.
+Inter and Cairo are deliberate LENS choices. Inter is used for English; Cairo is used when Arabic is active. The interface mirrors its logical layout for Arabic, while the LENS wordmark remains left-to-right. System monospace is reserved for compact source URLs, identifiers, timestamps, and literal search/tool details—not prose or decorative code panels.
 
-The wordmark always reads **LENS** and remains left-to-right in Arabic. Its base role is in frontmatter; the home variant uses (31px), paired with a (40px) mark. Navigation uses the (31px) mark alone. At the narrow breakpoint the home mark and wordmark become (34px) and (27px). Small and extra-large component variants also exist.
+The central canvas favors reading before operation: display type introduces an empty state or report, title type names an active artifact, body type keeps report prose comfortably measurable, and label type supports controls and terse metadata. Agent messages and evidence titles stay concise; the inspector must never compete with the report as the primary reading surface.
 
-The home heading follows the fluid display role, with zero Arabic tracking and a heavier Arabic weight. Report headings use headline and title roles; the third level is (1.05rem) at weight (600). Report body has a (72ch) maximum measure. Home support copy is (14px), line height (1.8), and at most (55ch). Metadata spans (10–12px). Library and graph page headings use (24px) at weight (600). This is an observed hierarchy, not a uniform mathematical scale.
-
-**The Bilingual Identity Rule.** Change reading direction and UI family with language; keep the LENS wordmark upright and left-to-right.
+**The reading-then-operation rule.** Make the question and evidence easiest to read; make execution details available without making them louder than the answer.
 
 ## Layout
 
-The app fills (100dvh). A (78px) rail sits beside a flexible content column. The workspace header is (61px) high with (30px) inline padding; the remaining main region scrolls. Logical borders and spacing follow the root direction, so Arabic mirrors the workspace.
+The desktop harness uses a 40px utility bar above three possible regions:
 
-The home wrapper is at most (808px), including (24px) side padding, yielding a (760px) inner composer area. Top padding varies from (36px) to (76px) with viewport height. The introduction precedes a framed composer, model/keyboard metadata, template chips, and two columns of divided topic rows. This is the current home composition; report screens may use their own reading and support areas. Library and graph use a (56rem) maximum outer width with (24px) horizontal and (40px) vertical padding.
+- **Harness rail:** 280px on wide desktops. It contains LENS identity, entry points, recent research, saved/available work, and compact settings controls. It scrolls independently from the canvas. A selected research item is visible through tone, label, and `aria-current`, not color alone.
+- **Research canvas:** the flexible primary region. In an empty state it centers a short LENS introduction and a composer at a readable maximum width. During research it becomes a vertically ordered event stream: question, current status, live agent cards, source/evidence updates, and report. The composer remains anchored at the lower edge of this region.
+- **Artifact inspector:** 360–384px on a wide desktop. It presents only data LENS actually has: the plan, sources/evidence shelf, report outline, or graph. It is absent in an empty session and can be closed when the user needs uninterrupted reading.
 
-At widths up to (700px), header padding tightens to (18px), topics become one column, composer controls wrap, and settings navigation becomes a horizontal wrapping group. At widths up to (450px), the rail becomes (60px), the header becomes (55px), home side padding becomes (16px), and the primary composer action spans the row. The rail retains labels. Command hints progressively hide to save room. Provider grids also use Tailwind's (640px) small breakpoint.
+At medium widths, the inspector becomes a closable overlay or drawer rather than squeezing the report. At narrow widths, the rail collapses behind an explicit control and the canvas takes priority. The app must preserve the existing language direction, keyboard access, and usable composer at every breakpoint.
 
-Settings use a (56rem) maximum width and nominal (620px) height, bounded by viewport height minus (32px), with internal content scrolling. Commands use a (36rem) maximum width, sit (12vh) from the top, and limit the result list to (55vh). There is no universal three-pane layout or implemented mobile navigation drawer.
+**The conditional-inspector rule.** A third region earns its space with an active, truthful artifact; it is not a permanent empty dashboard column.
 
 ## Elevation & Depth
 
-Depth is primarily tonal and structural: a one-pixel boundary separates canvas, panel, and control. The composer rests flat and clarifies its border on focus. Settings and commands use black scrims at (80%) and (70%), respectively. There is no decorative glow or gradient identity treatment.
+Tone, spacing, and one-pixel boundaries create the hierarchy. The rail is recessed, the canvas is calm, and the inspector/composer are grouped by panel tone and clear edges. A focused composer can strengthen its boundary. Dialogs retain their functional scrims.
 
-One incumbent low shadow remains on active settings navigation: `0 1px 2px 0 rgb(0 0 0 / 0.05)`. It does not establish a large floating-card vocabulary. Scrollbars are thin (6px) with a line-strong thumb.
+There are no decorative gradients, colored glows, floating neon cards, or deep shadow stacks. A small incumbent functional shadow may support a modal or selected overlay, but it does not become a visual language.
 
-**The Quiet Depth Rule.** Establish hierarchy through tone, spacing, and a fine boundary before adding elevation.
+**The quiet depth rule.** Separate work modes with structure first; add elevation only when it proves containment or focus.
 
 ## Shapes
 
-Compact rounded rectangles define the controls. Frontmatter captures the observed radius vocabulary: keycaps and inline code are tight, controls are modestly rounded, dialogs and grouped settings are softer, and the composer has the largest common container radius. Status badges can be pills; they do not dictate ordinary button shapes.
+Controls use compact rounded rectangles. The composer is the softest common container; agent cards and inspector sections use controlled radii; dense chips, key hints, and source-type labels are tighter. Pills are for truly compact status or filter tokens, not the default form of every button.
 
-The original mark has two concentric circles and four focus ticks, with a (1.6px) stroke in its (32 × 32) viewbox. It inherits current text color. BRAND.md defines minimum size and clear space. Lucide line icons supply interface actions; navigation uses (19px) icons at (1.65px) stroke.
+Lucide line icons and the concentric LENS mark remain the icon language. Icons have text labels or accessible names; an unfamiliar icon never carries a critical action alone. Preserve the existing visible keyboard-focus treatment whenever a control is restyled.
 
 ## Components
 
-### Buttons and navigation
+### Harness rail and utility bar
 
-Primary actions invert accent and on-accent, have a minimum height of (36px), and fade to (85%) opacity on hover. Disabled submit uses surface and muted ink with a not-allowed cursor. The new-research action is (38 × 38px); preference icon buttons are (36 × 36px). Navigation stacks an icon and label. Hover and `aria-current="page"` use surface plus ink; current state is also exposed semantically.
+The utility bar carries lightweight, truthful desktop controls such as workspace actions, language/theme, and window-level context. The rail starts with the LENS mark and wordmark, then a clear entry action, primary navigation, and real research history. Group labels are quiet but readable; row actions appear on hover and remain keyboard reachable. Do not place imaginary repositories, schedules, quotas, or team agents here.
 
-Global keyboard focus is a (2px) focus-color outline with (4px) offset. Some fields use a focused boundary instead. Preserve a visible equivalent when overriding the outline.
+### Question composer
 
-### Question composer and templates
+The composer accepts the existing question workflow. It has a clear text area, real model/search controls where those are available, concise keyboard guidance, and one primary submit action. Enter submits unless Shift is held or IME composition is active; Shift+Enter inserts a line break. Empty and loading states remain honest and preserve draft text.
 
-The composer has a line-strong border and panel background. Its textarea is (16px), grows within a (100–260px) height range, and permits vertical resizing. Focus-within clarifies the enclosing border. Native selects expose depth and source focus with accessible labels. Submit is disabled for an empty trimmed question or while loading.
+### Event stream and agent cards
 
-Enter submits unless Shift is held or input composition is active; Shift+Enter inserts a line break. Template chips replace a recognized template prefix while preserving the subject, set applicable mode/focus, and return focus to the textarea. Topic rows populate and focus the question. The model name is a separate setup control with bidirectional text isolation.
+The canvas maps existing session, researcher, fan-out, audit, source, and report events into a readable sequence. An agent card names the real role, state, elapsed time when supplied, and a short current activity. Tool chips name actual queries or operations. A waiting, retrying, successful, and failed state must be visually and verbally distinct. If no event exists, the interface says so instead of manufacturing progress.
 
-### Search, lists, and reports
+### Artifact inspector
 
-Library search uses a panel field with an inset icon and fine boundary. Report entries are divided rows with title, date, source count, and directional icon; hover underlines the title. Empty history and unmatched filters have distinct explanations and next actions. Clearing all history has an inline confirmation.
+The inspector is tabbed or sectioned around the real artifact set: plan, evidence/sources, report, and graph. Its empty treatment explains what will appear and how it arrives. Evidence rows expose the source title, domain or URL, and available relevance/status metadata. Report and graph summaries link or focus their canonical canvas surfaces; the inspector does not duplicate full report reading.
 
-The graph is a list of received research nodes with type, available parent relationship, status text, and icon. Empty and loading states are distinct. Do not illustrate fabricated completed nodes as real progress. Report prose uses the reading measure above, scrollable code blocks, logical blockquote borders, and tabular numerals in tables. Neutral report/export controls share the workspace palette, and table controls follow the selected interface language.
+### Navigation, reports, and dialogs
 
-### Settings and commands
-
-Settings group model, search, local provider, and preference controls in a bounded dialog. Provider and model selections use neutral surfaces and borders. API/model identifiers use monospace where helpful. Commands provide search, ArrowUp/ArrowDown selection, and Enter activation. Ctrl/Cmd+K opens commands; Ctrl/Cmd+N starts research. Export commands appear only with an active report.
-
-Both dialogs use labelled modal semantics, initial focus, Tab containment, Escape close, and restoration to the prior focused element when it remains connected. These come from `useDialogFocus`; they do not establish a complete accessibility audit.
-
-Reduced-motion CSS reduces animation and transition durations to (.01ms), one animation iteration, and automatic scrolling. Rail and primary-action transitions use (.18s ease-out); composer borders use (.2s ease-out). Separately implemented animation systems still need checking.
-
-### Identity and truthful states
-
-LENS is the title, mark, and visible product name in both languages. Packaging retains `deep-research-desktop` and `com.deepresearch.desktop`; history/settings retain `deep_research_history` and `deep_research_settings`. Language/theme preferences use `lens_language` and `lens_theme`. Preserve these and existing endpoints through visual updates.
-
-Settings accurately state that the active storage path is localStorage and key encryption is not enabled there. An available Electron secureStore API does not establish encrypted UI persistence. Model discovery and research require a working server/provider configuration; local Ollama does not make web retrieval offline. Browser previews alone do not establish paid-research reliability, export fidelity, security, or universal accessibility.
+Existing Home, Discover, Library, Graph, Skills, Settings, commands, and reports retain their working routes and semantics. The harness is a workspace mode, not a replacement for those product capabilities. Reports keep a comfortable reading measure; tables, source links, empty/error recovery, focus trapping, Escape, and reduced-motion behavior remain intact.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** use semantic theme channels for surfaces, ink, focus, and routine controls.
-- **Do** keep the question and readable report central while retaining the compact navigation rail.
-- **Do** preserve Inter/Cairo, logical spacing, and the left-to-right LENS wordmark.
-- **Do** pair status color with text or an icon and describe empty/error recovery clearly.
-- **Do** preserve visible keyboard focus, draft text through setup, and reduced-motion behavior.
-- **Do** preserve application and storage identifiers during visible rebranding.
+- **Do** translate the supplied Stitch structure and spacing into React components backed by LENS state.
+- **Do** show only genuine research questions, events, tool activity, sources, plans, reports, and graph data.
+- **Do** give the report canvas the largest share of visual attention.
+- **Do** preserve Inter/Cairo, logical direction, visible focus, reduced motion, and dark/light semantic tokens.
+- **Do** let the inspector collapse when it has no active artifact or harms reading space.
+- **Do** describe empty, waiting, retrying, and failed research states explicitly.
 
 ### Don't:
 
-- **Don't** add decorative glow, gradient wordmarks, or an unsupported Pro tier.
-- **Don't** restore the obsolete three-pane proposal as current layout documentation.
-- **Don't** use brand accent color to distinguish routine report or navigation actions.
-- **Don't** claim verified encryption, offline web research, guaranteed accuracy, or completed graph activity without supporting implementation and evidence.
-
+- **Don't** retain Antigravity names, marks, blue/amber identity styling, decorative glows, gradients, or copied placeholder copy.
+- **Don't** display fabricated PRs, commits, test passes, terminal commands, repositories, scheduled work, source counts, or agent outcomes.
+- **Don't** turn the workspace into a generic IDE, a permanent blank three-pane shell, or a dashboard of equal-weight cards.
+- **Don't** add an unsupported Pro tier, pretend an unimplemented control works, or claim research completion before LENS receives it.
+- **Don't** sacrifice report readability, keyboard operation, or Arabic layout to reproduce a screenshot exactly.
