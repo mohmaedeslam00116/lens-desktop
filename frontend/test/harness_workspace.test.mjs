@@ -105,4 +105,14 @@ describe('Harness preview integration contract', () => {
     assert.ok(app.split('<CommandPalette').length > 2, 'preview branch should render CommandPalette');
     assert.ok(app.split('<PlanApprovalModal').length > 2, 'preview branch should render PlanApprovalModal');
   });
+
+  it('terminates rejected live sessions and prevents mixed history state during a run', async () => {
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    const harness = await readFile(new URL('../src/components/harness/LensHarnessWorkspace.tsx', import.meta.url), 'utf8');
+
+    assert.doesNotMatch(app, /if \(ev\.code === 1008\) return/);
+    assert.match(app, /ev\.code === 1008[\s\S]{0,500}setIsSearching\(false\)/);
+    assert.match(app, /if \(isSearching\) return;/);
+    assert.match(harness, /disabled=\{loading\}/);
+  });
 });

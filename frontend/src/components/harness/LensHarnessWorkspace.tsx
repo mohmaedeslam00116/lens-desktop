@@ -148,8 +148,9 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
                 <li key={item.id}>
                   <button
                     type="button"
+                    disabled={loading}
                     aria-current={item.query === currentQuery ? 'page' : undefined}
-                    onClick={() => { onSelectReport(item); setIsRailOpen(false); }}
+                    onClick={() => { if (!loading) { onSelectReport(item); setIsRailOpen(false); } }}
                     title={item.query}
                   >
                     <FileText size={14} />

@@ -565,7 +565,17 @@ export function App() {
         if (sessionGeneration !== sessionGenerationRef.current) return;
         wsRef.current = null;
         if (runTerminatedRef.current) return; // finished/cancelled/error closed intentionally
-        if (ev.code === 1008) return; // engine rejected: session unknown
+        if (ev.code === 1008) {
+          runTerminatedRef.current = true;
+          const sessionError = language === 'ar'
+            ? 'انتهت جلسة البحث المباشر. أعد المحاولة لبدء جلسة جديدة.'
+            : 'The live research session is no longer available. Start a new research to continue.';
+          setCurrentStatus(sessionError);
+          setResearchError(sessionError);
+          updateNonTerminalAgentStatus('failed');
+          setIsSearching(false);
+          return;
+        }
         if (reconnectAttemptsRef.current >= 5) {
           runTerminatedRef.current = true;
           const reconnectError = language === 'ar'
@@ -739,8 +749,25 @@ export function App() {
           onStartResearch={handleStartResearch}
           onNewResearch={handleNewResearch}
           onSelectReport={(report) => {
+            if (isSearching) return;
             setActiveReport(report);
             setCurrentQuery(report.query);
+            setQuery(report.query);
+            setCurrentStatus('');
+            setResearchError('');
+            setThoughts([]);
+            setSubqueries([]);
+            setVisitedSources([]);
+            setReflections(report.reflections || []);
+            setGraphNodes(report.graphNodes || []);
+            setAgents([]);
+            setAgentEventCount(0);
+            setLiveReport(report.content || '');
+            liveReportRef.current = report.content || '';
+            setWideTelemetry(report.wideTelemetry || null);
+            setWideExpansionHistory(report.wideExpansionHistory || []);
+            setProposedPlan(null);
+            setIsPlanModalOpen(false);
           }}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onExport={handleExport}
