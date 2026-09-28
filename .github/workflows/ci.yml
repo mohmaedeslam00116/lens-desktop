@@ -82,6 +82,12 @@ jobs:
       - name: Package unpacked build
         run: npm run pack:unpacked
 
+      - name: Verify packaged artifact contents
+        # Packaging can silently drop or stale-build a file that the sources
+        # declare. Reading the packaged bytes first means the smoke test that
+        # follows never has to guess whether it is driving current behaviour.
+        run: npm run verify:package
+
       - name: Smoke test the packaged runtime
         # A CI runner is slower than a workstation, so the readiness deadline is
         # generous; the script still fails on the first contract violation.
