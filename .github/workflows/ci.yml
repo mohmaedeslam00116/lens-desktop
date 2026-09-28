@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, build engine, and test
+    # LENS ships as a Windows desktop client, and the embedded engine is
+    # validated against that runtime, so the gate runs where the product runs.
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck renderer and Electron main
+        run: npm run typecheck
+
+      # The test suite imports the compiled engine from dist-electron, so the
+      # engine build is a prerequisite of the tests, not just of packaging.
+      - name: Build embedded engine
+        run: npm run build:electron
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Build renderer bundle
+        run: npx vite build

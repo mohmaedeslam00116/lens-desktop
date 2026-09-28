@@ -7,9 +7,18 @@ dist/
 dist-electron/
 dist-installer/
 build/
+# ...except the electron-builder product icon, which is source: a fresh clone
+# cannot package an installer without it.
+!frontend/build/
+frontend/build/*
+!frontend/build/lens.ico
 *.exe
 *.blockmap
 *.7z
+
+# Generated test artifacts
+# The parity-harness divergence artifact is regenerated per run (ADR-0011).
+frontend/test/artifacts/*.json
 
 # Environment variables & local configuration
 .env

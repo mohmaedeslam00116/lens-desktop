@@ -4,6 +4,27 @@ import http from 'node:http';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import v8 from 'node:v8';
+import vm from 'node:vm';
+
+/**
+ * Retained-heap sampler for the pool's 10 MB memory contract.
+ *
+ * `process.memoryUsage().heapUsed` reports everything V8 has allocated but not
+ * yet collected, so a raw before/after delta measures the sibling tests'
+ * garbage as much as the pool's retention, and the assertion became
+ * order-dependent. Collecting first makes the delta measure retained growth
+ * only, without changing how the suite is launched.
+ */
+function createRetainedHeapSampler() {
+  v8.setFlagsFromString('--expose_gc');
+  const collectGarbage = vm.runInNewContext('gc');
+  v8.setFlagsFromString('--no-expose_gc');
+  return () => {
+    collectGarbage();
+    return process.memoryUsage().heapUsed;
+  };
+}
 
 import {
   normalizeCanonicalUrl,
@@ -622,9 +643,11 @@ describe('200-Source Scale & Memory Bounds Verification', () => {
       }
     }
 
-    const beforeMemory = process.memoryUsage().heapUsed;
+    const sampleRetainedHeap = createRetainedHeapSampler();
+    sampleRetainedHeap(); // discard garbage left behind by the tests above
+    const beforeMemory = sampleRetainedHeap();
     const results = await pool.scrapeAll(testUrls);
-    const afterMemory = process.memoryUsage().heapUsed;
+    const afterMemory = sampleRetainedHeap();
 
     const deltaBytes = Math.max(0, afterMemory - beforeMemory);
     const deltaMB = deltaBytes / (1024 * 1024);
@@ -633,8 +656,17 @@ describe('200-Source Scale & Memory Bounds Verification', () => {
     assert.ok(results.length < 200, `Expected deduplication to filter duplicate items, got ${results.length}`);
     assert.ok(results.length >= 195, `Expected >= 195 unique pages admitted, got ${results.length}`);
 
-    // Verify memory bounds: resident memory increase < 10 MB
+    // Verify memory bounds: retained heap growth < 10 MB
     assert.ok(deltaMB < 10, `Memory footprint ${deltaMB.toFixed(2)} MB exceeded 10 MB limit`);
+
+    // The retained heap must also be attributable to admitted payload: the pool
+    // is never allowed to hold more than the per-page character cap it declares.
+    const retainedChars = results.reduce((total, page) => total + (page?.content?.length || 0), 0);
+    const maxRetainedChars = results.length * (6000 + '... [trimmed]'.length);
+    assert.ok(
+      retainedChars <= maxRetainedChars,
+      `Retained content ${retainedChars} chars exceeded the declared cap of ${maxRetainedChars}`
+    );
 
     // Verify stats from pool deduplicator verifying all 3 tiers at scale
     const stats = pool.getDeduplicationStats();
