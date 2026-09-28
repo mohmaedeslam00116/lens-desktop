@@ -170,6 +170,13 @@ function setCorsHeaders(res: http.ServerResponse, origin?: string) {
 
 export const MAX_JSON_REQUEST_SIZE = 2 * 1024 * 1024; // 2 MB safe maximum request size
 
+/**
+ * Failsafe deadline for finishing a 413 response after the client stops
+ * uploading an oversized body. Generous on purpose: ending the response early
+ * makes TCP discard it as an RST.
+ */
+export const PAYLOAD_TOO_LARGE_DRAIN_TIMEOUT_MS = 30_000;
+
 function parseJsonBody<T>(req: http.IncomingMessage, maxBytes = MAX_JSON_REQUEST_SIZE): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -226,13 +233,32 @@ function sendPayloadTooLargeResponse(req: http.IncomingMessage, res: http.Server
     'Connection': 'close',
   });
   res.flushHeaders?.();
-  res.end(JSON.stringify({ error: message }));
-  // Half-close gracefully: the client must be able to READ the 413 response
-  // even while it is still sending the oversized body. Destroying the request
-  // socket here sends RST ahead of the response bytes under load — clients
-  // then observe ECONNRESET instead of the rejection (real-world robustness
-  // gap surfaced by the report-export 413 test under parallel CPU load).
-  // 'Connection: close' plus draining to end releases the socket normally.
+
+  // Drain the client's inbound stream FIRST. Node reads a response on a socket
+  // whose inbound buffer is non-empty and destroys that socket on close —
+  // which emits an RST and destroys the unread response bytes with it, so the
+  // client observes ECONNRESET instead of 413. Waiting for 'end' (the client
+  // finishes writing the oversized body) before ending the response keeps the
+  // bytes intact; the deadline is only a failsafe for a client that never
+  // finishes, and it is deliberately generous so parallel test load cannot
+  // trigger an early destroy.
+  let replied = false;
+  const reply = () => {
+    if (replied) return;
+    replied = true;
+    clearTimeout(deadline);
+    if (!res.writableEnded) {
+      res.end(JSON.stringify({ error: message }));
+    }
+  };
+
+  const deadline = setTimeout(reply, PAYLOAD_TOO_LARGE_DRAIN_TIMEOUT_MS);
+  deadline.unref?.();
+
+  req.on('end', reply);
+  // A client that aborts mid-upload can never read the response; releasing the
+  // socket here just stops us from leaking the deadline.
+  req.on('aborted', reply);
   req.resume();
 }
 

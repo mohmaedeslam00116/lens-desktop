@@ -7,6 +7,17 @@
 
 import { SourceItem, PlanMilestone, ResearchPlan } from './types';
 
+/**
+ * Source records accepted by the shelf readers.
+ *
+ * `SourceItem` is the engine's fully-populated contract, but the renderer
+ * transport may hand the shelf records that omit `domain` and
+ * `credibilityScore`: `enrichSources` derives the domain from the URL and
+ * defaults the credibility score, so the readers accept either shape.
+ */
+export type EvidenceShelfSourceInput = Omit<SourceItem, 'domain' | 'credibilityScore'> &
+  Partial<Pick<SourceItem, 'domain' | 'credibilityScore'>>;
+
 export interface EvidenceShelfContext {
   sources: SourceItem[];
   plan?: ResearchPlan | null;
@@ -201,7 +212,7 @@ export interface ExcerptLike {
 }
 
 export function enrichSources(
-  sources: SourceItem[],
+  sources: EvidenceShelfSourceInput[],
   plan?: ResearchPlan | null,
   reportText: string = '',
   excerpts: ExcerptLike[] = []
