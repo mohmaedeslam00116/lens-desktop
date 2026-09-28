@@ -14,7 +14,7 @@ import {
   X
 } from 'lucide-react';
 import { CustomTable } from './CustomTable';
-import { MermaidDiagram } from './MermaidDiagram';
+import { DiagramCanvas } from './DiagramCanvas';
 import { CalloutAlert } from './CalloutAlert';
 import { CitationBadge } from './CitationBadge';
 import { SourceItem, Language } from '../../types';
@@ -186,7 +186,7 @@ export const ReportRenderer: React.FC<ReportRendererProps> = ({
       const rawCode = String(children).replace(/\n$/, '');
 
       if (!inline && languageName === 'mermaid') {
-        return <MermaidDiagram code={rawCode} />;
+        return <DiagramCanvas code={rawCode} />;
       }
 
       if (!inline) {

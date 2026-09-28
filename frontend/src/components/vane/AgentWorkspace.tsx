@@ -16,7 +16,7 @@ import {
   TrendingUp,
   Filter
 } from 'lucide-react';
-import { MermaidDiagram } from './MermaidDiagram';
+import { DiagramCanvas } from './DiagramCanvas';
 import { FacetGroupedShelf } from '../research/FacetGroupedShelf';
 import { SourceItem, Language, ResearchStep, ResearchPlan } from '../../types';
 import { extractTables, extractMermaidDiagrams, extractKeyMetrics, tableToCSV } from '../../utils/markdownArtifacts';
@@ -292,7 +292,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({
             </div>
           ) : (
             diagrams.map((d) => (
-              <MermaidDiagram key={d.id} code={d.code} title={d.title} />
+              <DiagramCanvas key={d.id} code={d.code} title={d.title} />
             ))
           )}
         </div>
