@@ -33,6 +33,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .scratch/
+# Delegate-tool scratch state, not product data
+.freebuff/
 
 # System & IDE artifacts
 .DS_Store

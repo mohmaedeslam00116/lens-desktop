@@ -103,6 +103,7 @@ globalSkillRegistry.discoverAll().catch(err => {
 let httpServer: http.Server | null = null;
 let wss: WebSocketServer | null = null;
 let reportExportService: ReportExportService | null = null;
+let boundPort: number | null = null;
 
 export interface EmbeddedServerOptions {
   reportExportService?: ReportExportService;
@@ -341,6 +342,24 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
       resolve({ port });
       return;
     }
+
+    let listening = false;
+    let settled = false;
+
+    // Startup failed: the port is not ours. Release the half-built pieces so a
+    // retry on another port starts clean, then report the real cause.
+    const failStartup = (err: any) => {
+      if (settled) return;
+      settled = true;
+      if (wss) {
+        wss.removeAllListeners();
+        wss = null;
+      }
+      httpServer = null;
+      boundPort = null;
+      reject(err);
+    };
+
     reportExportService = options.reportExportService || null;
 
     httpServer = http.createServer(async (req, res) => {
@@ -363,10 +382,18 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
       const pathname = parsedUrl.pathname;
 
       try {
-        // Health check
+        // Health check. This doubles as the operator smoke test's readiness
+        // probe, so it reports the owning process and bound port: only that
+        // pair proves the caller reached THIS engine rather than an unrelated
+        // listener that happens to answer on the same port.
         if (pathname === '/' && req.method === 'GET') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', engine: 'Vane TypeScript Deep Research Engine' }));
+          res.end(JSON.stringify({
+            status: 'ok',
+            engine: 'LENS embedded research engine',
+            pid: process.pid,
+            port: boundPort,
+          }));
           return;
         }
 
@@ -798,6 +825,17 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
     // WebSocket Server for live events
     wss = new WebSocketServer({ server: httpServer });
 
+    // `ws` re-emits the HTTP server's errors on the WebSocketServer, so without
+    // this listener a taken port crashes the process with an unhandled 'error'
+    // event instead of reaching the caller's fallback.
+    wss.on('error', (err: any) => {
+      if (listening) {
+        console.error('[EmbeddedEngine] WebSocket server error after startup:', err);
+        return;
+      }
+      failStartup(err);
+    });
+
     wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       const origin = req.headers.origin;
       if (origin && !isAllowedLocalOrigin(origin)) {
@@ -882,25 +920,32 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
     });
 
     httpServer.on('error', (err: any) => {
-      if (err.code === 'EADDRINUSE') {
-        console.log(`[EmbeddedEngine] Port ${port} already in use. Assuming previous instance active.`);
-        resolve({ port });
-      } else {
-        reject(err);
+      if (listening) {
+        // The engine is already serving. A later socket error must be surfaced
+        // without tearing down a live server or its WebSocket endpoint.
+        console.error('[EmbeddedEngine] Server error after startup:', err);
+        return;
       }
+      // A bound port is ownership. Silently treating a foreign listener as
+      // "the previous instance" would let LENS drive whatever answered on the
+      // preferred port, so the failure reaches the caller instead of resolving.
+      failStartup(err);
     });
 
     httpServer.listen(port, '127.0.0.1', () => {
       const address = httpServer?.address();
-      const activePort = address && typeof address === 'object' ? address.port : port;
-      console.log(`[EmbeddedEngine] Native Vane TypeScript Engine running on http://127.0.0.1:${activePort}`);
-      resolve({ port: activePort });
+      boundPort = address && typeof address === 'object' ? address.port : port;
+      listening = true;
+      settled = true;
+      console.log(`[EmbeddedEngine] LENS research engine running on http://127.0.0.1:${boundPort}`);
+      resolve({ port: boundPort });
     });
   });
 }
 
 export function stopEmbeddedServer(): Promise<void> {
   return new Promise((resolve) => {
+    boundPort = null;
     if (wss) {
       wss.close();
       wss = null;

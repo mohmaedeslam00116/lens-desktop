@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, X } from 'lucide-react';
+import { Search, X, AlertTriangle } from 'lucide-react';
 import { Sidebar } from './components/vane/Sidebar';
 import { EmptyChat } from './components/vane/EmptyChat';
 import { MessageBox } from './components/vane/MessageBox';
@@ -27,10 +27,22 @@ import {
 } from './types';
 import { buildResearchStartPayload } from './utils/researchRequest.mjs';
 import { resolveReportTelemetry } from './utils/reportTelemetry.mjs';
+import { resolveEngineEndpointFromWindow, DEFAULT_ENGINE_PORT } from './utils/engineEndpoint.mjs';
+import { useEngineHealth } from './hooks/useEngineHealth';
+import type { EngineProbeResult } from './utils/engineHealth.mjs';
 import { telemetryStep, AgentFeedState, LiveEventLike } from './utils/liveFeed';
 
-const API_BASE = 'http://127.0.0.1:8000';
-const WS_BASE = 'ws://127.0.0.1:8000';
+/**
+ * The embedded engine's endpoint is bound by the Electron main process, which
+ * may fall back to an ephemeral port when the preferred one is taken. Reading
+ * it from the preload bridge keeps the workspace pointed at the engine that
+ * actually started; the declared default applies only in browser development.
+ */
+const ENGINE_ENDPOINT = resolveEngineEndpointFromWindow(
+  typeof window === 'undefined' ? null : window
+);
+const API_BASE = ENGINE_ENDPOINT.baseUrl;
+const WS_BASE = ENGINE_ENDPOINT.wsBaseUrl;
 
 const DEFAULT_SETTINGS: ApiSettings = {
   search_provider: 'duckduckgo',
@@ -55,6 +67,44 @@ const DEFAULT_SETTINGS: ApiSettings = {
   }
 };
 
+/**
+ * Operator-facing explanation of an unreachable engine.
+ *
+ * The probe deliberately reports a machine-readable `reason` instead of prose,
+ * so the interface owns the wording. Each message names the condition that was
+ * actually observed; none of them claim the engine is working.
+ */
+function describeEngineOutage(
+  reason: EngineProbeResult['reason'],
+  language: Language,
+  address: string
+): string {
+  const ar = language === 'ar';
+  switch (reason) {
+    case 'timeout':
+      return ar
+        ? `لم يستجب محرك البحث خلال المهلة المحددة على ${address}.`
+        : `The research engine did not answer within the timeout at ${address}.`;
+    case 'http_error':
+      return ar
+        ? `أعاد محرك البحث خطأً على ${address}.`
+        : `The research engine answered with an error at ${address}.`;
+    case 'invalid_report':
+      return ar
+        ? `هناك برنامج آخر يستجيب على منفذ محرك البحث (${address}) وليس LENS.`
+        : `Something other than LENS is answering on the engine port (${address}).`;
+    case 'port_owner_mismatch':
+      return ar
+        ? `يستخدم برنامج آخر منفذ محرك البحث المتوقع؛ ومحرك LENS مسجّل على منفذ مختلف.`
+        : `Another program holds the expected engine port, and the LENS engine reported a different one.`;
+    case 'unreachable':
+    default:
+      return ar
+        ? `لا يعمل محرك البحث المدمج على ${address}.`
+        : `The embedded research engine is not running at ${address}.`;
+  }
+}
+
 export function App() {
   const [language, setLanguage] = useState<Language>(() => {
     try { return localStorage.getItem('lens_language') === 'en' ? 'en' : 'ar'; } catch { return 'ar'; }
@@ -67,6 +117,17 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isHarnessPreviewOpen, setIsHarnessPreviewOpen] = useState(false);
+
+  /**
+   * The engine's live reachability. The workspace used to discover a dead engine
+   * only when the first research request failed, and the startup failure was
+   * console-only (invisible in a packaged build).
+   */
+  const engineHealth = useEngineHealth(
+    ENGINE_ENDPOINT.baseUrl,
+    ENGINE_ENDPOINT.port,
+    DEFAULT_ENGINE_PORT
+  );
 
   // Search Engine Parameters
   const [query, setQuery] = useState('');
@@ -813,7 +874,7 @@ export function App() {
 
   return (
     <div className="app-shell">
-      {/* 1. Left Vertical Vane Sidebar (72px) */}
+      {/* 1. Left vertical LENS rail (72px) */}
       <Sidebar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -840,6 +901,29 @@ export function App() {
       </header>
       <main className="workspace-main" id="main-content">
         {researchError && <div className="research-alert" role="alert"><p>{researchError}</p><button className="icon-button" onClick={() => setResearchError('')} aria-label={language === 'ar' ? 'إغلاق التنبيه' : 'Dismiss alert'}><X size={16} /></button></div>}
+        {/*
+          Engine reachability. Previously a dead engine was invisible until the
+          first search failed, and the startup failure only reached a console the
+          packaged build has no way to show. The banner states the observed
+          condition and the address that was probed; it never claims readiness.
+        */}
+        {!engineHealth.checking && engineHealth.status === 'offline' && (
+          <div className="engine-alert" role="status" aria-live="polite">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <p>
+              <strong>{language === 'ar' ? 'محرك البحث غير متاح' : 'Research engine unavailable'}</strong>
+              {' — '}
+              {ENGINE_ENDPOINT.status === 'failed' && ENGINE_ENDPOINT.error
+                ? ENGINE_ENDPOINT.error
+                : describeEngineOutage(engineHealth.reason, language, API_BASE)}
+              {' '}
+              {language === 'ar'
+                ? 'لن تعمل طلبات البحث حتى يتوفر المحرك.'
+                : 'Research requests cannot run until the engine is available.'}
+            </p>
+            <span className="engine-alert-hint" dir="ltr">{API_BASE}</span>
+          </div>
+        )}
         {activeTab === 'home' && (
           <>
             {!activeReport && !isSearching ? (
