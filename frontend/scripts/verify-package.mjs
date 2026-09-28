@@ -29,8 +29,61 @@ const read = (needle) => {
     (candidate) => candidate.replace(/\\/g, '/').replace(/^\//, '') === needle
   );
   if (!entry) return null;
-  return extractFile(asarPath, entry.replace(/^[\\/]/, '')).toString();
+  return stripComments(extractFile(asarPath, entry.replace(/^[\\/]/, '')).toString());
 };
+
+/**
+ * Removes comments before probing.
+ *
+ * The engine build does not set `removeComments`, so the compiled output keeps
+ * docblocks. Probing raw bytes would let a comment satisfy a probe — delete the
+ * `EADDRINUSE` handling and leave a note mentioning it, and the gate would
+ * still pass. Probes must match executable code, so comments are stripped
+ * first. String and template contents are skipped so that a `//` inside a URL
+ * cannot be mistaken for a line comment; template interpolations are treated as
+ * string text, which at worst leaves a comment unbundled and fails loudly
+ * rather than passing silently.
+ */
+function stripComments(source) {
+  let out = '';
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+
+    if (char === '/' && next === '*') {
+      const end = source.indexOf('*/', index + 2);
+      index = end === -1 ? source.length : end + 2;
+      out += ' ';
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      const end = source.indexOf('\n', index + 2);
+      index = end === -1 ? source.length : end;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      const quote = char;
+      out += char;
+      index += 1;
+      while (index < source.length) {
+        const inner = source[index];
+        out += inner;
+        index += 1;
+        if (inner === '\\') {
+          out += source[index] ?? '';
+          index += 1;
+          continue;
+        }
+        if (inner === quote) break;
+      }
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
+}
 
 const expectations = [
   {

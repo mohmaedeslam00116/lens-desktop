@@ -6,6 +6,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The steps only read the repository, so the token is scoped accordingly rather
+# than inheriting the repository or organization default.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

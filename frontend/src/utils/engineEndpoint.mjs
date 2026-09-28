@@ -16,14 +16,26 @@ export function resolveEngineEndpoint(engineApi) {
   const port = Number.isInteger(reported?.port) && reported.port > 0
     ? reported.port
     : DEFAULT_ENGINE_PORT;
-  const baseUrl = trimTrailingSlash(reported?.baseUrl) || `http://127.0.0.1:${port}`;
-  const wsBaseUrl = trimTrailingSlash(reported?.wsBaseUrl) || `ws://127.0.0.1:${port}`;
+
+  // A failed startup must not leave the renderer holding a routable address.
+  // The preferred port is only a guess at that point, so a listener that
+  // happens to answer on it would receive this workspace's requests — including
+  // the API keys sent with a research start. Reporting no endpoint at all makes
+  // that misdelivery structurally impossible, instead of depending on every
+  // call site remembering to check the status first.
+  const failed = reported?.status === 'failed';
+  const baseUrl = failed
+    ? null
+    : trimTrailingSlash(reported?.baseUrl) || `http://127.0.0.1:${port}`;
+  const wsBaseUrl = failed
+    ? null
+    : trimTrailingSlash(reported?.wsBaseUrl) || `ws://127.0.0.1:${port}`;
 
   return {
     port,
     baseUrl,
     wsBaseUrl,
-    status: reported?.status === 'failed' ? 'failed' : 'ready',
+    status: failed ? 'failed' : 'ready',
     error: typeof reported?.error === 'string' && reported.error ? reported.error : null,
   };
 }

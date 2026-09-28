@@ -234,7 +234,6 @@
 .engine-alert > svg { color: rgb(var(--status-warning)); }
 .engine-alert p { flex: 1; margin: 0; }
 .engine-alert-hint { color: rgb(var(--ink-muted)); white-space: nowrap; }
-@media (prefers-reduced-motion: reduce) { .engine-alert > svg { transition: none; } }
 .library-report { width: 100%; text-align: start; padding: 20px 0; display: flex; justify-content: space-between; align-items: center; gap: 16px; border-top: 1px solid rgb(var(--line)); }
 .library-report:hover h3 { text-decoration: underline; text-underline-offset: 4px; }
 .library-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 60px 16px; text-align: center; }

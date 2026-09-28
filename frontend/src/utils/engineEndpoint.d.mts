@@ -1,10 +1,13 @@
 export interface EngineEndpoint {
   /** TCP port the embedded engine is bound to. */
   port: number;
-  /** HTTP origin, e.g. `http://127.0.0.1:8000`. */
-  baseUrl: string;
-  /** WebSocket origin, e.g. `ws://127.0.0.1:8000`. */
-  wsBaseUrl: string;
+  /**
+   * HTTP origin, e.g. `http://127.0.0.1:8000` — `null` when the main process
+   * could not start the engine, so no address is routable.
+   */
+  baseUrl: string | null;
+  /** WebSocket origin, e.g. `ws://127.0.0.1:8000` — `null` on startup failure. */
+  wsBaseUrl: string | null;
   /** `failed` when the main process could not start the engine at all. */
   status: 'ready' | 'failed';
   /** Operator-facing failure reason, present only when `status` is `failed`. */

@@ -77,9 +77,19 @@ const DEFAULT_SETTINGS: ApiSettings = {
 function describeEngineOutage(
   reason: EngineProbeResult['reason'],
   language: Language,
-  address: string
+  address: string | null
 ): string {
   const ar = language === 'ar';
+
+  // A startup failure leaves no address to name: the main process never bound
+  // the engine, so any address here would be a guess. Saying so is the honest
+  // report, and it keeps a guessed address out of the operator's message.
+  if (!address) {
+    return ar
+      ? 'لم يبدأ محرك البحث المدمج، لذا لا يوجد عنوان يمكن فحصه.'
+      : 'The embedded research engine did not start, so there is no address to check.';
+  }
+
   switch (reason) {
     case 'timeout':
       return ar
@@ -921,7 +931,9 @@ export function App() {
                 ? 'لن تعمل طلبات البحث حتى يتوفر المحرك.'
                 : 'Research requests cannot run until the engine is available.'}
             </p>
-            <span className="engine-alert-hint" dir="ltr">{API_BASE}</span>
+            {/* Only an address that exists is named. A startup failure has none,
+                and an empty hint would read as a gap in the message. */}
+            {API_BASE && <span className="engine-alert-hint" dir="ltr">{API_BASE}</span>}
           </div>
         )}
         {activeTab === 'home' && (

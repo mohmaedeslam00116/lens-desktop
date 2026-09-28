@@ -161,15 +161,37 @@ describe('Engine endpoint resolution', () => {
     assert.equal(endpoint.wsBaseUrl, `ws://127.0.0.1:${DEFAULT_ENGINE_PORT}`);
   });
 
-  it('carries a startup failure through to the interface', () => {
+  it('carries a startup failure through to the interface', async () => {
     const endpoint = resolveEngineEndpoint({
       endpoint: { port: null, baseUrl: null, wsBaseUrl: null, status: 'failed', error: 'EADDRINUSE' },
     });
 
     assert.equal(endpoint.status, 'failed');
-    assert.equal(endpoint.error, 'EADDRINUSE');
-    // The address is still usable for the notice even though nothing listened.
-    assert.equal(endpoint.baseUrl, `http://127.0.0.1:${DEFAULT_ENGINE_PORT}`);
+    assert.equal(endpoint.error, 'EADDRINUSE', 'the operator-facing reason must survive resolution');
+    // The preference is still reported so the notice can name the port that was lost.
+    assert.equal(endpoint.port, DEFAULT_ENGINE_PORT);
+
+    // No address is routable. A failed startup means the preferred port is only
+    // a guess, and whatever holds it is not LENS — handing the workspace that
+    // address would send research starts (API keys included) to a stranger, so
+    // the failed endpoint resolves to no address at all.
+    assert.equal(endpoint.baseUrl, null);
+    assert.equal(endpoint.wsBaseUrl, null);
+
+    // The probe must refuse to touch the network rather than guess the port.
+    let attempts = 0;
+    const result = await probeEngineHealth({
+      baseUrl: endpoint.baseUrl,
+      expectedPort: endpoint.port,
+      fetchImpl: () => {
+        attempts += 1;
+        throw new Error('the probe must not request a guessed address');
+      },
+    });
+
+    assert.equal(attempts, 0, 'a failed startup must not produce a request to a guessed port');
+    assert.equal(result.status, 'offline');
+    assert.equal(result.reason, 'unreachable');
   });
 
   it('reads the bridge off the renderer window', () => {
