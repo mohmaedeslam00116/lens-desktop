@@ -369,7 +369,7 @@ export const EvidenceInspectionDrawer: React.FC<EvidenceInspectionDrawerProps> =
               </button>
             </div>
 
-            <div className="p-4 rounded-xl bg-panel border border-line-strong text-xs font-mono text-ink leading-relaxed whitespace-pre-wrap break-words select-text border-s-2 border-s-accent">
+            <div className="p-4 rounded-xl bg-panel border border-line-strong text-xs font-mono text-ink leading-relaxed whitespace-pre-wrap break-words select-text">
               {highlightVerbatimPassage(detail.exactPassage, detail.surroundingClaim)}
             </div>
           </section>
