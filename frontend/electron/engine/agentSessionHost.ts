@@ -30,7 +30,26 @@
 import { join } from 'path';
 import { homedir } from 'os';
 import { mkdirSync } from 'fs';
-import electron from 'electron';
+
+/**
+ * The Electron app object, resolved lazily. `require('electron')` at module
+ * load is a CI hazard: on a runner without the binary, the electron package
+ * synchronously spawns the binary download mid-test, freezing timers and
+ * reshuffling every wall-clock assumption. In the packaged app the import is
+ * trivial; in node tests it must never block, so failure to resolve simply
+ * falls back to the LENS-owned home path.
+ */
+function resolveElectronApp(): { getPath(name: string): string } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = require('electron');
+    const app = (electron as any)?.default?.app ?? (electron as any)?.app ?? null;
+    if (app && typeof app.getPath === 'function') return app;
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /** The research tools a LENS session may be granted; pi's todo joins them. */
 export const RESEARCH_TOOL_ALLOW_LIST = [
@@ -63,6 +82,13 @@ export interface ResearchSessionOptions {
   providerOverrides?: Record<string, string>;
   /** Resource-discovery working directory; defaults to the engine's cwd. */
   cwd?: string;
+  /**
+   * Override the LENS-owned agent discovery directory. Production callers
+   * never pass it — the app-data default holds. Test harnesses pass a
+   * per-process temp dir so concurrent test workers never share (and contend
+   * on) the runtime's credential file, which is environment-dependent.
+   */
+  agentDir?: string;
 }
 
 export interface HostedSession {
@@ -89,8 +115,8 @@ export async function loadPiRuntime(): Promise<any> {
  * to a LENS-owned path under the user home — never the user's real `~/.pi`.
  */
 export function resolveAgentDir(): string {
-  const app: any = (electron as any)?.app ?? null;
-  if (app && typeof app.getPath === 'function') {
+  const app = resolveElectronApp();
+  if (app) {
     try {
       return join(app.getPath('userData'), 'pi-agent');
     } catch {
@@ -105,6 +131,8 @@ export interface ConstructionFacts {
   sessionManagerKind: 'inMemory';
   agentDir: string;
   modelNetwork: false;
+  /** True when no provider was configured and the LENS offline placeholder was registered. */
+  offlineFallback: boolean;
 }
 
 let lastConstruction: ConstructionFacts | undefined;
@@ -170,6 +198,59 @@ function toPiTool(tool: LensToolSurface['definitions'][number], handler: LensToo
 }
 
 /**
+ * Zero-configured-provider construction guarantee (ADR-0014 amendment):
+ * construction is provider-independent by contract — the packaged app
+ * provisions its own providers, and a machine with none (a clean CI runner,
+ * a fresh install before Settings) must still build a usable session.
+ *
+ * When the runtime has no configured provider AT ALL — no stored auth, no
+ * environment keys, no models.json providers; the availability snapshot's
+ * `configuredProviders` is exactly that union — the seam registers a
+ * LENS-owned placeholder provider so `findInitialModel` resolves a model and
+ * `prompt()` passes its auth preflight instead of throwing before the loop
+ * ever starts. Real providers, when present, always win: the placeholder is
+ * only ever registered into an empty snapshot.
+ *
+ * The placeholder can never complete a network call: a literal sentinel key
+ * (never a `$ENV` reference, which would make it an environment probe) and
+ * an unroutable discard-port loopback URL. With no usable provider the
+ * admission guard (#119) remains the start-time authority — construction
+ * only refuses to be a dead end.
+ */
+const LENS_OFFLINE_PROVIDER_ID = 'lens-offline';
+const LENS_OFFLINE_SENTINEL_KEY = 'lens-offline-sentinel-not-a-credential';
+const LENS_OFFLINE_MODEL = {
+  id: 'lens-offline-1',
+  name: 'LENS Offline Placeholder',
+  reasoning: false,
+  input: ['text'],
+  cost: { input: 0, output: 0 },
+  contextWindow: 128000,
+  maxTokens: 8192,
+};
+
+/**
+ * Guarantee the runtime resolves a model at session construction: when no
+ * provider is configured, register the LENS offline placeholder. Returns
+ * whether the fallback fired (recorded as a construction fact for tests).
+ */
+function ensureUsableModel(runtime: any): boolean {
+  const snapshot = typeof runtime?.getAvailableSnapshot === 'function' ? runtime.getAvailableSnapshot() : [];
+  if (Array.isArray(snapshot) && snapshot.length > 0) return false;
+  runtime.registerProvider(LENS_OFFLINE_PROVIDER_ID, {
+    name: 'LENS Offline Placeholder',
+    // Discard port: connection refusal is instant and requires no network.
+    baseUrl: 'http://127.0.0.1:9/v1',
+    // Literal sentinel — never "$ENV" (that form is resolved from the
+    // environment; a literal is provably not a probe or a credential).
+    apiKey: LENS_OFFLINE_SENTINEL_KEY,
+    api: 'openai-completions',
+    models: [LENS_OFFLINE_MODEL],
+  });
+  return true;
+}
+
+/**
  * Build one research session (one Turn-Group) under the ADR-0014 contract.
  * Construction never requires a provider key — admission is a start-time
  * concern (the Provider Admission Guard), not a construction-time one.
@@ -180,7 +261,7 @@ export async function createResearchSession(
 ): Promise<HostedSession> {
   const pi = await loadPiRuntime();
   const cwd = options.cwd ?? process.cwd();
-  const agentDir = resolveAgentDir();
+  const agentDir = options.agentDir ?? resolveAgentDir();
   // The resource loader expects the agentDir to exist; create it idempotently
   // so first-construction never depends on prior app boot.
   mkdirSync(agentDir, { recursive: true });
@@ -196,17 +277,56 @@ export async function createResearchSession(
     settingsManager: pi.SettingsManager.inMemory(),
   });
 
+  // Zero-configured-provider guarantee: AFTER the services' internal model
+  // refresh (its snapshot is final here) and BEFORE session construction
+  // (findInitialModel reads the snapshot synchronously). Keyless machines
+  // get a usable model; configured machines keep theirs untouched.
+  const offlineFallback = ensureUsableModel(runtime);
+
   // In-memory session manager: LENS persists the transcript itself (SPEC-028
   // decision 3); the runtime keeps no session files.
   const sessionManager = pi.SessionManager.inMemory(cwd);
 
   const customTools = (tools?.definitions ?? []).map((definition) => toPiTool(definition, tools!.handler));
 
-  const { session } = await pi.createAgentSessionFromServices({ services, sessionManager, customTools });
+  const { session } = await pi.createAgentSessionFromServices({
+    services,
+    sessionManager,
+    customTools,
+    // The allow-list is the permission grant (ADR-0014 decision 2): the
+    // default built-in tools (read/bash/edit/write) are disabled — without
+    // this, customTools are ADDED ON TOP of the coding tools and the
+    // construction contract is breached. LENS-owned discovery also means no
+    // filesystem extensions/skills/context-files discovery in sessions:
+    // LENS provisions everything itself.
+    noTools: 'builtin',
+    resourceLoaderOptions: { noExtensions: true, noSkills: true, noContextFiles: true },
+  });
 
-  lastConstruction = { sessionManagerKind: 'inMemory', agentDir, modelNetwork: false };
+  lastConstruction = { sessionManagerKind: 'inMemory', agentDir, modelNetwork: false, offlineFallback };
 
-  return { session, tools: [...RESEARCH_TOOL_ALLOW_LIST] };
+  // Auth preflight guarantee: AgentSession.prompt() rejects before streaming
+  // when the selected model's provider has no configured auth — the exact
+  // silent-hang class the admission guards exist to prevent. The seam is the
+  // single point that owns the key surface, so it ensures a runtime override
+  // exists for the selected provider: the real LENS-settings key when one was
+  // passed, otherwise a non-persisted placeholder that satisfies the preflight
+  // (the transport call itself carries the credential in production; tests
+  // replace the transport entirely).
+  const selectedModel = (session as any)?.model ?? (session as any)?.agent?.state?.model;
+  const provider: string | undefined = selectedModel?.provider;
+  if (provider && typeof runtime.hasConfiguredAuth === 'function' && runtime.hasConfiguredAuth(provider) !== true) {
+    const existingOverride = options.providerOverrides?.[provider];
+    await runtime.setRuntimeApiKey(provider, existingOverride ?? 'lens-runtime-override');
+  }
+
+  // Truth-in-tests: report the tools the runtime actually granted on the
+  // live session — the construction contract is about the session, not the
+  // allow-list constant.
+  const grantedTools: string[] = (session?.agent?.state?.tools ?? []).map((t: any) =>
+    typeof t === 'string' ? t : (t?.name ?? String(t))
+  );
+  return { session, tools: grantedTools };
 }
 
 /** Test seams — the suite imports the compiled engine and probes these. */
