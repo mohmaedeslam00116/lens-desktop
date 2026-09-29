@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-29
+
+**Runtime Proof & a Leaner Launch** — this release turns the shipped artifact
+into something the repository can prove rather than assume: a Windows CI gate,
+a packaged-runtime smoke test and asar-content verification (map ticket #127),
+a renderer that detects and reports a dead engine instead of failing silently,
+and a leaner initial bundle — 1,240 KB → 394 KB (−68%) across the diagram and
+report deferrals. It also adds the opt-in LENS harness workspace preview
+(issue #121) and the streaming-visibility fix (map ticket #119): every
+previously dropped engine event is now surfaced, and the WebSocket reconnects
+with delta replay.
+
 ### Added
 - **Repository (.github/workflows/ci.yml)**: the repository had no continuous integration, so every acceptance claim in this file rested on a local run. Added a Windows CI gate that installs from `package-lock.json`, typechecks the renderer and Electron main, builds the embedded engine (a prerequisite of the suite, which imports `dist-electron/`), runs `npm test`, and builds the renderer bundle. A regression now fails the build instead of being discovered at release time.
 - **Frontend build (typecheck gate)**: `tsc` was never part of the build, so type errors accumulated unnoticed in a project that otherwise reads as strictly typed. Added `typecheck:react`, `typecheck:electron`, and `typecheck` scripts and routed `build:react`, `build`, and `build:installer` through them.
@@ -27,8 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Engine + UI (visibility fix — map ticket #119, ADR-harness work)**: the stuck-run diagnosis and foundational streaming visibility. Engine: a per-stream idle watchdog on the pi adapter (no stream event within 120s fails the generation loudly instead of hanging the session forever; the deadline resets on every real event, long generations are never cut — only silence is; iterator `return()` releases the transport fire-and-forget so a lazy stream can never swallow the rejection), a start-time **provider admission guard** (`/api/research/start` returns HTTP 422 with a bilingual message when a cloud provider has no usable key or Ollama has no endpoint — previously a guaranteed silent hang), and watchdog failures reworded into user-actionable sentences before `fail()`. Renderer: all previously dropped events are now surfaced — `researcher_telemetry`/`fanout_telemetry`/`audit_telemetry`/`session_state` feed a bilingual live-activity feed via a new `utils/liveFeed.ts` mapping, `researcher_telemetry` drives per-agent workspace cards (new `AgentFeedList` component: role, facet, phase, last activity, elapsed clock frozen at terminal phases), `report_chunk` streams the report progressively while the run is active, `skill_activated` joins the thought feed, and the previously silent-drop terminal events `cancelled` and `budget_exhausted` now end the run UI state explicitly. The WebSocket now reconnects on abnormal close with bounded exponential backoff (5 attempts) using the engine's existing `?since=<eventId>` delta replay (per-event `eventId` tracking, reset counters on every message; 1008 rejections and terminal outcomes are not resurrected). Full suite green (461/461).
 - **Renderer (deferred report chunk, `components/vane/ReportCanvas.tsx`)**: with the diagram runtimes split out, the markdown pipeline behind the report view was the largest remaining thing in the initial bundle — and the least earned. A report can only exist once a run has produced one, yet `MessageBox` imported `ReportRenderer` statically, so `react-markdown` plus the micromark/mdast/hast chain behind it were parsed on every launch, including a first launch with no session at all. The report view now mounts through `ReportCanvas`, a `React.lazy` boundary that fetches the pipeline on the first report that appears, behind a placeholder matching the frame the report renders into. Initial bundle: **558 KB → 394 KB (−29%)**, the pipeline ships as its own 170 KB on-demand chunk, and the initial payload is now **1,240 KB → 394 KB (−68%)** since the diagram split. A failed chunk fetch — a failure the static import could not have — is held inside the report frame by an error boundary that keeps the report text readable and copyable and retries by re-importing, instead of escaping to the nearest ancestor and dropping the workspace around an otherwise complete report.
 - **Test (`test/deferred_report_chunk.test.mjs`)**: the same invisibility the diagram guard covers, for the markdown pipeline — one ordinary `import` of the report module from anywhere the shell reaches statically would fold it back into the initial bundle with no type error, test failure, or build error to show for it. The guard asserts that `react-markdown`/`remark-gfm` are imported only by the report component, that no module imports `ReportRenderer` statically, that the lazy boundary is the single dynamic importer, and that the report surface mounts `ReportCanvas` rather than the renderer. It matches JSX mounts specifically, so a `ReportRendererProps` type reference is not mistaken for one. Verified to fail when a static import is reintroduced.
-
-
 
 ### Fixed
 - **Renderer typecheck**: `frontend/src` now compiles clean under `tsc --noEmit` (was 5 errors: TS7016 ×2 from the untyped `.mjs` helpers and TS2345 ×3 from the shelf source-shape mismatch below). Renderer and Electron main both typecheck with zero errors.
