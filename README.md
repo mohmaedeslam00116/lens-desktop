@@ -92,7 +92,7 @@
     - Deterministic bit-for-bit round-trip qualification (`import (zip) -> SkillRegistry -> export (zip)`) verifying 100% content preservation without proprietary metadata injection.
     - Deterministic SSE parsing fixtures simulating all 4 supported providers (Gemini, OpenAI, Claude, Ollama), plus tool schemas and controller pre-activation.
     - Four-Pillar Acceptance Gate verification: Format Gate (100% `agentskills.io` schema compliance), Security Gate (100% traversal and unsandboxed-script import rejection), Precision Gate (query-driven domain activation with 0% domain false positives), and Citation Fidelity Gate (zero hallucinated citations in a full wide research run).
-    - 100% offline verification in `node --test` integrated into `npm test` across 512 tests with zero native C++ dependencies.
+    - 100% offline verification in `node --test` integrated into `npm test` across 518 tests with zero native C++ dependencies.
     - A manifest-completeness guard (`test/test_suite_completeness.test.mjs`) keeps `npm test`'s explicit file list and `test/*.test.mjs` in lockstep, so no test file can sit unrun and no listed file can go missing.
 
 ---

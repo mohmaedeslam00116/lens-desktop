@@ -100,6 +100,25 @@ globalSkillRegistry.discoverAll().catch(err => {
   console.warn('[Server] Error discovering agent skills:', err);
 });
 
+/** The Agentic Search surface (ticket #142): the routes the engine exposes
+ * beside the research routes. One runner per session; the routes never touch
+ * Deep Research's plan-gated path. */
+export const AGENTIC_ROUTES = ['/api/agent/start', '/api/agent/steer', '/api/agent/cancel'] as const;
+
+interface ActiveAgentRun {
+  state: import('./agenticSearch').AgenticRunState;
+  session: any;
+}
+const activeAgentRuns = new Map<string, ActiveAgentRun>();
+export function createAgenticResearchSession(
+  sessionId: string,
+  tools: import('./agentSessionHost').LensToolSurface
+): Promise<any> {
+  return import('./agentSessionHost').then((m) =>
+    m.createResearchSession({ sessionId }, tools).then((hosted) => hosted.session)
+  );
+}
+
 let httpServer: http.Server | null = null;
 let wss: WebSocketServer | null = null;
 let reportExportService: ReportExportService | null = null;
