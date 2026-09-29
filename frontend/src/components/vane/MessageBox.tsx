@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { MessageSources } from './MessageSources';
 import { PerplexityRadar } from './PerplexityRadar';
-import { ReportRenderer } from './ReportRenderer';
+import { ReportCanvas } from './ReportCanvas';
 import { AgentWorkspace } from './AgentWorkspace';
 import { GraphView } from './GraphView';
 import { FacetGroupedShelf } from '../research/FacetGroupedShelf';
@@ -307,7 +307,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
 
           {/* Active View Content */}
           {viewMode === 'report' && (
-            <ReportRenderer 
+            <ReportCanvas 
               content={report} 
               sources={sources} 
               language={language}
