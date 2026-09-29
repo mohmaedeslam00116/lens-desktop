@@ -131,6 +131,8 @@ export interface ConstructionFacts {
   sessionManagerKind: 'inMemory';
   agentDir: string;
   modelNetwork: false;
+  /** True when no provider was configured and the LENS offline placeholder was registered. */
+  offlineFallback: boolean;
 }
 
 let lastConstruction: ConstructionFacts | undefined;
@@ -196,6 +198,59 @@ function toPiTool(tool: LensToolSurface['definitions'][number], handler: LensToo
 }
 
 /**
+ * Zero-configured-provider construction guarantee (ADR-0014 amendment):
+ * construction is provider-independent by contract — the packaged app
+ * provisions its own providers, and a machine with none (a clean CI runner,
+ * a fresh install before Settings) must still build a usable session.
+ *
+ * When the runtime has no configured provider AT ALL — no stored auth, no
+ * environment keys, no models.json providers; the availability snapshot's
+ * `configuredProviders` is exactly that union — the seam registers a
+ * LENS-owned placeholder provider so `findInitialModel` resolves a model and
+ * `prompt()` passes its auth preflight instead of throwing before the loop
+ * ever starts. Real providers, when present, always win: the placeholder is
+ * only ever registered into an empty snapshot.
+ *
+ * The placeholder can never complete a network call: a literal sentinel key
+ * (never a `$ENV` reference, which would make it an environment probe) and
+ * an unroutable discard-port loopback URL. With no usable provider the
+ * admission guard (#119) remains the start-time authority — construction
+ * only refuses to be a dead end.
+ */
+const LENS_OFFLINE_PROVIDER_ID = 'lens-offline';
+const LENS_OFFLINE_SENTINEL_KEY = 'lens-offline-sentinel-not-a-credential';
+const LENS_OFFLINE_MODEL = {
+  id: 'lens-offline-1',
+  name: 'LENS Offline Placeholder',
+  reasoning: false,
+  input: ['text'],
+  cost: { input: 0, output: 0 },
+  contextWindow: 128000,
+  maxTokens: 8192,
+};
+
+/**
+ * Guarantee the runtime resolves a model at session construction: when no
+ * provider is configured, register the LENS offline placeholder. Returns
+ * whether the fallback fired (recorded as a construction fact for tests).
+ */
+function ensureUsableModel(runtime: any): boolean {
+  const snapshot = typeof runtime?.getAvailableSnapshot === 'function' ? runtime.getAvailableSnapshot() : [];
+  if (Array.isArray(snapshot) && snapshot.length > 0) return false;
+  runtime.registerProvider(LENS_OFFLINE_PROVIDER_ID, {
+    name: 'LENS Offline Placeholder',
+    // Discard port: connection refusal is instant and requires no network.
+    baseUrl: 'http://127.0.0.1:9/v1',
+    // Literal sentinel — never "$ENV" (that form is resolved from the
+    // environment; a literal is provably not a probe or a credential).
+    apiKey: LENS_OFFLINE_SENTINEL_KEY,
+    api: 'openai-completions',
+    models: [LENS_OFFLINE_MODEL],
+  });
+  return true;
+}
+
+/**
  * Build one research session (one Turn-Group) under the ADR-0014 contract.
  * Construction never requires a provider key — admission is a start-time
  * concern (the Provider Admission Guard), not a construction-time one.
@@ -222,6 +277,12 @@ export async function createResearchSession(
     settingsManager: pi.SettingsManager.inMemory(),
   });
 
+  // Zero-configured-provider guarantee: AFTER the services' internal model
+  // refresh (its snapshot is final here) and BEFORE session construction
+  // (findInitialModel reads the snapshot synchronously). Keyless machines
+  // get a usable model; configured machines keep theirs untouched.
+  const offlineFallback = ensureUsableModel(runtime);
+
   // In-memory session manager: LENS persists the transcript itself (SPEC-028
   // decision 3); the runtime keeps no session files.
   const sessionManager = pi.SessionManager.inMemory(cwd);
@@ -242,7 +303,7 @@ export async function createResearchSession(
     resourceLoaderOptions: { noExtensions: true, noSkills: true, noContextFiles: true },
   });
 
-  lastConstruction = { sessionManagerKind: 'inMemory', agentDir, modelNetwork: false };
+  lastConstruction = { sessionManagerKind: 'inMemory', agentDir, modelNetwork: false, offlineFallback };
 
   // Auth preflight guarantee: AgentSession.prompt() rejects before streaming
   // when the selected model's provider has no configured auth — the exact

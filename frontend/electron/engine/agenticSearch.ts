@@ -188,7 +188,10 @@ export interface AgenticRunResult {
 }
 
 /** The cancel registry: one live run per sessionId. */
-const activeRuns = new Map<string, { abort: AbortController; detach: () => void }>();
+const activeRuns = new Map<
+  string,
+  { abort: AbortController; detach: () => void; session?: { abort: () => Promise<void> | void } }
+>();
 
 /**
  * Start-time admission guard for Agentic Search: without a usable provider
@@ -237,7 +240,7 @@ export async function runAgenticSearch(session: any, options: AgenticRunOptions)
     return { terminal, report: state.reportChunks.join(''), sources: [...state.sources] };
   };
 
-  activeRuns.set(sessionId, { abort, detach });
+  activeRuns.set(sessionId, { abort, detach, session });
 
   try {
     const promptOutcome = await session
@@ -291,13 +294,20 @@ export async function runAgenticSearch(session: any, options: AgenticRunOptions)
 
 /**
  * Cancel the live run for a session: aborts the runner's signal AND the
- * session itself (aborting the in-flight provider stream), then the runner
- * surfaces its explicit `cancelled` terminal with the evidence admitted so far.
+ * session itself (aborting the in-flight provider stream — a runner signal
+ * alone is only observed at loop boundaries and would leave the stream
+ * running), then the runner surfaces its explicit `cancelled` terminal with
+ * the evidence admitted so far.
  */
 export function cancelAgenticSearch(sessionId: string): boolean {
   const run = activeRuns.get(sessionId);
   if (!run) return false;
   run.abort.abort();
+  try {
+    void run.session?.abort();
+  } catch {
+    // Session abort is best-effort; the terminal path surfaces real failures.
+  }
   return true;
 }
 

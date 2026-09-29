@@ -253,34 +253,51 @@ describe('Agentic Search end-to-end — scripted provider, real seams', () => {
   it('cancel aborts the live run and surfaces the explicit cancelled terminal', async () => {
     resetFetchLedger('s-e2e-cancel');
     const { session, emitted, state } = await buildScriptedSession('s-e2e-cancel');
-    // A hung transport that is aborted through the runner's OWN registry
-    // signal — determinism, not timing: the hang ends exactly when cancel
-    // fires, so the test cannot flake on a slow or fast machine.
-    const { __testSeams } = await importEngine('agenticSearch.js');
-    const originalCancel = cancelAgenticSearch;
-    session.agent.streamFunction = async () => ({
-      async *[Symbol.asyncIterator]() {
-        yield { type: 'text_start', contentIndex: 0, partial: { role: 'assistant', content: [] } };
-        await new Promise((resolve) => setTimeout(resolve, 2_500));
-        yield { type: 'text_delta', contentIndex: 0, delta: 'never', partial: { role: 'assistant', content: [] } };
-      },
-      async result() {
-        return { role: 'assistant', content: [], stopReason: 'aborted' };
-      },
-    });
+    // A hung transport with DETERMINISTIC release: the hang ends exactly when
+    // cancel's session abort reaches it — no sleep margins, so the test cannot
+    // flake on a slow or fast machine. streamStarted gates the run start
+    // signal so the assertion reads a fact, not a wall clock.
+    let streamStarted;
+    const streamStartedPromise = new Promise((resolve) => { streamStarted = resolve; });
+    let releaseStream = () => {};
+    const released = new Promise((resolve) => { releaseStream = resolve; });
+    session.agent.streamFunction = async () => {
+      streamStarted();
+      await released;
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'text_start', contentIndex: 0, partial: { role: 'assistant', content: [] } };
+          yield { type: 'text_delta', contentIndex: 0, delta: 'released after cancel', partial: { role: 'assistant', content: [] } };
+        },
+        async result() {
+          return { role: 'assistant', content: [], stopReason: 'aborted' };        },
+      };
+    };
     const run = runAgenticSearch(session, {
       sessionId: 's-e2e-cancel',
       question: 'hang probe',
       state,
       emit: (event) => emitted.push(event),
     });
-    await new Promise((r) => setTimeout(r, 400));
+    await streamStartedPromise;
     assert.equal(cancelAgenticSearch('s-e2e-cancel'), true, 'cancel found the live run');
-    session.abort();
+    releaseStream();
     const result = await run;
     assert.equal(result.terminal, 'cancelled');
     const cancelled = emitted.find((e) => e.type === 'cancelled');
     assert.ok(cancelled, 'explicit cancelled event emitted');
+  });
+
+  it('construction guarantees a usable model with zero configured providers (CI parity)', async () => {
+    const hosted = await host.createResearchSession({
+      sessionId: 's-e2e-construction',
+      agentDir: mkdtempSync(join(tmpdir(), 'lens-agent-')),
+    });
+    // The contract: the live session always carries a model, so a prompt's
+    // auth preflight passes and the loop can start — on any machine.
+    assert.ok(hosted.session.model, 'the hosted session resolves a model with no configured providers');
+    const facts = await host.describeLastConstruction();
+    assert.equal(typeof facts.offlineFallback, 'boolean', 'construction facts record the offline fallback');
   });
 });
 
