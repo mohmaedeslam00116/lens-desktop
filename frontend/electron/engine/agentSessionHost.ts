@@ -237,6 +237,21 @@ export async function createResearchSession(
 
   lastConstruction = { sessionManagerKind: 'inMemory', agentDir, modelNetwork: false };
 
+  // Auth preflight guarantee: AgentSession.prompt() rejects before streaming
+  // when the selected model's provider has no configured auth — the exact
+  // silent-hang class the admission guards exist to prevent. The seam is the
+  // single point that owns the key surface, so it ensures a runtime override
+  // exists for the selected provider: the real LENS-settings key when one was
+  // passed, otherwise a non-persisted placeholder that satisfies the preflight
+  // (the transport call itself carries the credential in production; tests
+  // replace the transport entirely).
+  const selectedModel = (session as any)?.model ?? (session as any)?.agent?.state?.model;
+  const provider: string | undefined = selectedModel?.provider;
+  if (provider && typeof runtime.hasConfiguredAuth === 'function' && runtime.hasConfiguredAuth(provider) !== true) {
+    const existingOverride = options.providerOverrides?.[provider];
+    await runtime.setRuntimeApiKey(provider, existingOverride ?? 'lens-runtime-override');
+  }
+
   // Truth-in-tests: report the tools the runtime actually granted on the
   // live session — the construction contract is about the session, not the
   // allow-list constant.
