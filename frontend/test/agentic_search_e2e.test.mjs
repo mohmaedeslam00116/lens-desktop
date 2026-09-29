@@ -22,21 +22,12 @@ const { runAgenticSearch, createAgenticToolSurface, cancelAgenticSearch, agentic
   await importEngine('agenticSearch.js');
 const { resetFetchLedger } = await importEngine('fetchLedger.js');
 
-/** A scripted transport for one turn-group: tool turn, then answer turn. */
-function scriptedStreamFunction(toolCallsSeen) {
-  const script = [
-    {
-      role: 'assistant',
-      content: [{ type: 'toolCall', id: 'call-1', name: 'web_search', arguments: { query: 'agentic search evidence' } }],
-      stopReason: 'toolUse',
-    },
-    {
-      role: 'assistant',
-      content: [{ type: 'text', text: 'The agentic answer, grounded in admitted sources.' }],
-      stopReason: 'stop',
-    },
-  ];
-  let turn = 0;
+/** A scripted transport keyed on the conversation CONTENT, not call count:
+ * pi-coding-agent runs background LLM tasks (session titling) that consume
+ * transport invocations, so "the Nth call" is not a deterministic address.
+ * The research question's context replays the tool turn then the answer;
+ * any other invocation (background tasks) resolves immediately. */
+function scriptedStreamFunction(toolCallsSeen, QUESTION) {
   const usage = { input: 1, output: 1, total: 2 };
   const finalize = (message) => ({
     ...message,
@@ -46,26 +37,73 @@ function scriptedStreamFunction(toolCallsSeen) {
     model: 'scripted-1',
     usage,
   });
-  return async () => {
-    const message = finalize(script[Math.min(turn++, script.length - 1)]);
-    const stream = {
+  let answered = false;
+  return async (_model, context) => {
+    const messages = context?.messages ?? [];
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+    const isResearch = JSON.stringify(lastUser ?? '').includes(QUESTION);
+    if (!isResearch || answered) {
+      const quiet = finalize({ content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' });
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'done', reason: 'stop', message: quiet };
+        },
+        async result() {
+          return quiet;
+        },
+      };
+    }
+    answered = true;
+    const message = finalize({
+      content: [{ type: 'toolCall', id: 'call-1', name: 'web_search', arguments: { query: 'agentic search evidence' } }],
+      stopReason: 'toolUse',
+    });
+    return {
       async *[Symbol.asyncIterator]() {
-        for (const block of message.content) {
-          if (block.type === 'toolCall') {
-            toolCallsSeen.push(block.name);
-            yield { type: 'toolcall_end', contentIndex: 0, toolCall: block, partial: message };
-          } else if (block.type === 'text') {
-            yield { type: 'text_delta', contentIndex: 0, delta: block.text, partial: message };
-            yield { type: 'text_end', contentIndex: 0, content: block.text, partial: message };
-          }
-        }
-        yield { type: 'done', reason: message.stopReason === 'toolUse' ? 'toolUse' : 'stop', message };
+        toolCallsSeen.push('web_search');
+        yield { type: 'toolcall_end', contentIndex: 0, toolCall: message.content[0], partial: message };
+        yield { type: 'done', reason: 'toolUse', message };
       },
       async result() {
         return message;
       },
     };
-    return stream;
+  };
+}
+
+/** The answer turn, played after the tool result is in the context. */
+function answerStreamFunction(QUESTION, toolCallsSeen) {
+  const usage = { input: 1, output: 1, total: 2 };
+  return async (_model, context) => {
+    const messages = context?.messages ?? [];
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+    const isResearch = JSON.stringify(lastUser ?? '').includes(QUESTION);
+    const message = {
+      role: 'assistant',
+      api: 'scripted',
+      provider: 'scripted',
+      model: 'scripted-1',
+      usage,
+      content: [
+        isResearch
+          ? { type: 'text', text: 'The agentic answer, grounded in admitted sources.' }
+          : { type: 'text', text: 'ok' },
+      ],
+      stopReason: 'stop',
+    };
+    void toolCallsSeen;
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const block of message.content) {
+          yield { type: 'text_delta', contentIndex: 0, delta: block.text, partial: message };
+          yield { type: 'text_end', contentIndex: 0, content: block.text, partial: message };
+        }
+        yield { type: 'done', reason: 'stop', message };
+      },
+      async result() {
+        return message;
+      },
+    };
   };
 }
 
@@ -95,15 +133,26 @@ async function buildScriptedSession(sessionId) {
   const { session } = await host.createResearchSession({ sessionId }, surface);
 
   // Swap only the transport: the loop, tools, and bridge are the engine's own.
-  session.agent.streamFunction = scriptedStreamFunction(toolCallsSeen);
+  const QUESTION = 'What does the evidence say?';
+  // Two-phase transport keyed on content: while the tool result is not yet in
+  // the context, replay the tool-call turn; once it is, play the answer.
+  const toolPhase = scriptedStreamFunction(toolCallsSeen, QUESTION);
+  const answerPhase = answerStreamFunction(QUESTION, toolCallsSeen);
+  session.agent.streamFunction = async (model, context) => {
+    const hasToolResult = (context?.messages ?? []).some(
+      (m) => m.role === 'toolResult' || m.role === 'tool_result'
+    );
+    return hasToolResult ? answerPhase(model, context) : toolPhase(model, context);
+  };
 
-  return { session, surface, emitted, state, toolCallsSeen };
+  return { session, surface, emitted, state, toolCallsSeen, QUESTION };
 }
 
 describe('Agentic Search end-to-end — scripted provider, real seams', () => {
   it('runs one turn-group: the loop calls tools through the wrapper, sources admit, answer streams, finished lands', async () => {
     resetFetchLedger('s-e2e-run');
-    const { session, surface, emitted, state, toolCallsSeen } = await buildScriptedSession('s-e2e-run');
+    const { session, surface, emitted, state, toolCallsSeen, QUESTION } =
+      await buildScriptedSession('s-e2e-run');
 
     // Drive the real loop with the scripted transport. The tool call the
     // loop declares executes through pi's own customTools machinery — the
@@ -111,7 +160,7 @@ describe('Agentic Search end-to-end — scripted provider, real seams', () => {
     // loop→wrapper→ledger path end-to-end.
     const run = runAgenticSearch(session, {
       sessionId: 's-e2e-run',
-      question: 'What does the evidence say?',
+      question: QUESTION,
       state,
       emit: (event) => emitted.push(event),
     });
@@ -184,11 +233,15 @@ describe('Agentic Search end-to-end — scripted provider, real seams', () => {
   it('cancel aborts the live run and surfaces the explicit cancelled terminal', async () => {
     resetFetchLedger('s-e2e-cancel');
     const { session, emitted, state } = await buildScriptedSession('s-e2e-cancel');
-    // A hung transport that the session's abort must break:
+    // A hung transport that is aborted through the runner's OWN registry
+    // signal — determinism, not timing: the hang ends exactly when cancel
+    // fires, so the test cannot flake on a slow or fast machine.
+    const { __testSeams } = await importEngine('agenticSearch.js');
+    const originalCancel = cancelAgenticSearch;
     session.agent.streamFunction = async () => ({
       async *[Symbol.asyncIterator]() {
         yield { type: 'text_start', contentIndex: 0, partial: { role: 'assistant', content: [] } };
-        await new Promise((resolve) => setTimeout(resolve, 5_000));
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
         yield { type: 'text_delta', contentIndex: 0, delta: 'never', partial: { role: 'assistant', content: [] } };
       },
       async result() {
@@ -201,7 +254,7 @@ describe('Agentic Search end-to-end — scripted provider, real seams', () => {
       state,
       emit: (event) => emitted.push(event),
     });
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 400));
     assert.equal(cancelAgenticSearch('s-e2e-cancel'), true, 'cancel found the live run');
     session.abort();
     const result = await run;
