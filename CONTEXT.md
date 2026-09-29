@@ -256,3 +256,38 @@ The read-only engine→renderer view of the parent-owned research plan, delivere
 ### Evidence Verdict
 The structured outcome an Evidence Auditor produces for each important claim (supported vs. unverified against retrieved sources). Verdicts annotate admission and coverage telemetry by default; gating admission is a settings-gated escalation proven safe by the parity harness.
 
+### Agentic Search
+LENS's non-gated research mode: a user question becomes a turn-group driven by a Pi `AgentSession` loop. Pi owns iteration, tools, and tool results; LENS still enforces every retrieval-plane admission (session budget, fetch ledger, evidence) on each tool call. No research plan, no approval gate. Contrast: Deep Research. (ADR-0014)
+
+### Deep Research
+LENS's plan-gated research mode: a query produces a research plan that a human approves before any retrieval runs, then multi-hop researchers execute against the approved facets. Depth presets (Quick | Deep | Wide) and all Perspectives live here. Contrast: Agentic Search. (ADR-0016)
+
+### Mode
+A per-conversation research mode — `agentic` or `deep` — chosen in the composer before the first turn. Switching after the first turn starts a new conversation, because one session cannot be both gated and gate-free. Supersedes the legacy three-control shape: `depth` becomes a Deep Research preset, `wide` demotes from mode to preset, Perspectives stay Deep Research-only. (ADR-0016)
+
+### Artifact
+A first-class, session-scoped produced thing: `{ id, type, title, state, producer, payload, createdAt, updatedAt }` persisted in the LENS session record, with `type ∈ { plan, report, evidence-shelf, graph }` and lifecycle events `artifact_created` / `artifact_updated` on the LiveEvent backbone. The workspace right pane, export path, and failure taxonomy all read this entity — never a view-layer grouping. Not a cross-session library (Library stays report-based). (ADR-0015)
+
+### Turn
+One user submit inside an Agentic Search conversation. Turns are grouped per submission into a **turn-group** — the unit an AgentSession run processes. `steer()` redirects a live turn-group; `followUp()` queues the next one. Contrast: the Deep Research plan lifecycle.
+
+### Turn-Group
+The unit of work an AgentSession processes per user submit: one or more turns executed together under a single budget and ledger scope. Mid-run redirection targets the live turn-group (`steer()`), never a single message.
+
+### Steering
+Mid-run redirection of a live turn-group via `AgentSession.steer()` — the agent changes course without abandoning the session's transcript or already-admitted evidence. Contrast: cancel-and-restart.
+
+### Subagent
+A researcher spawned under a parent AgentSession for one facet or tool-heavy task, carrying per-subagent state (status, last activity, budget share) surfaced as a workspace card. Subagents inherit the research-only tool allow-list and can never widen it.
+
+### Tool Call
+A single capability invocation inside a turn-group (`web_search`, `source_check`, `fetch_content`, `get_search_content`, `todo` — coding tools are never granted). Every tool call passes LENS policy points before and after execution: `beforeToolCall` (session budget + fetch ledger + plan gate) and `afterToolCall` (evidence admission + telemetry). The allow-list is fixed at session construction. (ADR-0014)
+
+### Session Budget
+The per-session consumption ceiling LENS applies to an Agentic Search run — counted by LENS, not by Pi. Exhaustion emits the existing `budget_exhausted` terminal event, which ends the run UI state explicitly. Distinct from Plane Budgets (per-plane retrieval quotas).
+
+### Fetch Ledger
+The per-session record of every retrieval attempt and its outcome, written by LENS on each tool call regardless of which mode issued it. LENS-authoritative: Pi owns the loop but never writes LENS's ledger (`engine/fetchLedger.ts`, ADR-0013 boundary clause).
+
+### Agent Harness
+The product shell/runtime composition — the workspace surface hosting AgentSessions, artifact panes, and live agent state. Always qualified "Agent" to distinguish it from the **Parity Harness** (ADR-0011), the regression gate.

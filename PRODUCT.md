@@ -24,7 +24,7 @@ Electron desktop application using a React frontend and an embedded TypeScript r
 
 ## Capabilities and Constraints
 
-- Research question with quick, balanced, and deep modes, plus web, academic, and community focus.
+- Research modes selected per conversation: **Agentic Search** (open Pi loop, no plan gate) and **Deep Research** (plan-gated), with depth presets (Quick, Deep, Wide) and perspectives (balanced, technical, market, critical, STORM) inside Deep Research. See `CONTEXT.md` (Mode, Agentic Search, Deep Research) and ADR-0016.
 - Hierarchical milestone-by-milestone synthesis and meta-synthesis with deterministic citation grounding contract, stripping unmapped citation brackets.
 - Streamed research steps and source discovery; report reading, table extraction, and diagram presentation.
 - Compact navigation rail: Home, Discover, Library, Knowledge graph, and Skills Hub.
