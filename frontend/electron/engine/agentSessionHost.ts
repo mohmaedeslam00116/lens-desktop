@@ -82,6 +82,13 @@ export interface ResearchSessionOptions {
   providerOverrides?: Record<string, string>;
   /** Resource-discovery working directory; defaults to the engine's cwd. */
   cwd?: string;
+  /**
+   * Override the LENS-owned agent discovery directory. Production callers
+   * never pass it — the app-data default holds. Test harnesses pass a
+   * per-process temp dir so concurrent test workers never share (and contend
+   * on) the runtime's credential file, which is environment-dependent.
+   */
+  agentDir?: string;
 }
 
 export interface HostedSession {
@@ -199,7 +206,7 @@ export async function createResearchSession(
 ): Promise<HostedSession> {
   const pi = await loadPiRuntime();
   const cwd = options.cwd ?? process.cwd();
-  const agentDir = resolveAgentDir();
+  const agentDir = options.agentDir ?? resolveAgentDir();
   // The resource loader expects the agentDir to exist; create it idempotently
   // so first-construction never depends on prior app boot.
   mkdirSync(agentDir, { recursive: true });

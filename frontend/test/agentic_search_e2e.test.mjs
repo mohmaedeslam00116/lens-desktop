@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { mkdtempSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 /**
@@ -140,7 +142,13 @@ async function buildScriptedSession(sessionId) {
       return { url, title: `Page ${url}`, text: `Grounded content for ${url}` };
     },
   });
-  const { session } = await host.createResearchSession({ sessionId }, surface);
+  // Per-process agent dir: concurrent test workers must never contend on a
+  // shared credential file — LENS-owned discovery is per-app in production
+  // and per-worker here, which makes model resolution environment-stable.
+  const { session } = await host.createResearchSession({
+    sessionId,
+    agentDir: mkdtempSync(join(tmpdir(), 'lens-agent-')),
+  }, surface);
 
   // Swap only the transport: the loop, tools, and bridge are the engine's own.
   const QUESTION = 'What does the evidence say?';
