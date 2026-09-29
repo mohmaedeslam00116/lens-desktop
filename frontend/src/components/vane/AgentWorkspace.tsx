@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 import { DiagramCanvas } from './DiagramCanvas';
 import { FacetGroupedShelf } from '../research/FacetGroupedShelf';
+import { AgenticConversation } from './AgenticConversation';
 import { SourceItem, Language, ResearchStep, ResearchPlan } from '../../types';
+import type { AgenticConversationProjection } from '../../utils/agenticConversation';
 import { extractTables, extractMermaidDiagrams, extractKeyMetrics, tableToCSV } from '../../utils/markdownArtifacts';
 
 interface AgentWorkspaceProps {
@@ -27,6 +29,8 @@ interface AgentWorkspaceProps {
   steps: ResearchStep[];
   language: Language;
   plan?: ResearchPlan | null;
+  /** The persisted agentic conversation projection (#144), when history holds one. */
+  conversationProjection?: AgenticConversationProjection | null;
   onInspectEvidence?: (citationIndex: number) => void;
 }
 
@@ -36,10 +40,11 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({
   steps,
   language,
   plan,
+  conversationProjection,
   onInspectEvidence,
 }) => {
   const isArabic = language === 'ar';
-  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<'tables' | 'diagrams' | 'metrics' | 'sources'>('tables');
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<'tables' | 'diagrams' | 'metrics' | 'sources' | 'conversation'>('tables');
   const [tableSearch, setTableSearch] = useState('');
   const [copiedTableId, setCopiedTableId] = useState<string | null>(null);
 
@@ -103,6 +108,13 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({
       label: isArabic ? 'فهرس المصادر والتحقق' : 'Verified Sources', 
       icon: ShieldCheck,
       count: sources.length,
+      badgeColor: 'bg-accent/20 text-accent' 
+    },
+    { 
+      id: 'conversation' as const, 
+      label: isArabic ? 'المحادثة الأجنتية' : 'Agentic Conversation', 
+      icon: Activity,
+      count: conversationProjection?.turns?.length ?? 0,
       badgeColor: 'bg-accent/20 text-accent' 
     },
   ];
@@ -177,6 +189,11 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({
           );
         })}
       </div>
+
+      {/* TAB 5: AGENTIC CONVERSATION — the persisted transcript projection (#144). */}
+      {activeWorkspaceTab === 'conversation' && (
+        <AgenticConversation projection={conversationProjection} language={language} />
+      )}
 
       {/* TAB 1: DATA & COMPARISON TABLES */}
       {activeWorkspaceTab === 'tables' && (

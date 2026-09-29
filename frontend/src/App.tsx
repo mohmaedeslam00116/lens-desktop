@@ -6,6 +6,7 @@ import { MessageBox } from './components/vane/MessageBox';
 import { MessageInput } from './components/vane/MessageInput';
 import { DiscoverView } from './components/vane/DiscoverView';
 import { LibraryView } from './components/vane/LibraryView';
+import type { AgenticConversationProjection } from './utils/agenticConversation';
 import { GraphView } from './components/vane/GraphView';
 import { SettingsModal } from './components/SettingsModal';
 import { CommandPalette } from './components/CommandPalette';
@@ -167,6 +168,10 @@ export function App() {
   // Local storage & Settings
   const [history, setHistory] = useState<ReportData[]>([]);
   const [settings, setSettings] = useState<ApiSettings>(DEFAULT_SETTINGS);
+  // The Agentic Conversation projection (#144): the renderer-side mirror of
+  // the engine's LENS-side transcript store — persisted with the history
+  // entry at terminal time and replayed by session id from the history rail.
+  const [conversationProjection, setConversationProjection] = useState<AgenticConversationProjection | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Live-connection resilience (visibility fix, ticket #119): track the last
@@ -336,6 +341,7 @@ export function App() {
     setIsSearching(true);
     setActiveTab('home');
     setActiveReport(null);
+    setConversationProjection(null);
     setCurrentStatus(language === 'ar' ? 'جاري بدء استكشاف الموضوع وتوليد الاستعلامات...' : 'Initiating autonomous research...');
     setThoughts([]);
     setSubqueries([]);
@@ -590,6 +596,21 @@ export function App() {
               localStorage.setItem('deep_research_history', JSON.stringify(updated));
               return updated;
             });
+
+            // Persist the Agentic Conversation projection with its history
+            // entry (#144): the renderer mirror of the engine's LENS-side
+            // transcript store — the terminal payload carries the projection
+            // built from the SAME persisted bytes; absent stays absent.
+            const agenticProjection = payload.conversationProjection ?? null;
+            if (agenticProjection) {
+              setConversationProjection(agenticProjection);
+              try {
+                const rawConversations = localStorage.getItem('lens-agentic-conversations');
+                const conversations = rawConversations ? JSON.parse(rawConversations) : {};
+                conversations[finalReport.id] = agenticProjection;
+                localStorage.setItem('lens-agentic-conversations', JSON.stringify(conversations));
+              } catch { /* Projection persistence is optional; replay degrades visibly. */ }
+            }
 
             runTerminatedRef.current = true;
             wsRef.current?.close();
@@ -975,6 +996,7 @@ export function App() {
                       wideExpansionHistory={resolved.wideExpansionHistory}
                       agents={agents}
                       agentEventCount={agentEventCount}
+                      conversationProjection={conversationProjection}
                     />
                   );
                 })()}
@@ -1015,11 +1037,22 @@ export function App() {
                 setActiveReport(matched);
                 setCurrentQuery(matched.query);
                 setActiveTab('home');
+                // Replay the Agentic Conversation from the history rail (#144):
+                // the persisted projection only — absent stays absent.
+                try {
+                  const rawConversations = localStorage.getItem('lens-agentic-conversations');
+                  const conversations = rawConversations ? JSON.parse(rawConversations) : {};
+                  setConversationProjection(conversations[matched.id] ?? null);
+                } catch {
+                  setConversationProjection(null);
+                }
               }
             }}
             onClearHistory={() => {
               setHistory([]);
               localStorage.removeItem('deep_research_history');
+              localStorage.removeItem('lens-agentic-conversations');
+              setConversationProjection(null);
             }}
             language={language}
             onNewResearch={handleNewResearch}

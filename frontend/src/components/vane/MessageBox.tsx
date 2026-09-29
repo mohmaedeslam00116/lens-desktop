@@ -47,6 +47,8 @@ interface MessageBoxProps {
   /** Per-agent activity cards (visibility fix, ticket #119). */
   agents?: AgentFeedState[];
   agentEventCount?: number;
+  /** The persisted Agentic Conversation projection (#144), when history holds one. */
+  conversationProjection?: import('../../utils/agenticConversation').AgenticConversationProjection | null;
 }
 
 export const MessageBox: React.FC<MessageBoxProps> = ({
@@ -63,6 +65,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   wideExpansionHistory,
   agents,
   agentEventCount,
+  conversationProjection,
 }) => {
   const isArabic = language === 'ar';
   const [viewMode, setViewMode] = useState<'report' | 'shelf' | 'workspace' | 'graph'>('report');
@@ -339,6 +342,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
               steps={steps} 
               language={language}
               plan={plan}
+              conversationProjection={conversationProjection}
               onInspectEvidence={(idx) => {
                 setSelectedCitationIndex(idx);
                 setIsDrawerOpen(true);

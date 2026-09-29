@@ -1,4 +1,6 @@
 import * as http from 'http';
+import { join } from 'path';
+import { homedir } from 'os';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as crypto from 'crypto';
 import { LiveEvent, ResearchPlan, ResearchRequest, WideResearchRequest } from './types';
@@ -17,6 +19,7 @@ import {
   type AgenticRunState,
 } from './agenticSearch';
 import { createAgenticResearchSession } from './agenticSessionBootstrap';
+import { AgenticTranscriptStore } from './agenticTranscript';
 import { primarySearchPlane } from './searchPlane';
 import { primaryScrapePlane } from './scrapePlane';
 import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
@@ -190,6 +193,25 @@ function emitAgentEvent(sessionId: string, event: LiveEvent): void {
   }
 }
 
+/**
+ * The LENS-owned transcript directory: under the engine's LENS app data (the
+ * #140 agent dir's parent), so transcripts are LENS artifacts — never the
+ * runtime's. Resolved lazily; falls back to a LENS-owned home path in node.
+ */
+function resolveTranscriptDir(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = require('electron');
+    const app = (electron as any)?.default?.app ?? (electron as any)?.app ?? null;
+    if (app && typeof app.getPath === 'function') {
+      return join(app.getPath('userData'), 'agentic-transcripts');
+    }
+  } catch {
+    // Not in Electron (tests, plain node) — fall through to the home path.
+  }
+  return join(homedir(), '.lens', 'agentic-transcripts');
+}
+
 /** Live agentic-event subscribers (the /ws/agent/:id bridge registers here). */
 const agentEventSubscribers = new Set<(sessionId: string, event: LiveEvent) => void>();
 /** Per-session event counters backing the delta-replay envelope. */
@@ -216,6 +238,11 @@ export async function startAgenticSearchSession(
   request: AgenticStartRequest
 ): Promise<void> {
   const state: AgenticRunState = { sources: [], reportChunks: [], fetchesUsed: 0 };
+  // LENS-side transcript persistence (#144; SPEC-028 Decision 2): every
+  // agentic run captures its turn-group transcript into the store at
+  // terminal time, keyed to the session — the history path reads the same
+  // bytes back for replay.
+  const transcripts = new AgenticTranscriptStore(resolveTranscriptDir());
   const surface = createAgenticToolSurface({
     sessionId,
     state,
@@ -242,6 +269,7 @@ export async function startAgenticSearchSession(
       question: request.question,
       state,
       emit: (event) => emitAgentEvent(sessionId, event),
+      transcript: { store: transcripts },
     }).catch((err: any) => {
       console.error('[Server] Agentic run failed:', err?.message ?? String(err));
       emitAgentEvent(sessionId, {
