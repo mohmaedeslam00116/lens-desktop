@@ -309,6 +309,19 @@ declare global {
   interface Window {
     electronAPI?: {
       isElectron: boolean;
+      /**
+       * The embedded engine's resolved endpoint. The preferred port can be
+       * taken, so the renderer must never assume 8000.
+       */
+      engine?: {
+        endpoint: {
+          port: number | null;
+          baseUrl: string | null;
+          wsBaseUrl: string | null;
+          status: 'ready' | 'failed';
+          error: string | null;
+        };
+      };
       secureStore: {
         set: (key: string, value: string) => Promise<boolean>;
         get: (key: string) => Promise<string | null>;

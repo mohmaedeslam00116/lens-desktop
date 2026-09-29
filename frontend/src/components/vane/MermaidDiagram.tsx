@@ -1,13 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import { GitGraph, Copy, Check, AlertCircle, RefreshCw } from 'lucide-react';
+import { Language } from '../../types';
 
 interface MermaidDiagramProps {
   code: string;
   title?: string;
+  language: Language;
 }
 
-export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, title }) => {
+export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, title, language }) => {
+  const isArabic = language === 'ar';
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [svgContent, setSvgContent] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +80,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, title }) =
             <GitGraph className="w-3 h-3" />
           </div>
           <span className="font-semibold text-slate-200 text-xs">
-            {title || 'مخطط المعمارية وتدفق العمليات (Architecture Diagram)'}
+            {title || (isArabic ? 'مخطط المعمارية وتدفق العمليات' : 'Architecture & Process Diagram')}
           </span>
           <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] font-mono text-accent">
             Mermaid
@@ -88,10 +91,10 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, title }) =
           type="button"
           onClick={handleCopyCode}
           className="flex items-center gap-1 px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition text-[11px] border border-white/5"
-          title="نسخ كود المخطط"
+          title={isArabic ? 'نسخ كود المخطط' : 'Copy diagram source'}
         >
           {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-          <span>{copied ? 'تم النسخ' : 'نسخ الكود'}</span>
+          <span>{copied ? (isArabic ? 'تم النسخ' : 'Copied') : (isArabic ? 'نسخ الكود' : 'Copy source')}</span>
         </button>
       </div>
 
@@ -101,7 +104,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, title }) =
           <div className="py-4 text-center space-y-2">
             <div className="flex items-center justify-center gap-1.5 text-xs text-amber-400 font-medium">
               <AlertCircle className="w-4 h-4" />
-              <span>كود المخطط البياني (Mermaid Source):</span>
+              <span>{isArabic ? 'كود المخطط البياني (Mermaid Source):' : 'Diagram source (Mermaid):'}</span>
             </div>
             <pre className="text-left font-mono text-[11px] p-3 rounded-lg bg-panel border border-line text-slate-300 max-w-lg mx-auto overflow-x-auto">
               {code}
@@ -116,7 +119,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ code, title }) =
         ) : (
           <div className="py-6 flex items-center gap-2 text-xs text-slate-500">
             <RefreshCw className="w-3.5 h-3.5 animate-spin text-accent" />
-            <span>جاري تصيير المخطط المعماري...</span>
+            <span>{isArabic ? 'جاري تصيير المخطط المعماري...' : 'Rendering the architecture diagram...'}</span>
           </div>
         )}
       </div>

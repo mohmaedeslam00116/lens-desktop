@@ -151,6 +151,22 @@ npm test            # the full offline suite
 
 `build:react`, `build`, and `build:installer` all run `typecheck` first, so a type error fails packaging instead of shipping silently.
 
+### 4. Prove the packaged runtime still boots
+
+The test suite runs the engine from source. It cannot prove that the **shipped artifact** — Electron main, preload bridge, bundled renderer, asar packaging, and the engine inside them — boots and serves, so that is checked separately against a real package:
+
+```bash
+cd frontend
+npm run build:react && npm run build:electron
+npm run pack:unpacked     # electron-builder --win --dir  -> dist-installer/win-unpacked
+npm run verify:package    # reads the packaged bytes and asserts the declared behaviour is inside
+npm run smoke:packaged    # launches LENS.exe and checks the runtime contract
+```
+
+`verify:package` runs first because a package can launch and look healthy while holding stale or missing files — reading the archive is what proves the artifact matches the sources. It asserts the single-instance lock, port-ownership handling, and engine-endpoint bridge are in the packaged Electron main; the engine identity, health `pid`, and bound-port reporting are in the packaged engine; and the preload bridge still hands the renderer the real endpoint.
+
+The smoke test fails loudly with the captured app output when any of these do not hold: the preferred port is free before launch, the engine answers its readiness route, the readiness report names both the LENS engine **and** the launched pid (a foreign listener cannot claim both), the workspace window logged no load failure, a second launch exits instead of starting a rival engine, and a graceful close releases the port. CI runs both as a second job after the main gate passes.
+
 ---
 
 ## 📦 Building the Windows Installer (.exe)

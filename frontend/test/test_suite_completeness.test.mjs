@@ -34,3 +34,43 @@ describe('npm test manifest completeness', () => {
     assert.deepEqual(duplicates, [], `npm test lists a test file twice: ${duplicates.join(', ')}`);
   });
 });
+
+/**
+ * A declared script is an entry point: CI and operators invoke it by name, so a
+ * script whose file was never committed works on the machine that wrote it and
+ * fails on every fresh clone. This asserts every local path a script hands to
+ * Node actually exists, so the gap surfaces in the suite rather than in CI.
+ */
+describe('npm script entry points exist', () => {
+  it('resolves every script file referenced by package.json', async () => {
+    const packageJson = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8')
+    );
+
+    const referenced = new Set();
+    for (const command of Object.values(packageJson.scripts ?? {})) {
+      for (const match of String(command).matchAll(
+        /(?:^|\s)node\s+(?!-)(?:"([^"]+)"|'([^']+)'|([^\s&|;]+\.mjs|\/))(?=\s|$)/g
+      )) {
+        const target = match[1] ?? match[2] ?? match[3];
+        if (target && !target.startsWith('-')) referenced.add(target);
+      }
+    }
+
+    const missingFiles = [];
+    for (const target of referenced) {
+      if (target.includes('$')) continue; // inline -e/-p programs, not paths
+      try {
+        await readFile(new URL(`../${target}`, import.meta.url));
+      } catch {
+        missingFiles.push(target);
+      }
+    }
+
+    assert.deepEqual(
+      missingFiles.sort(),
+      [],
+      `package.json scripts reference files that do not exist: ${missingFiles.join(', ')}`
+    );
+  });
+});

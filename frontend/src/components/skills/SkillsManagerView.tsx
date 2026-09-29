@@ -135,19 +135,40 @@ export interface SkillPreInspectionResult {
 
 interface SkillsManagerViewProps {
   language: Language;
-  apiBase?: string;
+  /**
+   * Engine origin reported by the main process, or `null` when it failed to
+   * start. Skills management is a local-engine feature, so it is unavailable
+   * in that case rather than pointed at a guessed address.
+   */
+  apiBase?: string | null;
   activeSkillNames?: string[];
   selectedSkillNames?: string[];
 }
 
 export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
   language,
-  apiBase = 'http://127.0.0.1:8000',
+  apiBase = null,
   activeSkillNames = [],
   selectedSkillNames = []
 }) => {
   const isArabic = language === 'ar';
   const t = translations[language] || translations.en;
+
+  // Only an address the main process actually reported is ever used. The
+  // previous hard-coded `http://127.0.0.1:8000` default meant that while the
+  // engine was down, skill toggles and imports were sent to whatever else
+  // happened to be listening on the preferred port.
+  const engineBase = typeof apiBase === 'string' && apiBase ? apiBase.replace(/\/$/, '') : null;
+  const requireEngine = (): string => {
+    if (!engineBase) {
+      throw new Error(
+        isArabic
+          ? 'محرك البحث غير متاح، لذا لا يمكن تحميل المهارات أو تعديلها.'
+          : 'The research engine is unavailable, so skills cannot be loaded or changed.'
+      );
+    }
+    return engineBase;
+  };
 
   const [skills, setSkills] = useState<DetailedSkillItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -172,7 +193,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
     setIsLoading(true);
     setActionError(null);
     try {
-      const res = await fetch(`${apiBase}/api/skills`);
+      const res = await fetch(`${requireEngine()}/api/skills`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data.skills)) {
@@ -194,7 +215,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
   const handleToggle = async (name: string, currentEnabled: boolean) => {
     setActionError(null);
     try {
-      const res = await fetch(`${apiBase}/api/skills/toggle`, {
+      const res = await fetch(`${requireEngine()}/api/skills/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, enabled: !currentEnabled })
@@ -208,7 +229,19 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
 
   // Handle Export .zip
   const handleExport = (name: string) => {
-    const url = `${apiBase}/api/skills/export?name=${encodeURIComponent(name)}`;
+    // Navigating to an address is not a request the browser can fail into the
+    // button's own error path, so the unavailable case is reported here rather
+    // than left as an unhandled throw inside a click handler.
+    if (!engineBase) {
+      setActionError(
+        isArabic
+          ? 'محرك البحث غير متاح، لذا لا يمكن تصدير المهارات.'
+          : 'The research engine is unavailable, so skills cannot be exported.'
+      );
+      return;
+    }
+    setActionError(null);
+    const url = `${engineBase}/api/skills/export?name=${encodeURIComponent(name)}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = `${name}.zip`;
@@ -221,13 +254,15 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
   const inspectAndStageZip = async (base64: string, scope: 'workspace' | 'user') => {
     setActionError(null);
     try {
-      const inspectRes = await fetch(`${apiBase}/api/skills/inspect`, {
+      const inspectRes = await fetch(`${requireEngine()}/api/skills/inspect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ zipBase64: base64, scope })
       });
 
-      if (!inspectRes.ok) throw new Error(`Inspection failed (HTTP ${inspectRes.status})`);
+      if (!inspectRes.ok) {
+        throw new Error(isArabic ? `فشل الفحص (HTTP ${inspectRes.status})` : `Inspection failed (HTTP ${inspectRes.status})`);
+      }
       const inspectData = await inspectRes.json();
       const result: SkillPreInspectionResult = inspectData.inspection;
 
@@ -237,7 +272,9 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
       setCollisionAction(result.hasCollision ? 'keep' : 'overwrite');
       setIsPreInspectOpen(true);
     } catch (err: any) {
-      setActionError(`Inspection error: ${err.message}`);
+      // The unavailable-engine case is raised in the selected language, so the
+      // prefix that wraps it must be too.
+      setActionError(isArabic ? `خطأ في الفحص: ${err.message}` : `Inspection error: ${err.message}`);
     }
   };
 
@@ -247,13 +284,15 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
   ) => {
     setActionError(null);
     try {
-      const inspectRes = await fetch(`${apiBase}/api/skills/inspect`, {
+      const inspectRes = await fetch(`${requireEngine()}/api/skills/inspect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files, scope })
       });
 
-      if (!inspectRes.ok) throw new Error(`Inspection failed (HTTP ${inspectRes.status})`);
+      if (!inspectRes.ok) {
+        throw new Error(isArabic ? `فشل الفحص (HTTP ${inspectRes.status})` : `Inspection failed (HTTP ${inspectRes.status})`);
+      }
       const inspectData = await inspectRes.json();
       const result: SkillPreInspectionResult = inspectData.inspection;
 
@@ -263,7 +302,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
       setCollisionAction(result.hasCollision ? 'keep' : 'overwrite');
       setIsPreInspectOpen(true);
     } catch (err: any) {
-      setActionError(`Inspection error: ${err.message}`);
+      setActionError(isArabic ? `خطأ في الفحص: ${err.message}` : `Inspection error: ${err.message}`);
     }
   };
 
@@ -347,7 +386,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
     setActionError(null);
 
     try {
-      const res = await fetch(`${apiBase}/api/skills/import`, {
+      const res = await fetch(`${requireEngine()}/api/skills/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -6,6 +6,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The steps only read the repository, so the token is scoped accordingly rather
+# than inheriting the repository or organization default.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -47,3 +52,48 @@ jobs:
 
       - name: Build renderer bundle
         run: npx vite build
+
+  packaged-smoke:
+    name: Packaged runtime smoke test
+    # The suite runs the engine from source. This job proves the artifact users
+    # actually receive still boots: packaged Electron main, preload bridge,
+    # bundled renderer, asar, and the embedded engine inside them.
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer bundle
+        run: npx vite build
+
+      - name: Build embedded engine
+        run: npm run build:electron
+
+      - name: Package unpacked build
+        run: npm run pack:unpacked
+
+      - name: Verify packaged artifact contents
+        # Packaging can silently drop or stale-build a file that the sources
+        # declare. Reading the packaged bytes first means the smoke test that
+        # follows never has to guess whether it is driving current behaviour.
+        run: npm run verify:package
+
+      - name: Smoke test the packaged runtime
+        # A CI runner is slower than a workstation, so the readiness deadline is
+        # generous; the script still fails on the first contract violation.
+        run: npm run smoke:packaged -- --timeout 180000
