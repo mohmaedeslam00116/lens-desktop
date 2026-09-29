@@ -244,6 +244,18 @@ The bounded mechanism by which the Parent Research Agent spawns additional role-
 ### Parity Harness
 The regression gate (`engine/parityHarness.ts`, ADR-0011) that replays golden offline fixture runs through the legacy loop and both agency paths (delegation + researcher fan-out) and diffs coverage score, citation-grounding audit, admission sets, and the shared LiveEvent backbone against documented thresholds. It protects the agency default flip, auditor gating, and fan-out constant tuning.
 
+### Agentic Search
+The gate-free, agent-first research mode: a Pi `AgentSession` (ADR-0014) dynamically drives LENS research tools — searching, fetching, verifying, iterating — bounded by the session budget and the Plane Ledger, with evidence admission/dedupe/telemetry staying LENS-owned. It bypasses the plan-approval gate (a Deep Research invariant, unchanged) and is the default-in-chat research loop per SPEC-028.
+
+### Agent Session (Pi)
+The official pi-coding-agent runtime object (`AgentSession`) hosted in-process per ADR-0014: one per Turn-Group, research-tools-only allow-list at construction, LENS-owned discovery (`agentDir` under userData, `PI_OFFLINE`, runtime-override keys). The sole agent runtime of LENS — no second agent framework may exist, enforced by the pi-only guard test and the single session-construction seam.
+
+### Agentic Conversation
+The fifth typed workspace artifact (SPEC-028): a projection of the persisted agentic transcript, replayable from the history rail exactly as it happened. The transcript is LENS-side plain JSON (`state.messages` keyed to the ResearchSession) — runtime state never becomes LENS state except through this seam.
+
+### Turn-Group
+One agentic unit of execution: a question or a follow-up exchange handled by exactly one Agent Session (Pi). Steering and follow-ups mid-run queue through the runtime's `steer()`/`followUp()` paths within the same turn-group.
+
 ### Legacy Escape Flag
 *(Removed, ticket #104.)* Formerly the `legacy_mode: true` request flag (settings mirror: `legacyMode`) that routed a standard research run back to the legacy single loop after the ADR-0012 default flip. Requests still carrying it have the flag silently dropped — the engine performs no request-schema validation. The legacy loop survives only as the parent's delegated implementation, pinned by the #88 byte-equivalence contract at the agent level.
 
