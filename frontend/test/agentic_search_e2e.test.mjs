@@ -22,11 +22,28 @@ const { runAgenticSearch, createAgenticToolSurface, cancelAgenticSearch, agentic
   await importEngine('agenticSearch.js');
 const { resetFetchLedger } = await importEngine('fetchLedger.js');
 
-/** A scripted transport keyed on the conversation CONTENT, not call count:
- * pi-coding-agent runs background LLM tasks (session titling) that consume
- * transport invocations, so "the Nth call" is not a deterministic address.
- * The research question's context replays the tool turn then the answer;
- * any other invocation (background tasks) resolves immediately. */
+/** Extract the text of the last user message in a loop context. */
+function lastUserText(context) {
+  const messages = context?.messages ?? [];
+  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+  if (!lastUser) return '';
+  const content = lastUser.content ?? lastUser.text ?? '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((b) => b?.type === 'text')
+      .map((b) => b.text)
+      .join('');
+  }
+  return '';
+}
+
+/** A scripted transport keyed on the conversation CONTENT with EXACT-match
+ * semantics: pi-coding-agent runs background LLM tasks (session titling)
+ * whose prompts QUOTE the user question, so an `includes` key would let a
+ * background task consume the tool turn on fast machines. Only the real
+ * loop's turn — whose last user message is exactly the question — drives
+ * the script; every other invocation resolves immediately. */
 function scriptedStreamFunction(toolCallsSeen, QUESTION) {
   const usage = { input: 1, output: 1, total: 2 };
   const finalize = (message) => ({
@@ -37,12 +54,9 @@ function scriptedStreamFunction(toolCallsSeen, QUESTION) {
     model: 'scripted-1',
     usage,
   });
-  let answered = false;
   return async (_model, context) => {
-    const messages = context?.messages ?? [];
-    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-    const isResearch = JSON.stringify(lastUser ?? '').includes(QUESTION);
-    if (!isResearch || answered) {
+    const isRealTurn = lastUserText(context) === QUESTION;
+    if (!isRealTurn) {
       const quiet = finalize({ content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' });
       return {
         async *[Symbol.asyncIterator]() {
@@ -53,7 +67,6 @@ function scriptedStreamFunction(toolCallsSeen, QUESTION) {
         },
       };
     }
-    answered = true;
     const message = finalize({
       content: [{ type: 'toolCall', id: 'call-1', name: 'web_search', arguments: { query: 'agentic search evidence' } }],
       stopReason: 'toolUse',
@@ -71,13 +84,11 @@ function scriptedStreamFunction(toolCallsSeen, QUESTION) {
   };
 }
 
-/** The answer turn, played after the tool result is in the context. */
-function answerStreamFunction(QUESTION, toolCallsSeen) {
+/** The answer turn, played once the tool result is in the context. */
+function answerStreamFunction(QUESTION) {
   const usage = { input: 1, output: 1, total: 2 };
   return async (_model, context) => {
-    const messages = context?.messages ?? [];
-    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-    const isResearch = JSON.stringify(lastUser ?? '').includes(QUESTION);
+    const isRealTurn = lastUserText(context) === QUESTION;
     const message = {
       role: 'assistant',
       api: 'scripted',
@@ -85,13 +96,12 @@ function answerStreamFunction(QUESTION, toolCallsSeen) {
       model: 'scripted-1',
       usage,
       content: [
-        isResearch
+        isRealTurn
           ? { type: 'text', text: 'The agentic answer, grounded in admitted sources.' }
           : { type: 'text', text: 'ok' },
       ],
       stopReason: 'stop',
     };
-    void toolCallsSeen;
     return {
       async *[Symbol.asyncIterator]() {
         for (const block of message.content) {
@@ -134,10 +144,12 @@ async function buildScriptedSession(sessionId) {
 
   // Swap only the transport: the loop, tools, and bridge are the engine's own.
   const QUESTION = 'What does the evidence say?';
-  // Two-phase transport keyed on content: while the tool result is not yet in
-  // the context, replay the tool-call turn; once it is, play the answer.
+  // Two-phase transport keyed on content with exact-match semantics: the
+  // tool phase runs while the loop's turn has no tool result yet; the answer
+  // phase runs once it does. Background tasks (session titling) never match
+  // exactly and resolve immediately.
   const toolPhase = scriptedStreamFunction(toolCallsSeen, QUESTION);
-  const answerPhase = answerStreamFunction(QUESTION, toolCallsSeen);
+  const answerPhase = answerStreamFunction(QUESTION);
   session.agent.streamFunction = async (model, context) => {
     const hasToolResult = (context?.messages ?? []).some(
       (m) => m.role === 'toolResult' || m.role === 'tool_result'
