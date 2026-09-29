@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Docs (research harvest)**: archived the eight research documents that lived only on unmerged branches into `docs/research/` — the agent SDK survey and its verification addendum (#62/#64), the Antigravity SDK fallback feasibility study (#60), the engine core review (#61), the pi-agent-sdk evaluation, the bilingual retrieval benchmark dataset spec (LENS-IR-100), the Pi runtime hosting investigation (the primary source ADR-0014 cites), and the archived Antigravity harness mapping input to #122. The unmerged research branches are deleted after this landing.
 - **Docs (SPEC-028 — issue #122, map #118)**: the final UX + backend/harness specification for the Pi-only Antigravity-style LENS, ready for `/to-tickets` — Agentic Search as the gate-free default-in-chat loop on an in-process `AgentSession` (ADR-0014), the agent workspace with typed artifacts (Plan, Evidence Shelf, Living Report, Research Graph, and the new Agentic Conversation), permissions as a construction-time research-tools allow-list, transparent retries, and the parity-gated Deep Research researcher migration as the final phase. Nine decisions settled with the operator by structured grilling against the map's closed tickets; the Pi-only rule is enforced at a named seam plus a suite guard, not by convention. `CONTEXT.md` gains the domain terms (Agentic Search, Agent Session (Pi), Agentic Conversation, Turn-Group).
 
 ## [1.3.0] - 2026-09-29
