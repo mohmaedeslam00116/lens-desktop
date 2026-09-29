@@ -30,7 +30,26 @@
 import { join } from 'path';
 import { homedir } from 'os';
 import { mkdirSync } from 'fs';
-import electron from 'electron';
+
+/**
+ * The Electron app object, resolved lazily. `require('electron')` at module
+ * load is a CI hazard: on a runner without the binary, the electron package
+ * synchronously spawns the binary download mid-test, freezing timers and
+ * reshuffling every wall-clock assumption. In the packaged app the import is
+ * trivial; in node tests it must never block, so failure to resolve simply
+ * falls back to the LENS-owned home path.
+ */
+function resolveElectronApp(): { getPath(name: string): string } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = require('electron');
+    const app = (electron as any)?.default?.app ?? (electron as any)?.app ?? null;
+    if (app && typeof app.getPath === 'function') return app;
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /** The research tools a LENS session may be granted; pi's todo joins them. */
 export const RESEARCH_TOOL_ALLOW_LIST = [
@@ -89,8 +108,8 @@ export async function loadPiRuntime(): Promise<any> {
  * to a LENS-owned path under the user home — never the user's real `~/.pi`.
  */
 export function resolveAgentDir(): string {
-  const app: any = (electron as any)?.app ?? null;
-  if (app && typeof app.getPath === 'function') {
+  const app = resolveElectronApp();
+  if (app) {
     try {
       return join(app.getPath('userData'), 'pi-agent');
     } catch {
