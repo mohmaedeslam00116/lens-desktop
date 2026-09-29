@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Docs (SPEC-028 — issue #122, map #118)**: the final UX + backend/harness specification for the Pi-only Antigravity-style LENS, ready for `/to-tickets` — Agentic Search as the gate-free default-in-chat loop on an in-process `AgentSession` (ADR-0014), the agent workspace with typed artifacts (Plan, Evidence Shelf, Living Report, Research Graph, and the new Agentic Conversation), permissions as a construction-time research-tools allow-list, transparent retries, and the parity-gated Deep Research researcher migration as the final phase. Nine decisions settled with the operator by structured grilling against the map's closed tickets; the Pi-only rule is enforced at a named seam plus a suite guard, not by convention. `CONTEXT.md` gains the domain terms (Agentic Search, Agent Session (Pi), Agentic Conversation, Turn-Group).
+
 ## [1.3.0] - 2026-09-29
 
 **Runtime Proof & a Leaner Launch** — this release turns the shipped artifact
