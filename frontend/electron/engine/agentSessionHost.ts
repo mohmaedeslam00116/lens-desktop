@@ -202,11 +202,29 @@ export async function createResearchSession(
 
   const customTools = (tools?.definitions ?? []).map((definition) => toPiTool(definition, tools!.handler));
 
-  const { session } = await pi.createAgentSessionFromServices({ services, sessionManager, customTools });
+  const { session } = await pi.createAgentSessionFromServices({
+    services,
+    sessionManager,
+    customTools,
+    // The allow-list is the permission grant (ADR-0014 decision 2): the
+    // default built-in tools (read/bash/edit/write) are disabled — without
+    // this, customTools are ADDED ON TOP of the coding tools and the
+    // construction contract is breached. LENS-owned discovery also means no
+    // filesystem extensions/skills/context-files discovery in sessions:
+    // LENS provisions everything itself.
+    noTools: 'builtin',
+    resourceLoaderOptions: { noExtensions: true, noSkills: true, noContextFiles: true },
+  });
 
   lastConstruction = { sessionManagerKind: 'inMemory', agentDir, modelNetwork: false };
 
-  return { session, tools: [...RESEARCH_TOOL_ALLOW_LIST] };
+  // Truth-in-tests: report the tools the runtime actually granted on the
+  // live session — the construction contract is about the session, not the
+  // allow-list constant.
+  const grantedTools: string[] = (session?.agent?.state?.tools ?? []).map((t: any) =>
+    typeof t === 'string' ? t : (t?.name ?? String(t))
+  );
+  return { session, tools: grantedTools };
 }
 
 /** Test seams — the suite imports the compiled engine and probes these. */

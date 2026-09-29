@@ -83,7 +83,17 @@ describe('AgentSession host — ADR-0014 construction contract', () => {
     assert.equal(typeof hosted.session.prompt, 'function');
     assert.equal(typeof hosted.session.abort, 'function');
     assert.equal(typeof hosted.session.steer, 'function');
-    assert.deepEqual(hosted.tools, RESEARCH_TOOLS);
+    // Truth-in-tests: what the runtime actually granted on the live session,
+    // not what the allow-list constant declares. With no tool surface passed,
+    // the granted set may be empty — but coding tools must be absent from
+    // whatever IS granted (the absolute construction invariant).
+    for (const tool of FORBIDDEN_TOOLS) {
+      assert.equal(
+        hosted.tools.includes(tool),
+        false,
+        `coding tool "${tool}" was actually granted on the live session`
+      );
+    }
   });
 });
 
