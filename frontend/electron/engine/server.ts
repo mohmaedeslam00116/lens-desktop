@@ -4,12 +4,21 @@ import * as crypto from 'crypto';
 import { LiveEvent, ResearchPlan, ResearchRequest, WideResearchRequest } from './types';
 import { ModelClient } from './models';
 import { DeepResearchAgent } from './agent';
-import { ParentResearchAgent } from './parentAgent';
+import { ParentResearchAgent, resetResearcherBudget } from './parentAgent';
 // ADR-0010 closure (ticket #104): DeepResearchAgent's only remaining
 // consumers are the followup Q&A static and the wide-mode session-completion
 // path — the standard-loop route now goes exclusively through the parent.
 import { evictPackageToolCache } from './piResearchTools';
-import { resetResearcherBudget } from './parentAgent';
+import {
+  runAgenticSearch,
+  cancelAgenticSearch,
+  agenticAdmissionGuard,
+  createAgenticToolSurface,
+  type AgenticRunState,
+} from './agenticSearch';
+import { createAgenticResearchSession } from './agenticSessionBootstrap';
+import { primarySearchPlane } from './searchPlane';
+import { primaryScrapePlane } from './scrapePlane';
 import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
 import { DiscoverService } from './discover';
 import { fetchEmbeddingModels, createEmbeddingModel } from './embeddings';
@@ -105,18 +114,144 @@ globalSkillRegistry.discoverAll().catch(err => {
  * Deep Research's plan-gated path. */
 export const AGENTIC_ROUTES = ['/api/agent/start', '/api/agent/steer', '/api/agent/cancel'] as const;
 
+/** The agentic-run request shape: one question, one admission surface. */
+export interface AgenticStartRequest {
+  question: string;
+  provider?: string;
+  api_key?: string;
+  ollama_endpoint?: string;
+  max_fetches?: number;
+}
+
+/** Server-side admission-time normalization of the start request. */
+function normalizeAgentStartRequest(body: Partial<AgenticStartRequest> | undefined): AgenticStartRequest {
+  const provider = typeof body?.provider === 'string' && body.provider.trim() ? body.provider.trim().toLowerCase() : 'gemini';
+  return {
+    question: String(body?.question ?? '').trim(),
+    provider,
+    api_key: typeof body?.api_key === 'string' ? body.api_key : undefined,
+    ollama_endpoint: typeof body?.ollama_endpoint === 'string' ? body.ollama_endpoint : undefined,
+    max_fetches: typeof body?.max_fetches === 'number' && Number.isFinite(body.max_fetches) && body.max_fetches > 0
+      ? Math.floor(body.max_fetches)
+      : 12,
+  };
+}
+
+/**
+ * Start-time admission guard for the agentic surface (mirrors #119): without
+ * a usable provider the run can only hang, so it is rejected bilingually —
+ * an HTTP 422, never a started run that starves in silence.
+ */
+export function providerAdmissionGuardForAgent(body: Partial<AgenticStartRequest> | undefined): string | null {
+  return agenticAdmissionGuard({
+    provider: body?.provider,
+    apiKey: body?.api_key,
+    ollamaEndpoint: body?.ollama_endpoint,
+  });
+}
+
 interface ActiveAgentRun {
-  state: import('./agenticSearch').AgenticRunState;
+  state: AgenticRunState;
   session: any;
 }
-const activeAgentRuns = new Map<string, ActiveAgentRun>();
-export function createAgenticResearchSession(
+/** Live agentic runs by sessionId: one run per session, per the runner's
+ * registry contract. The map is written at start (BEFORE the first emission,
+ * so streaming subscribers always find their session) and removed at terminal. */
+const activeAgentSessions = new Map<string, ActiveAgentRun>();
+
+/** Fan one agentic LiveEvent out to the run's live event subscribers, and
+ * remove the run from the live map at its terminal. Every event reaches the
+ * subscriber with an incrementing `eventId` — the same delta-replay contract
+ * the research sessions stream under — and lands in the bounded per-session
+ * log so a late /ws/agent/:id attach replays what it missed. */
+function emitAgentEvent(sessionId: string, event: LiveEvent): void {
+  const run = activeAgentSessions.get(sessionId);
+  if (!run) return;
+  agentEventSeq.set(sessionId, (agentEventSeq.get(sessionId) ?? 0) + 1);
+  const envelope: LiveEvent & { eventId?: number } = { ...event, eventId: agentEventSeq.get(sessionId) };
+  const log = agentEventLog.get(sessionId) ?? [];
+  log.push(envelope);
+  if (log.length > AGENT_EVENT_LOG_CAP) log.shift();
+  agentEventLog.set(sessionId, log);
+  for (const subscriber of agentEventSubscribers) {
+    try {
+      subscriber(sessionId, envelope);
+    } catch {
+      // A broken subscriber never starves the run or its other observers.
+    }
+  }
+  if (['finished', 'error', 'cancelled', 'budget_exhausted'].includes(event.type)) {
+    activeAgentSessions.delete(sessionId);
+    agentEventSeq.delete(sessionId);
+    // The log outlives the run briefly so a subscriber attaching around the
+    // terminal still replays it; the next run on a fresh sessionId never
+    // sees it (ids are unique per start).
+    setTimeout(() => agentEventLog.delete(sessionId), 30_000).unref?.();
+  }
+}
+
+/** Live agentic-event subscribers (the /ws/agent/:id bridge registers here). */
+const agentEventSubscribers = new Set<(sessionId: string, event: LiveEvent) => void>();
+/** Per-session event counters backing the delta-replay envelope. */
+const agentEventSeq = new Map<string, number>();
+/** Bounded per-session event log: a subscriber that attaches after the run
+ * started replays what it missed (the /ws/research delta contract, carried
+ * over) — a run's early events are never lost to a slow attach. */
+const agentEventLog = new Map<string, Array<LiveEvent & { eventId?: number }>>();
+const AGENT_EVENT_LOG_CAP = 500;
+
+/**
+ * Build, register, and run one agentic session server-side: the #140 seam
+ * builds the hosted session with the LENS-wrapped tool surface registered at
+ * construction, the retrieval routes through the primary plane (ledgered —
+ * ADR-0013 D5), and the runner drives one Turn-Group into explicit terminals.
+ * This is the engine surface the renderer's Agentic Search talks to.
+ *
+ * Resolves once the session is constructed and REGISTERED — the accepting
+ * HTTP response and the client's /ws/agent/:id attach precede the first
+ * emission; the run itself starts on the next tick.
+ */
+export async function startAgenticSearchSession(
   sessionId: string,
-  tools: import('./agentSessionHost').LensToolSurface
-): Promise<any> {
-  return import('./agentSessionHost').then((m) =>
-    m.createResearchSession({ sessionId }, tools).then((hosted) => hosted.session)
-  );
+  request: AgenticStartRequest
+): Promise<void> {
+  const state: AgenticRunState = { sources: [], reportChunks: [], fetchesUsed: 0 };
+  const surface = createAgenticToolSurface({
+    sessionId,
+    state,
+    maxFetches: request.max_fetches ?? 12,
+    emit: (event) => emitAgentEvent(sessionId, event),
+    search: async (query) => {
+      const hits = await primarySearchPlane(query);
+      return hits.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
+    },
+    fetchPage: async (url) => {
+      const page = await primaryScrapePlane(url);
+      return page.content ? { url: page.url, title: page.title, text: page.content } : null;
+    },
+  });
+  const session = await createAgenticResearchSession(sessionId, surface, {
+    provider: request.provider,
+    apiKey: request.api_key,
+  });
+  activeAgentSessions.set(sessionId, { state, session });
+  // Registered BEFORE the run starts: the first emissions find their session.
+  setImmediate(() => {
+    runAgenticSearch(session, {
+      sessionId,
+      question: request.question,
+      state,
+      emit: (event) => emitAgentEvent(sessionId, event),
+    }).catch((err: any) => {
+      console.error('[Server] Agentic run failed:', err?.message ?? String(err));
+      emitAgentEvent(sessionId, {
+        type: 'error',
+        sessionId,
+        state: 'failed',
+        message: `Agentic run failed: ${err?.message ?? String(err)}`,
+      } as LiveEvent);
+    });
+  });
 }
 
 let httpServer: http.Server | null = null;
@@ -827,6 +962,75 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           return;
         }
 
+        if (pathname === '/api/agent/start' && req.method === 'POST') {
+          const raw = await parseJsonBody<Partial<AgenticStartRequest>>(req);
+          // Admission first (#119 mirrored at the agentic surface): without a
+          // usable provider the run can only hang — reject bilingually.
+          const agentGuard = providerAdmissionGuardForAgent(raw);
+          if (agentGuard) {
+            res.writeHead(422, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: agentGuard }));
+            return;
+          }
+          const request = normalizeAgentStartRequest(raw);
+          if (!request.question) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing question parameter | معامل السؤال مفقود' }));
+            return;
+          }
+          const sessionId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const acceptPayload = { session_id: sessionId, session_url: `/ws/agent/${sessionId}` };
+          // Construction is awaited so the accepting response and the client's
+          // /ws/agent/:id attach always find a registered session; the run
+          // starts on the next tick inside startAgenticSearchSession.
+          try {
+            await startAgenticSearchSession(sessionId, request);
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Failed to start the agentic run: ${err?.message ?? String(err)}` }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(acceptPayload));
+          return;
+        }
+
+        // Steer the live agentic run for a session (queued mid-run).
+        if (pathname === '/api/agent/steer' && req.method === 'POST') {
+          const body = await parseJsonBody<{ session_id?: string; message?: string }>(req);
+          const run = body.session_id ? activeAgentSessions.get(body.session_id) : undefined;
+          if (!run) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No live agentic run for this session | لا يوجد تشغيل أجنتي حي لهذه الجلسة' }));
+            return;
+          }
+          const message = String(body.message ?? '').trim();
+          if (!message || typeof run.session.steer !== 'function') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing message parameter | معامل الرسالة مفقود' }));
+            return;
+          }
+          await run.session.steer(message);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, session_id: body.session_id }));
+          return;
+        }
+
+        // Cancel the live agentic run for a session (explicit terminal).
+        if (pathname === '/api/agent/cancel' && req.method === 'POST') {
+          const body = await parseJsonBody<{ session_id?: string }>(req);
+          const found = body.session_id ? activeAgentSessions.has(body.session_id) : false;
+          const cancelled = found ? cancelAgenticSearch(body.session_id!) : false;
+          if (!found || !cancelled) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No live agentic run for this session | لا يوجد تشغيل أجنتي حي لهذه الجلسة' }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, session_id: body.session_id }));
+          return;
+        }
+
         // Not Found
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Endpoint not found' }));
@@ -863,6 +1067,35 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
       }
 
       const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+
+      // Agentic Search event stream (/ws/agent/:id, ticket #142): subscribes
+      // to the run's LiveEvents and streams them — one bridge, one contract.
+      const agentMatch = parsedUrl.pathname.match(/^\/ws\/agent\/([a-zA-Z0-9-]+)$/);
+      if (agentMatch) {
+        const agentSessionId = agentMatch[1];
+        if (!activeAgentSessions.has(agentSessionId)) {
+          ws.close(1008, 'Session not found');
+          return;
+        }
+        // Replay what the run already emitted, then subscribe live — the
+        // research-session delta contract, carried onto the agentic stream.
+        for (const event of agentEventLog.get(agentSessionId) ?? []) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(event));
+          }
+        }
+        const subscriber = (sessionId: string, event: LiveEvent) => {
+          if (sessionId === agentSessionId && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(event));
+          }
+        };
+        agentEventSubscribers.add(subscriber);
+        ws.on('close', () => {
+          agentEventSubscribers.delete(subscriber);
+        });
+        return;
+      }
+
       const match = parsedUrl.pathname.match(/\/ws\/research\/([a-zA-Z0-9-]+)/);
       const sessionId = match ? match[1] : null;
 

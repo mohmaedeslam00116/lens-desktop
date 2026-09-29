@@ -38,6 +38,19 @@ export interface AgenticRunState {
   fetchesUsed: number;
 }
 
+/**
+ * One tool-handler outcome under the #140 `LensToolSurface` contract: success
+ * carries `result` (string pass-through, anything else JSON-serialised by the
+ * host's `toPiTool`), refusal carries `error`. This is the exact shape the
+ * construction seam reads — any other field (a bare `output`, say) is
+ * silently dropped and the model sees "null" for the tool's text.
+ */
+export interface AgenticToolOutcome {
+  success: boolean;
+  result?: string;
+  error?: string;
+}
+
 export interface AgenticToolContext {
   sessionId: string;
   /** Ledgered page retrieval for fetch_content (injectable for tests). */
@@ -120,11 +133,11 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
 
   return {
     definitions,
-    handler: async (call) => {
+    handler: async (call): Promise<AgenticToolOutcome> => {
       try {
         if (call.name === 'web_search') {
           const query = String(call.arguments?.query ?? '').trim();
-          if (!query) return { success: false, output: 'Error: web_search requires a query.' };
+          if (!query) return { success: false, error: 'web_search requires a query.' };
           const hits = await context.search(query);
           for (const hit of hits) {
             admitSource(context, {
@@ -138,25 +151,25 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
           const body = hits
             .map((h, i) => `[${i + 1}] ${h.title} — ${h.url}\n${h.snippet}`)
             .join('\n\n');
-          return { success: true, output: body || 'No results.' };
+          return { success: true, result: body || 'No results.' };
         }
         if (call.name === 'fetch_content') {
           const url = String(call.arguments?.url ?? '').trim();
-          if (!url) return { success: false, output: 'Error: fetch_content requires a URL.' };
+          if (!url) return { success: false, error: 'fetch_content requires a URL.' };
           const page = await fetchPage(url);
           if (!page) {
             return {
               success: false,
-              output: context.signal?.aborted
-                ? 'Error: fetch aborted.'
-                : `Error: could not fetch ${url} (budget or retrieval failure).`,
+              error: context.signal?.aborted
+                ? 'fetch aborted.'
+                : `could not fetch ${url} (budget or retrieval failure).`,
             };
           }
-          return { success: true, output: page.text };
+          return { success: true, result: page.text };
         }
-        return { success: false, output: `Error: unknown tool "${call.name}".` };
+        return { success: false, error: `unknown tool "${call.name}".` };
       } catch (error: any) {
-        return { success: false, output: `Error: ${error?.message ?? String(error)}` };
+        return { success: false, error: error?.message ?? String(error) };
       }
     },
   };
@@ -176,8 +189,6 @@ export interface AgenticRunOptions {
   emit: (event: LiveEvent) => void;
   /** The accumulated state from the tool surface built for this run. */
   state: AgenticRunState;
-  /** The hosted session from the #140 seam (with the surface registered). */
-  session: { subscribe: (listener: (event: any) => void) => () => void; prompt: (text: string) => Promise<void>; abort: () => Promise<void> | void };
   signal?: AbortSignal;
 }
 
@@ -219,6 +230,17 @@ export function agenticAdmissionGuard(body: { provider?: string; apiKey?: string
  */
 export async function runAgenticSearch(session: any, options: AgenticRunOptions): Promise<AgenticRunResult> {
   const { sessionId, question, state } = options;
+
+  // One live run per session: a second start while one is live is rejected
+  // explicitly — never a silent registry takeover that orphans the live run
+  // and makes cancel unreachable for it. The rejection is a visible error
+  // terminal (Event Faithfulness), bilingually actionable.
+  if (activeRuns.has(sessionId)) {
+    const message = 'An agentic run is already live for this session. Cancel it or wait for it to finish. | هناك تشغيل أجنتي حي لهذه الجلسة. ألغه أو انتظر انتهائه.';
+    options.emit({ type: 'error', sessionId, state: 'failed', message } as LiveEvent);
+    return { terminal: 'error', report: '', sources: [] };
+  }
+
   const abort = new AbortController();
   let terminal: AgenticRunResult['terminal'] = 'error';
   resetFetchLedger(sessionId);

@@ -245,7 +245,10 @@ describe('Agentic Search end-to-end — scripted provider, real seams', () => {
     assert.equal(ok.success, true);
     const over = await capped.handler({ name: 'fetch_content', arguments: { url: 'https://agentic-e2e.example/two' } });
     assert.equal(over.success, false);
-    assert.match(over.output, /budget/i);
+    // The LensToolSurface contract (#140): refusals carry `error` — the field
+    // toPiTool reads. (The handler once leaked a bare `output`; the contract
+    // guard test pins the shape, this asserts the refusal text itself.)
+    assert.match(over.error, /budget/i);
     assert.ok(capEvents.some((e) => e.type === 'budget_exhausted'), 'budget refusal is a visible event');
     assert.ok(session, 'session seams live');
   });
