@@ -16,6 +16,9 @@ Operational guidelines, conventions, and context for AI agents working in this r
 ### Skill Router
 - **Flow Routing**: Consult `/ask-matt` (`.agents/skills/ask-matt/SKILL.md`) to route work along the standard flow: `idea` → `/grill-with-docs` → `/to-spec` → `/to-tickets` → `/implement` (TDD) → `/code-review` → PR.
 
+### Bug Diagnosis (Mandatory)
+- **Any problem that occurs — a bug, a thrown error, a failing or flaky test, a performance regression, or a red CI run — MUST be resolved through `/diagnosing-bugs` (`.agents/skills/diagnosing-bugs/SKILL.md`). No exceptions and no fix-first.** Build a tight, red-capable reproduction loop (one command that goes red on the exact symptom) before forming hypotheses or touching code; minimise the repro; fix only with a regression test at a correct seam; and state the confirmed root-cause hypothesis in the commit / PR message so the next debugger learns.
+
 ### Documentation & Domain Skills
 - **Writing for Agents (`/writing-for-agents`)**: Use when creating, editing, or auditing agent guidelines, skills, `AGENTS.md`, or architecture documents. Enforce strict information hierarchy, demand-driven completion criteria, and context pointer hygiene.
 - **Domain Modeling (`/domain-modeling`)**: Use to continuously evolve `CONTEXT.md` with ubiquitous domain terminology and record significant, hard-to-reverse architectural choices in Architecture Decision Records (`docs/adr/`).
