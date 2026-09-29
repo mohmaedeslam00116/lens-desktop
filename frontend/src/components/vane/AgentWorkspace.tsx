@@ -292,7 +292,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({
             </div>
           ) : (
             diagrams.map((d) => (
-              <DiagramCanvas key={d.id} code={d.code} title={d.title} />
+              <DiagramCanvas key={d.id} code={d.code} title={d.title} language={language} />
             ))
           )}
         </div>

@@ -11,9 +11,16 @@ import { createPackage } from '@electron/asar';
 /**
  * The packaged-artifact gate (`scripts/verify-package.mjs`) is only worth
  * running if it can fail. These cases drive it against synthetic archives built
- * on the spot, pinning the pass path, the comment-stripping rule, and the
- * failure codes instead of assuming them: a gate that silently passes a stale
- * artifact is worse than no gate, because it launders staleness as proof.
+ * on the spot, pinning the pass path and the failure codes instead of assuming
+ * them: a gate that silently passes a stale artifact is worse than no gate,
+ * because it launders staleness as proof.
+ *
+ * Both ways a stale artifact can still *look* current are covered. Its contract
+ * names survive in comments (a note about what was removed), or they survive in
+ * string literals (log lines, test fixtures, documentation strings) while the
+ * behaviour is gone. Probes therefore read the parsed syntax tree, and the two
+ * fixtures below are the proof: each one carries every contract name, keeps
+ * every expected file present, and must still be rejected.
  *
  * Archives are built with the same `@electron/asar` the packager uses, so the
  * read path under test is the real one, not a stand-in.
@@ -54,6 +61,30 @@ const COMMENT_ONLY_STUBS = {
   ].join('\n'),
   'dist-electron/preload.js': [
     '// engine: { endpoint } and secure-store-get were dropped from the bridge',
+  ].join('\n'),
+};
+
+// The same probes, every one of them surviving only inside a string literal:
+// an artifact that kept the contract names for its logs, docs, or fixtures while
+// the behaviour went away. Every file is still present, so nothing but the
+// syntax-aware probes can catch it.
+const STRING_ONLY_STUBS = {
+  'dist-electron/main.js': [
+    'const notes = [',
+    '  "const lock = app.requestSingleInstanceLock();",',
+    "  \"app.on('second-instance', () => {});\",",
+    "  \"if (err.code === 'EADDRINUSE') { report(err); }\",",
+    "  \"ipcMain.on('engine-endpoint', () => {});\",",
+    "].join('\\n');",
+  ].join('\n'),
+  'dist-electron/engine/server.js': [
+    'const notes = [',
+    '  "res.end(JSON.stringify({ status: \'ok\', engine: \'LENS embedded research engine\', pid: process.pid, port: boundPort }));",',
+    "].join('\\n');",
+  ].join('\n'),
+  'dist-electron/preload.js': [
+    'const notes = "contextBridge.exposeInMainWorld(\'electronAPI\', { engine: { endpoint: engineEndpoint } })";',
+    'const channels = "secure-store-get was exposed through ipcRenderer.invoke";',
   ].join('\n'),
 };
 
@@ -103,6 +134,18 @@ describe('packaged-artifact gate (scripts/verify-package.mjs)', () => {
     assert.equal(status, 1, `gate passed a stale artifact:\n${output}`);
     assert.match(output, /9 expectation\(s\) missing/);
     assert.match(output, /MISS\s+single-instance lock/);
+  });
+
+  it('fails an archive whose probes survive only inside string literals', async () => {
+    const asarPath = await buildStubArchive('string-only', STRING_ONLY_STUBS);
+    const { status, output } = runGate(asarPath);
+    assert.equal(status, 1, `gate passed an artifact that only names its contracts:\n${output}`);
+    // Every expected file is present; only the behaviour is missing.
+    assert.doesNotMatch(output, /MISSING/, `files should all be present:\n${output}`);
+    assert.match(output, /9 expectation\(s\) missing/);
+    assert.match(output, /MISS\s+single-instance lock/);
+    assert.match(output, /MISS\s+engine identity payload/);
+    assert.match(output, /MISS\s+secure store bridge/);
   });
 
   it('fails an archive that is missing a contract file', async () => {

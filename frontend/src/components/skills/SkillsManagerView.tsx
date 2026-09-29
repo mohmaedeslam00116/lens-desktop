@@ -260,7 +260,9 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
         body: JSON.stringify({ zipBase64: base64, scope })
       });
 
-      if (!inspectRes.ok) throw new Error(`Inspection failed (HTTP ${inspectRes.status})`);
+      if (!inspectRes.ok) {
+        throw new Error(isArabic ? `فشل الفحص (HTTP ${inspectRes.status})` : `Inspection failed (HTTP ${inspectRes.status})`);
+      }
       const inspectData = await inspectRes.json();
       const result: SkillPreInspectionResult = inspectData.inspection;
 
@@ -270,7 +272,9 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
       setCollisionAction(result.hasCollision ? 'keep' : 'overwrite');
       setIsPreInspectOpen(true);
     } catch (err: any) {
-      setActionError(`Inspection error: ${err.message}`);
+      // The unavailable-engine case is raised in the selected language, so the
+      // prefix that wraps it must be too.
+      setActionError(isArabic ? `خطأ في الفحص: ${err.message}` : `Inspection error: ${err.message}`);
     }
   };
 
@@ -286,7 +290,9 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
         body: JSON.stringify({ files, scope })
       });
 
-      if (!inspectRes.ok) throw new Error(`Inspection failed (HTTP ${inspectRes.status})`);
+      if (!inspectRes.ok) {
+        throw new Error(isArabic ? `فشل الفحص (HTTP ${inspectRes.status})` : `Inspection failed (HTTP ${inspectRes.status})`);
+      }
       const inspectData = await inspectRes.json();
       const result: SkillPreInspectionResult = inspectData.inspection;
 
@@ -296,7 +302,7 @@ export const SkillsManagerView: React.FC<SkillsManagerViewProps> = ({
       setCollisionAction(result.hasCollision ? 'keep' : 'overwrite');
       setIsPreInspectOpen(true);
     } catch (err: any) {
-      setActionError(`Inspection error: ${err.message}`);
+      setActionError(isArabic ? `خطأ في الفحص: ${err.message}` : `Inspection error: ${err.message}`);
     }
   };
 

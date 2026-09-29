@@ -186,7 +186,7 @@ export const ReportRenderer: React.FC<ReportRendererProps> = ({
       const rawCode = String(children).replace(/\n$/, '');
 
       if (!inline && languageName === 'mermaid') {
-        return <DiagramCanvas code={rawCode} />;
+        return <DiagramCanvas code={rawCode} language={language} />;
       }
 
       if (!inline) {
