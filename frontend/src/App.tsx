@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, AlertTriangle } from 'lucide-react';
 import { Sidebar } from './components/vane/Sidebar';
-import { EmptyChat } from './components/vane/EmptyChat';
 import { MessageBox } from './components/vane/MessageBox';
 import { MessageInput } from './components/vane/MessageInput';
 import { DiscoverView } from './components/vane/DiscoverView';
@@ -32,6 +31,7 @@ import { resolveEngineEndpointFromWindow, DEFAULT_ENGINE_PORT } from './utils/en
 import { useEngineHealth } from './hooks/useEngineHealth';
 import type { EngineProbeResult } from './utils/engineHealth.mjs';
 import { telemetryStep, AgentFeedState, LiveEventLike } from './utils/liveFeed';
+import { initialAgentRunState, reduceAgentRun, type AgentRunFeedState } from './utils/agentRunFeed.mjs';
 
 /**
  * The embedded engine's endpoint is bound by the Electron main process, which
@@ -127,7 +127,10 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'discover' | 'history' | 'graph' | 'skills'>('home');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-  const [isHarnessPreviewOpen, setIsHarnessPreviewOpen] = useState(false);
+  // The live agentic run feed (ticket #145): reduced from the engine's
+  // /ws/agent/:id stream — cards and chips render from real events only.
+  const [agentRunFeed, setAgentRunFeed] = useState<AgentRunFeedState | null>(null);
+  const agentAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   /**
    * The engine's live reachability. The workspace used to discover a dead engine
@@ -317,6 +320,162 @@ export function App() {
     setIsRegeneratingPlan(false);
     setActiveSessionId(null);
     setActiveTab('home');
+  };
+
+  /**
+   * Agentic Search — the default-in-chat interaction (ticket #145; SPEC-028).
+   * Posts the question to the engine's /api/agent/start surface, attaches the
+   * /ws/agent/:id live stream, and reduces every event into the run feed the
+   * workspace renders. Cards and chips reflect REAL events end-to-end.
+   */
+  const handleStartAgentRun = async (searchQuery: string) => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed || isSearching) return;
+
+    const activeKey = (settings.keys[settings.llm_provider as keyof typeof settings.keys] || '').trim();
+    if (settings.llm_provider !== 'ollama' && !activeKey) {
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    setResearchError('');
+    setCurrentQuery(trimmed);
+    setIsSearching(true);
+    setActiveTab('home');
+    setActiveReport(null);
+    setConversationProjection(null);
+    setCurrentStatus(language === 'ar' ? 'بدء التشغيل الأجنتي...' : 'Starting the agentic run...');
+    setAgents([]);
+    setAgentEventCount(0);
+    setAgentRunFeed(initialAgentRunState(''));
+
+    const controller = new AbortController();
+    let sessionId = '';
+    try {
+      const response = await fetch(`${API_BASE}/api/agent/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: trimmed,
+          provider: settings.llm_provider,
+          api_key: activeKey || undefined,
+          ollama_endpoint: settings.llm_provider === 'ollama' ? settings.ollama_endpoint : undefined,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(String(detail?.error ?? `Agentic start failed (${response.status})`));
+      }
+      const accept = await response.json();
+      sessionId = String(accept.session_id ?? '');
+      const streamPath = String(accept.session_url ?? `/ws/agent/${sessionId}`);
+      if (!sessionId) throw new Error(language === 'ar' ? 'لم يُقم المحرك بمعرّف الجلسة.' : 'The engine did not return a session id.');
+      agentAbortControllersRef.current.set(sessionId, controller);
+
+      const ws = new WebSocket(`${WS_BASE}${streamPath}`);
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(String(event.data));
+          setAgentRunFeed((prev) => reduceAgentRun(prev, { ...payload, sessionId }));
+          if (payload.type === 'status') {
+            setCurrentStatus(String(payload.message ?? currentStatus));
+          } else if (payload.type === 'source') {
+            setVisitedSources((prev) => {
+              if (prev.some((s) => s.url === (payload.url ?? payload.source?.url))) return prev;
+              return [...prev, {
+                url: payload.url ?? payload.source?.url ?? '',
+                title: payload.title ?? payload.source?.title ?? 'Source',
+                domain: payload.domain ?? payload.source?.domain,
+                snippet: payload.snippet ?? payload.source?.snippet ?? '',
+                credibility: payload.credibility ?? 0.5,
+              }];
+            });
+          } else if (payload.type === 'report_chunk') {
+            const chunk = String(payload.chunk ?? payload.text ?? '');
+            setLiveReport((prev) => {
+              liveReportRef.current = prev + chunk;
+              return liveReportRef.current;
+            });
+          } else if (payload.type === 'finished') {
+            // The explicit terminal — the run's report and admitted sources
+            // land in the normal history pipeline (Deep Research parity).
+            const finalReport = {
+              id: sessionId,
+              query: trimmed,
+              title: trimmed,
+              content: String(payload.report ?? liveReportRef.current ?? ''),
+              sources: Array.isArray(payload.sources) ? payload.sources : [],
+              createdAt: new Date().toISOString(),
+              costs: 0.0,
+              language,
+            } as ReportData;
+            setActiveReport(finalReport);
+            setIsSearching(false);
+            setHistory((prev) => {
+              const updated = [finalReport, ...prev.filter((p) => p.id !== finalReport.id).slice(0, 49)];
+              localStorage.setItem('deep_research_history', JSON.stringify(updated));
+              return updated;
+            });
+            const projection = payload.conversationProjection ?? null;
+            if (projection) {
+              setConversationProjection(projection);
+              try {
+                const rawConversations = localStorage.getItem('lens-agentic-conversations');
+                const conversations = rawConversations ? JSON.parse(rawConversations) : {};
+                conversations[finalReport.id] = projection;
+                localStorage.setItem('lens-agentic-conversations', JSON.stringify(conversations));
+              } catch { /* Projection persistence is optional; replay degrades visibly. */ }
+            }
+            agentAbortControllersRef.current.delete(sessionId);
+            ws.close();
+          } else if (payload.type === 'error' || payload.type === 'cancelled' || payload.type === 'budget_exhausted') {
+            setCurrentStatus(String(payload.message ?? ''));
+            setIsSearching(false);
+            agentAbortControllersRef.current.delete(sessionId);
+            ws.close();
+          }
+        } catch { /* A malformed event never breaks the run. */ }
+      };
+      ws.onclose = () => {
+        agentAbortControllersRef.current.delete(sessionId);
+        setIsSearching(false);
+      };
+    } catch (error: any) {
+      if (controller.signal.aborted) return;
+      setResearchError(String(error?.message ?? error));
+      setIsSearching(false);
+    }
+  };
+
+  /** Steer the live agentic run: queued VISIBLY, applied by the engine. */
+  const handleSteerAgentRun = async (message: string) => {
+    const feed = agentRunFeed;
+    if (!feed || (feed.phase !== 'running' && feed.phase !== 'retrying')) return;
+    const trimmed = message.trim();
+    if (!trimmed) return;
+    setAgentRunFeed((prev) => reduceAgentRun(prev, { type: 'steer_queued', sessionId: feed.sessionId, message: trimmed }));
+    try {
+      await fetch(`${API_BASE}/api/agent/steer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: feed.sessionId, message: trimmed }),
+      });
+    } catch { /* The queued state stays visible; the engine applies when it can. */ }
+  };
+
+  /** Cancel the live agentic run — an explicit terminal, evidence retained. */
+  const handleCancelAgentRun = () => {
+    const feed = agentRunFeed;
+    if (!feed) return;
+    const sessionId = feed.sessionId;
+    const controller = agentAbortControllersRef.current.get(sessionId);
+    controller?.abort();
+    fetch(`${API_BASE}/api/agent/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    }).catch(() => { /* The local terminal already shows; the engine confirms on the stream. */ });
   };
 
   const handleStartResearch = async (searchQuery: string) => {
@@ -806,104 +965,7 @@ export function App() {
 
   const currentSources = activeReport?.sources || visitedSources;
   const currentContent = activeReport?.content || liveReport;
-  const resolvedTelemetry = resolveReportTelemetry(activeReport, wideTelemetry, wideExpansionHistory);
-
-  if (isHarnessPreviewOpen) {
-    return (
-      <>
-        <LensHarnessWorkspace
-          language={language}
-          query={query}
-          setQuery={setQuery}
-          settings={settings}
-          loading={isSearching}
-          optimizationMode={optimizationMode}
-          setOptimizationMode={setOptimizationMode}
-          sourceFocus={sourceFocus}
-          setSourceFocus={setSourceFocus}
-          researchMode={researchMode}
-          setResearchMode={setResearchMode}
-          currentQuery={currentQuery || activeReport?.query || ''}
-          currentStatus={currentStatus}
-          researchError={researchError}
-          report={currentContent}
-          sources={currentSources}
-          steps={compiledSteps}
-          plan={activeReport?.plan || proposedPlan}
-          graphNodes={activeReport?.graphNodes || graphNodes}
-          thoughts={thoughts}
-          subqueries={subqueries}
-          agents={agents}
-          agentEventCount={agentEventCount}
-          history={history}
-          wideTelemetry={resolvedTelemetry.wideTelemetry}
-          wideExpansionHistory={resolvedTelemetry.wideExpansionHistory}
-          onStartResearch={handleStartResearch}
-          onNewResearch={handleNewResearch}
-          onSelectReport={(report) => {
-            if (isSearching) return;
-            setActiveReport(report);
-            setCurrentQuery(report.query);
-            setQuery(report.query);
-            setCurrentStatus('');
-            setResearchError('');
-            setThoughts([]);
-            setSubqueries([]);
-            setVisitedSources([]);
-            setReflections(report.reflections || []);
-            setGraphNodes(report.graphNodes || []);
-            setAgents([]);
-            setAgentEventCount(0);
-            setLiveReport(report.content || '');
-            liveReportRef.current = report.content || '';
-            setWideTelemetry(report.wideTelemetry || null);
-            setWideExpansionHistory(report.wideExpansionHistory || []);
-            setProposedPlan(null);
-            setIsPlanModalOpen(false);
-          }}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onExport={handleExport}
-          onExit={() => setIsHarnessPreviewOpen(false)}
-        />
-
-        <SettingsModal
-          isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
-          settings={settings}
-          onSave={saveSettings}
-          language={language}
-        />
-
-        <CommandPalette
-          isOpen={isCommandPaletteOpen}
-          onClose={() => setIsCommandPaletteOpen(false)}
-          language={language}
-          onNewResearch={handleNewResearch}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onToggleLanguage={() => setLanguage((l) => (l === 'en' ? 'ar' : 'en'))}
-          onExport={handleExport}
-          hasActiveReport={Boolean(activeReport)}
-          settings={settings}
-          onUpdateSettings={saveSettings}
-        />
-
-        {proposedPlan && (
-          <PlanApprovalModal
-            isOpen={isPlanModalOpen}
-            language={language}
-            plan={proposedPlan}
-            mode={researchMode}
-            onApprove={handleApprovePlan}
-            onRegenerate={handleRegeneratePlan}
-            onDiscard={handleDiscardPlan}
-            isRegenerating={isRegeneratingPlan}
-          />
-        )}
-      </>
-    );
-  }
-
-  return (
+  const resolvedTelemetry = resolveReportTelemetry(activeReport, wideTelemetry, wideExpansionHistory);  return (
     <div className="app-shell">
       {/* 1. Left vertical LENS rail (72px) */}
       <Sidebar
@@ -911,7 +973,6 @@ export function App() {
         onSelectTab={setActiveTab}
         onNewResearch={handleNewResearch}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenHarness={() => setIsHarnessPreviewOpen(true)}
         language={language}
         onToggleLanguage={() => setLanguage((l) => (l === 'ar' ? 'en' : 'ar'))}
         theme={theme}
@@ -958,58 +1019,64 @@ export function App() {
           </div>
         )}
         {activeTab === 'home' && (
-          <>
-            {!activeReport && !isSearching ? (
-              <EmptyChat
-                query={query}
-                setQuery={setQuery}
-                onSubmit={() => {
-                  handleStartResearch(query);
-                }}
-                loading={isSearching}
-                language={language}
-                settings={settings}
-                onOpenSettings={() => setIsSettingsOpen(true)}
-                optimizationMode={optimizationMode}
-                setOptimizationMode={setOptimizationMode}
-                sourceFocus={sourceFocus}
-                setSourceFocus={setSourceFocus}
-                researchMode={researchMode}
-                setResearchMode={setResearchMode}
-              />
-            ) : (
-              <div className="flex-1 flex flex-col justify-between pb-8">
-                {(() => {
-                  const resolved = resolveReportTelemetry(activeReport, wideTelemetry, wideExpansionHistory);
-                  return (
-                    <MessageBox
-                      query={currentQuery || activeReport?.query || ''}
-                      report={currentContent}
-                      sources={currentSources}
-                      steps={compiledSteps}
-                      loading={isSearching}
-                      language={language}
-                      plan={activeReport?.plan || proposedPlan}
-                      onExport={handleExport}
-                      onFollowUp={(q) => handleStartResearch(q)}
-                      wideTelemetry={resolved.wideTelemetry}
-                      wideExpansionHistory={resolved.wideExpansionHistory}
-                      agents={agents}
-                      agentEventCount={agentEventCount}
-                      conversationProjection={conversationProjection}
-                    />
-                  );
-                })()}
-
-                {/* Docked Follow-up input bar */}
-                <MessageInput
-                  onSendMessage={(msg) => handleStartResearch(msg)}
-                  loading={isSearching}
-                  language={language}
-                />
-              </div>
-            )}
-          </>
+          <LensHarnessWorkspace
+            language={language}
+            query={query}
+            setQuery={setQuery}
+            settings={settings}
+            loading={isSearching}
+            optimizationMode={optimizationMode}
+            setOptimizationMode={setOptimizationMode}
+            sourceFocus={sourceFocus}
+            setSourceFocus={setSourceFocus}
+            researchMode={researchMode}
+            setResearchMode={setResearchMode}
+            currentQuery={currentQuery || activeReport?.query || ''}
+            currentStatus={currentStatus}
+            researchError={researchError}
+            report={currentContent}
+            sources={currentSources}
+            steps={compiledSteps}
+            plan={activeReport?.plan || proposedPlan}
+            graphNodes={activeReport?.graphNodes || graphNodes}
+            thoughts={thoughts}
+            subqueries={subqueries}
+            agents={agents}
+            agentEventCount={agentEventCount}
+            history={history}
+            wideTelemetry={resolvedTelemetry.wideTelemetry}
+            wideExpansionHistory={resolvedTelemetry.wideExpansionHistory}
+            agentRunFeed={agentRunFeed}
+            onStartAgentRun={handleStartAgentRun}
+            onStartDeepResearch={handleStartResearch}
+            onSteerAgentRun={handleSteerAgentRun}
+            onCancelAgentRun={handleCancelAgentRun}
+            onNewResearch={handleNewResearch}
+            onSelectReport={(report) => {
+              if (isSearching) return;
+              setActiveReport(report);
+              setCurrentQuery(report.query);
+              setQuery(report.query);
+              setCurrentStatus('');
+              setResearchError('');
+              setThoughts([]);
+              setSubqueries([]);
+              setVisitedSources([]);
+              setReflections(report.reflections || []);
+              setGraphNodes(report.graphNodes || []);
+              setAgents([]);
+              setAgentEventCount(0);
+              setLiveReport(report.content || '');
+              liveReportRef.current = report.content || '';
+              setWideTelemetry(report.wideTelemetry || null);
+              setWideExpansionHistory(report.wideExpansionHistory || []);
+              setProposedPlan(null);
+              setIsPlanModalOpen(false);
+              setConversationProjection(null);
+            }}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            onExport={handleExport}
+          />
         )}
 
         {activeTab === 'discover' && (
