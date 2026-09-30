@@ -46,11 +46,16 @@
  * suite).
  */
 
+import { mkdtempSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { ParentResearchAgent } from './parentAgent';
 import { resetActiveCore, setActiveCore } from './modelGateway';
 import { auditEvidenceCoverage } from './evidenceCoverage';
 import { CitationGroundingContract } from './synthesis';
 import { LiveEvent, ResearchPlan, ResearchRequest, SourceItem } from './types';
+import { createAgenticToolSurface } from './agenticSearch';
+import { AgenticTranscriptStore } from './agenticTranscript';
 
 /** Documented equivalence thresholds (ADR-0011). */
 export const PARITY_THRESHOLDS = {
@@ -184,6 +189,301 @@ export function makeFixtureFetch(fixture: ParityFixture): typeof fetch {
   }) as typeof fetch;
 }
 
+// ---------------------------------------------------------------------------
+// The agentic leg (#143): ADR-0011 grows the agentic path. The golden fixture
+// replays through the REAL agentic machinery — a hosted AgentSession (#140)
+// on the #142 runner with the plane-backed tool surface — over the same
+// routing fetch as the agency legs, and the SAME four-stage diff applies:
+// coverage ≤ 0.05, grounding exact, admission sets exact, backbone exact.
+// A zero-ledger run (no admissible retrieval behind the fixture) is a BROKEN
+// run, never a vacuous pass (ADR-0013 D5): two empty admission sets are
+// reported as divergence, not equivalence.
+// ---------------------------------------------------------------------------
+
+/** How the agent behaved in one leg run: the streamed answer text it
+ * produced, per scripted turn (deterministic; must equal the fixture's
+ * golden report). */
+export interface AgenticLegOutcome {
+  result: { terminal: string; report: string; sources: SourceItem[] } | null;
+  events: LiveEvent[];
+  /** The persisted transcript's final turn-group messages (#144 seam), read
+   * back from the LENS-side store — plain JSON, exactly what was captured. */
+  transcript: Array<Record<string, unknown>>;
+}
+
+/** Replay the fixture's golden retrieval through the real agentic path on
+ * the routing fetch. Offline contract shared with the agency legs: the
+ * fixture's search/page HTML is served by `makeFixtureFetch`, and fixture
+ * hostnames resolve for the vendored SSRF validator (non-fixture hostnames
+ * fail loudly). The scripted transport gives the agent its one-turn script:
+ * search → fetch the fixture's entry page → emit the fixture's golden report
+ * verbatim, so synthesis inputs are identical across paths by construction.
+ * Reset in the SAME finally as the agency legs (planes, core, fetch seams).
+ */
+export async function runAgenticLeg(
+  fixture: ParityFixture,
+  options: ParityHarnessOptions
+): Promise<AgenticLegOutcome> {
+  const { runAgenticSearch } = await import('./agenticSearch');
+  const { resetFetchLedger } = await import('./fetchLedger');
+  const { primarySearchPlane } = await import('./searchPlane');
+  const { primaryScrapePlane, __testSeams: scrapeSeams, resetScrapePlane } = await import('./scrapePlane');
+  const { resetSearchPlane } = await import('./searchPlane');
+
+  const sessionId = `${options.sessionIdPrefix ?? 'parity-agentic'}-${fixture.name}`;
+  const events: LiveEvent[] = [];
+  let terminal: string | undefined;
+
+  const previousFetch = globalThis.fetch;
+  // Global state (fetch, DNS seam, planes, core) is only mutated INSIDE the
+  // protected scope: any setup throw (temp dirs, store construction, session
+  // creation) must still restore the process for the next leg/test, never
+  // leak a patched fetch or DNS override into later tests.
+  let lastError: unknown = undefined;
+  let state: { sources: SourceItem[]; reportChunks: string[]; fetchesUsed: number } = {
+    sources: [],
+    reportChunks: [],
+    fetchesUsed: 0,
+  };
+  let transcripts: AgenticTranscriptStore | undefined;
+  try {
+    globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
+    const fixtureHostnames = new Set(
+      Object.keys(fixture.pageHtml).map((u) => {
+        try { return new URL(u).hostname; } catch { return u; }
+      })
+    );
+    scrapeSeams.setLookupOverride(async (hostname) => {
+      if (!fixtureHostnames.has(hostname)) {
+        throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
+      }
+      return [{ address: '93.184.216.34', family: 4 }];
+    });
+    resetScrapePlane();
+    resetSearchPlane();
+    resetActiveCore();
+    // The #144 persistence seam rides along: the leg captures its turn-group
+    // transcript at terminal time and the outcome reads the SAME bytes back.
+    transcripts = new AgenticTranscriptStore(mkdtempSync(join(tmpdir(), 'lens-parity-transcripts-')));
+    const { createResearchSession } = await import('./agentSessionHost');
+    const surface = createAgenticToolSurface({
+      sessionId,
+      state,
+      maxFetches: 8,
+      emit: (event) => events.push(event),
+      search: async (query) => {
+        const hits = await primarySearchPlane(query);
+        return hits.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
+      },
+      fetchPage: async (url) => {
+        const page = await primaryScrapePlane(url);
+        if (!page.content || page.content.startsWith('Content unavailable from ')) return null;
+        return { url: page.url, title: page.title, text: page.content };
+      },
+    });
+    const { session } = await createResearchSession({ sessionId, agentDir: mkdtempSync(join(tmpdir(), 'lens-parity-agentic-')) }, surface);
+    const question = fixture.query;
+    const lastUserText = (context: any): string => {
+      const messages = context?.messages ?? [];
+      const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+      if (!lastUser) return '';
+      const content = lastUser.content ?? lastUser.text ?? '';
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) return content.filter((b) => b?.type === 'text').map((b) => b.text).join('');
+      return '';
+    };
+    const usage = { input: 1, output: 1, total: 2 };
+    const finalize = (m: any) => ({ ...m, role: 'assistant', api: 'scripted', provider: 'scripted', model: 'scripted-1', usage });
+    const streamOf = (m: any) => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'done', reason: m.stopReason, message: m };
+      },
+      async result() {
+        return m;
+      },
+    });
+    const toolResultCount = (context: any): number =>
+      (context?.messages ?? []).filter((m: any) => m.role === 'toolResult').length;
+    const pageUrls = Object.keys(fixture.pageHtml);
+    // One-turn script: search → fetch every fixture page → golden report
+    // verbatim. The golden pages are the fixture's retrievable evidence; the
+    // admissions stage requires ALL of them admitted (a zero-ledger run —
+    // none admitted — is divergence, never a pass).
+    session.agent.streamFunction = async (_model: unknown, context: any) => {
+      if (lastUserText(context) !== question) {
+        return streamOf(finalize({ content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' }));
+      }
+      if (toolResultCount(context) === 0) {
+        const message = finalize({
+          content: [{ type: 'toolCall', id: 'call-search', name: 'web_search', arguments: { query: Object.keys(fixture.searchHtml)[0] } }],
+          stopReason: 'toolUse',
+        });
+        return streamOf(message);
+      }
+      if (toolResultCount(context) <= pageUrls.length && pageUrls.length > 0) {
+        const message = finalize({
+          content: pageUrls.map((url, i) => ({
+            type: 'toolCall', id: `call-fetch-${i}`, name: 'fetch_content', arguments: { url },
+          })),
+          stopReason: 'toolUse',
+        });
+        return streamOf(message);
+      }
+      return streamOf(finalize({ content: [{ type: 'text', text: fixture.report }], stopReason: 'stop' }));
+    };
+    const result = await runAgenticSearch(session, {
+      sessionId,
+      question,
+      state,
+      emit: (event) => events.push(event),
+      transcript: { store: transcripts },
+    });
+    terminal = result.terminal;
+    lastError = undefined;
+  } catch (error) {
+    lastError = error;
+  } finally {
+    globalThis.fetch = previousFetch;
+    scrapeSeams.setLookupOverride(null);
+    resetScrapePlane();
+    resetSearchPlane();
+    resetActiveCore();
+    resetFetchLedger(sessionId);
+  }
+  if (lastError) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+  const turnGroups = transcripts?.read(sessionId)?.turnGroups ?? [];
+  const transcript = turnGroups.length > 0 ? turnGroups[turnGroups.length - 1].messages : [];
+  return {
+    result: terminal ? { terminal, report: state.reportChunks.join(''), sources: [...state.sources] } : null,
+    events,
+    transcript,
+  };
+}
+
+/** Four-stage diff of the agentic leg against the fixture's golden facts
+ * (ADR-0011 stages, agentic form): coverage of the golden query against the
+ * admitted pages; grounding decisions of the citation contract on the golden
+ * report over the canonical admitted pool; admission sets must contain the
+ * fixture's retrievable pages — a zero-ledger run FAILS (never a vacuous
+ * pass); and the event backbone must carry the agentic minimal contract.
+ */
+export async function checkFixtureAgentic(
+  fixture: ParityFixture,
+  options: ParityHarnessOptions
+): Promise<ParityReport> {
+  const stages: ParityStageResult[] = [];
+  const coverageThreshold = options.thresholds?.coverageDelta ?? PARITY_THRESHOLDS.coverageDelta;
+  const leg = await runAgenticLeg(fixture, options);
+  const sources = leg.result?.sources ?? [];
+  const reportText = leg.result?.report ?? '';
+
+  // Stage 1: coverage — the admitted pages must cover the golden query.
+  const coverage = auditEvidenceCoverage(
+    fixture.query,
+    [],
+    sources.map((s) => ({ content: s.passage ?? s.snippet ?? '', domain: s.domain })),
+    { language: fixture.language === 'ar' ? 'ar' : 'en' }
+  );
+  stages.push({
+    stage: 'coverage',
+    ok: coverage.overallScore >= 1 - coverageThreshold,
+    detail: `agentic coverage=${coverage.overallScore} (≥ ${1 - coverageThreshold})`,
+    expected: '≥ ' + (1 - coverageThreshold),
+    actual: coverage.overallScore,
+  });
+
+  // Stage 2: grounding — the citation contract's decisions on the golden
+  // report over the canonical (URL-sorted) admitted pool.
+  const contract = new CitationGroundingContract();
+  contract.registerExcerpts([...sources].sort((a, b) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0)));
+  const v = contract.verifyAndSanitize(reportText);
+  const groundingOk = v.totalFound > 0 && v.hallucinatedCount === 0;
+  stages.push({
+    stage: 'grounding',
+    ok: groundingOk,
+    detail: groundingOk
+      ? `grounding holds (${v.validCount} valid / 0 hallucinated)`
+      : `grounding diverged (${v.validCount} valid / ${v.hallucinatedCount} hallucinated of ${v.totalFound})`,
+    expected: 'all citations valid',
+    actual: v.hallucinatedIndices,
+  });
+
+  // Stage 3: admissions — the fixture's retrievable pages must be admitted;
+  // a zero-ledger run is a BROKEN run (ADR-0013 D5), not a passing vacuum.
+  const admittedUrls = [...new Set(sources.map((s) => s.url))].sort();
+  const fixtureUrls = [...new Set([...Object.keys(fixture.pageHtml)])].sort();
+  const zeroLedger = admittedUrls.length === 0;
+  const admissionsOk = !zeroLedger && fixtureUrls.every((u) => admittedUrls.includes(u));
+  stages.push({
+    stage: 'admissions',
+    ok: admissionsOk,
+    detail: zeroLedger
+      ? `zero-ledger run: no page admitted through the plane — a broken run, not a parity pass`
+      : admissionsOk
+        ? `all fixture pages admitted (${admittedUrls.length}/${fixtureUrls.length})`
+        : `missing admissions: ${fixtureUrls.filter((u) => !admittedUrls.includes(u)).join(', ')}`,
+    expected: fixtureUrls,
+    actual: admittedUrls,
+  });
+
+  // Stage 4: sequence — the agentic minimal backbone in ANCHORED form: the
+  // agent ran (agent_start before agent_end before agent_settled), the tool
+  // rounds and the streamed report landed INSIDE the agent window, and the
+  // run terminated explicitly with `finished` (Event Faithfulness, agentic
+  // form). Exact equality is not required: the bridge legitimately surfaces
+  // timing-dependent background-task events (session titling) whose position
+  // is arrival-dependent, not contractual.
+  const types: string[] = leg.events.map((e) => e.type as string);
+  // Bridge vocabulary: the agent lifecycle surfaces as `session_state`;
+  // tool rounds as `status`; the streamed answer as `report_chunk`.
+  const agentStart = types.indexOf('session_state');
+  const agentEnd = types.lastIndexOf('session_state');
+  const firstStatus = types.indexOf('status');
+  const firstReport = types.indexOf('report_chunk');
+  const finishedIdx = types.indexOf('finished');
+  const anchored = [
+    agentStart !== -1,
+    firstStatus > agentStart && firstStatus < agentEnd,
+    firstReport > agentStart && firstReport < agentEnd,
+    finishedIdx > agentStart && finishedIdx > types.lastIndexOf('status'),
+    !types.includes('error') && !types.includes('cancelled') && !types.includes('budget_exhausted'),
+  ];
+  const sequenceOk = anchored.every(Boolean);
+  stages.push({
+    stage: 'sequence',
+    ok: sequenceOk,
+    detail: sequenceOk
+      ? `agentic backbone anchored (${types.length} events; tool rounds and report inside the agent window; explicit finished)`
+      : `agentic backbone diverged: ${anchored.map((a, i) => ['agent-ran', 'tool-round-window', 'report-window', 'explicit-terminal', 'no-failure'][i] + '=' + (a ? '✔' : '✖')).join(' ')}`,
+    expected: sequenceOk ? undefined : 'session_state(running) → [tool rounds + report] → session_state(completed) → finished',
+    actual: sequenceOk ? undefined : types.join(','),
+  });
+
+  const ok = stages.every((s) => s.ok);
+  const fixtureResult: ParityFixtureResult = {
+    fixture: `agentic/${fixture.name}`,
+    ok,
+    stages,
+    summary: stages.map((s) => `${s.ok ? '✔' : '✖'} agentic/${fixture.name}/${s.stage}: ${s.detail}`),
+  };
+  const firstBad = stages.find((s) => !s.ok);
+  return {
+    ok,
+    results: [fixtureResult],
+    divergence: firstBad
+      ? {
+          fixture: `agentic/${fixture.name}`,
+          stage: firstBad.stage,
+          detail: firstBad.detail,
+          expected: firstBad.expected,
+          actual: firstBad.actual,
+        }
+      : null,
+  };
+}
+
 function makeRequest(fixture: ParityFixture, researcherMode: boolean): ResearchRequest {
   return {
     query: fixture.query,
@@ -209,27 +509,30 @@ async function runLeg(
   const emit = (e: LiveEvent) => events.push(e);
   const request = makeRequest(fixture, path === 'fanout');
   const previousFetch = globalThis.fetch;
-  globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
-  // Scrape-plane offline seam (#111): fixture hostnames must resolve for the
-  // vendored SSRF validator (real DNS never consulted). Non-fixture hostnames
-  // fail loudly — the offline contract is preserved, and the legs scrape the
-  // golden pages through the real vendored plane instead of degrading to
-  // identical-but-empty runs that would pass the stages vacuously.
   const { __testSeams: scrapeSeams } = await import('./scrapePlane');
-  const fixtureHostnames = new Set(
-    Object.keys(fixture.pageHtml).map((u) => {
-      try { return new URL(u).hostname; } catch { return u; }
-    })
-  );
-  scrapeSeams.setLookupOverride(async (hostname) => {
-    if (!fixtureHostnames.has(hostname)) {
-      throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
-    }
-    return [{ address: '93.184.216.34', family: 4 }];
-  });
-  resetActiveCore();
-  setActiveCore('pi', { overrideFactory: async () => options.provider });
+  // Global state (fetch, DNS seam, active core) is only mutated INSIDE the
+  // protected scope: any setup throw must still restore the process for the
+  // next leg/test, never leak a patched fetch or DNS override.
   try {
+    globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
+    // Scrape-plane offline seam (#111): fixture hostnames must resolve for the
+    // vendored SSRF validator (real DNS never consulted). Non-fixture hostnames
+    // fail loudly — the offline contract is preserved, and the legs scrape the
+    // golden pages through the real vendored plane instead of degrading to
+    // identical-but-empty runs that would pass the stages vacuously.
+    const fixtureHostnames = new Set(
+      Object.keys(fixture.pageHtml).map((u) => {
+        try { return new URL(u).hostname; } catch { return u; }
+      })
+    );
+    scrapeSeams.setLookupOverride(async (hostname) => {
+      if (!fixtureHostnames.has(hostname)) {
+        throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
+      }
+      return [{ address: '93.184.216.34', family: 4 }];
+    });
+    resetActiveCore();
+    setActiveCore('pi', { overrideFactory: async () => options.provider });
     await new ParentResearchAgent(
       `${options.sessionIdPrefix ?? 'parity'}-${fixture.name}`,
       emit,
