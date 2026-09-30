@@ -68,7 +68,10 @@ describe('Lens harness shell contract', () => {
     );
 
     assert.match(harness, /data-testid="lens-harness"/);
-    assert.match(harness, /onStartResearch/);
+    // Ticket #145: the composer routes by interaction kind — agentic default,
+    // Deep Research opt-in — instead of the single onStartResearch entry.
+    assert.match(harness, /onStartAgentRun/);
+    assert.match(harness, /onStartDeepResearch/);
     assert.match(harness, /onSelectReport/);
     assert.match(harness, /HarnessArtifactInspector/);
     assert.match(harness, /isRailOpen/);
@@ -86,24 +89,22 @@ describe('Lens harness shell contract', () => {
   });
 });
 
-describe('Harness preview integration contract', () => {
-  it('keeps the preview opt-in and records transport retry state without creating synthetic agents', async () => {
+describe('Harness default-workspace integration contract (ticket #145)', () => {
+  it('makes the harness workspace the default surface and keeps retry visibility without synthetic agents', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const sidebar = await readFile(new URL('../src/components/vane/Sidebar.tsx', import.meta.url), 'utf8');
 
-    assert.match(app, /isHarnessPreviewOpen/);
     assert.match(app, /<LensHarnessWorkspace/);
     assert.match(app, /updateNonTerminalAgentStatus\('retrying'\)/);
-    assert.match(sidebar, /onOpenHarness/);
-    assert.match(sidebar, /Workspace preview/);
+    assert.doesNotMatch(sidebar, /onOpenHarness|Workspace preview/);
   });
 
-  it('keeps settings and plan approval overlays available in preview mode', async () => {
+  it('keeps settings, command palette, and plan approval overlays available in the default workspace', async () => {
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
 
-    assert.ok(app.split('<SettingsModal').length > 2, 'preview branch should render SettingsModal');
-    assert.ok(app.split('<CommandPalette').length > 2, 'preview branch should render CommandPalette');
-    assert.ok(app.split('<PlanApprovalModal').length > 2, 'preview branch should render PlanApprovalModal');
+    assert.match(app, /<SettingsModal/);
+    assert.match(app, /<CommandPalette/);
+    assert.match(app, /<PlanApprovalModal/);
   });
 
   it('terminates rejected live sessions and prevents mixed history state during a run', async () => {

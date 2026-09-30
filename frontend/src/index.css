@@ -190,6 +190,34 @@
 .harness-artifact-list li bdi { overflow: hidden; color: rgb(var(--ink-muted)); font-family: ui-monospace, Consolas, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .harness-report-preview { margin: 0; color: rgb(var(--ink-secondary)); font-size: 12px; line-height: 1.8; white-space: pre-wrap; }
 
+/* Agent run feed (ticket #145): the live visual surface of one agentic run.
+   Monochrome neutrals per DESIGN.md — state reads through weight and icons,
+   never decorative color. */
+.harness-agent-feed { display: grid; gap: 8px; margin-top: 14px; padding: 12px 14px; border: 1px solid rgb(var(--line)); border-radius: 8px; background: rgb(var(--panel)); }
+.harness-agent-feed-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.harness-agent-phase { font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.harness-agent-phase-running, .harness-agent-phase-retrying { color: rgb(var(--ink)); }
+.harness-agent-phase-finished { color: rgb(var(--ink-secondary)); }
+.harness-agent-phase-cancelled, .harness-agent-phase-budget_exhausted, .harness-agent-phase-error { color: rgb(var(--ink-muted)); }
+.harness-agent-cancel { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid rgb(var(--line-strong)); border-radius: 6px; color: rgb(var(--ink)); font-size: 11px; }
+.harness-agent-cancel:hover { background: rgb(var(--surface)); }
+.harness-agent-steer { display: flex; align-items: center; gap: 6px; margin: 0; color: rgb(var(--ink-secondary)); font-size: 12px; }
+.harness-agent-retries { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; color: rgb(var(--ink-muted)); font-size: 11px; }
+.harness-agent-retries li { display: flex; align-items: center; gap: 6px; }
+.harness-agent-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.harness-tool-chip.is-running { border-style: dashed; }
+.harness-tool-chip.is-done { border-style: solid; }
+.harness-tool-chip.is-failed { color: rgb(var(--ink)); border-color: rgb(var(--line-strong)); }
+.harness-tool-chip-name { font-weight: 600; }
+.harness-tool-chip-args { overflow: hidden; max-width: 320px; text-overflow: ellipsis; }
+.harness-agent-sources { margin: 0; color: rgb(var(--ink-muted)); font-size: 11px; }
+
+/* Composer interaction kind (agentic default / Deep Research opt-in). */
+.harness-composer-foot { display: flex; justify-content: flex-end; padding: 8px 24px 16px; }
+.harness-interaction { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid rgb(var(--line)); border-radius: 8px; border: 1px solid rgb(var(--line)); }
+.harness-interaction-option { cursor: pointer; padding: 4px 10px; border-radius: 6px; color: rgb(var(--ink-muted)); font-size: 11px; }
+.harness-interaction-option.is-active { background: rgb(var(--surface)); color: rgb(var(--ink)); font-weight: 600; }
+
 @media (min-width: 1280px) {
   .lens-harness { grid-template-columns: 280px minmax(0, 1fr) 384px; }
   .harness-inspector { position: relative; inset: auto; width: auto; box-shadow: none; }
