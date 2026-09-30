@@ -344,6 +344,31 @@ describe('Parity agentic leg — golden replay, four-stage diff, zero-ledger vac
     assert.ok(leg.transcript, 'the replay captured its transcript (the #144 seam rides along)');
   });
 
+  it('a throwing leg restores the process globals for the next test — no leaked fetch, DNS seam, or plane state', async () => {
+    const { runAgenticLeg: runLeg } = await importEngine('parityHarness.js');
+    // Sabotage a setup step INSIDE the leg's protected scope: the fixture's
+    // page map throws the moment the harness inspects its keys. The leg must
+    // propagate the error AND still restore globalThis.fetch, the scrape-plane
+    // DNS seam, and the plane state — otherwise every later test in the
+    // process inherits fixture 404s and "no DNS route" errors.
+    const poisoned = {
+      ...makeAgenticFixture('agentic-hygiene'),
+      pageHtml: new Proxy(
+        {},
+        { ownKeys() { throw new Error('poisoned fixture routing'); } }
+      ),
+    };
+    await assert.rejects(
+      () => runLeg(poisoned, { sessionIdPrefix: 'parity-agentic-poison' }),
+      /poisoned fixture routing/,
+      'the setup error propagates — it is not swallowed'
+    );
+    assert.equal(globalThis.fetch, realFetch, 'the patched fetch was restored despite the setup throw');
+    // The next leg runs healthy — nothing leaked into the process.
+    const next = await runLeg(makeAgenticFixture('agentic-hygiene-next'), { sessionIdPrefix: 'parity-agentic-hygiene' });
+    assert.equal(next.result?.terminal, 'finished', 'a follow-up leg is unaffected by the earlier throw');
+  });
+
   it('a zero-ledger run is a broken run, not a pass (ADR-0013 D5 mechanized at parity)', async () => {
     const vacuous = makeVacuousFixture('agentic-zero-ledger');
     const report = await checkFixtureAgentic(vacuous, { sessionIdPrefix: 'parity-agentic-zero' });

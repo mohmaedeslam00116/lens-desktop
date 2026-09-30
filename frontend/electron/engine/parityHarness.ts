@@ -235,27 +235,36 @@ export async function runAgenticLeg(
   let terminal: string | undefined;
 
   const previousFetch = globalThis.fetch;
-  globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
-  const fixtureHostnames = new Set(
-    Object.keys(fixture.pageHtml).map((u) => {
-      try { return new URL(u).hostname; } catch { return u; }
-    })
-  );
-  scrapeSeams.setLookupOverride(async (hostname) => {
-    if (!fixtureHostnames.has(hostname)) {
-      throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
-    }
-    return [{ address: '93.184.216.34', family: 4 }];
-  });
-  resetScrapePlane();
-  resetSearchPlane();
-  resetActiveCore();
-  const state = { sources: [], reportChunks: [], fetchesUsed: 0 };
-  // The #144 persistence seam rides along: the leg captures its turn-group
-  // transcript at terminal time and the outcome reads the SAME bytes back.
-  const transcripts = new AgenticTranscriptStore(mkdtempSync(join(tmpdir(), 'lens-parity-transcripts-')));
+  // Global state (fetch, DNS seam, planes, core) is only mutated INSIDE the
+  // protected scope: any setup throw (temp dirs, store construction, session
+  // creation) must still restore the process for the next leg/test, never
+  // leak a patched fetch or DNS override into later tests.
   let lastError: unknown = undefined;
+  let state: { sources: SourceItem[]; reportChunks: string[]; fetchesUsed: number } = {
+    sources: [],
+    reportChunks: [],
+    fetchesUsed: 0,
+  };
+  let transcripts: AgenticTranscriptStore | undefined;
   try {
+    globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
+    const fixtureHostnames = new Set(
+      Object.keys(fixture.pageHtml).map((u) => {
+        try { return new URL(u).hostname; } catch { return u; }
+      })
+    );
+    scrapeSeams.setLookupOverride(async (hostname) => {
+      if (!fixtureHostnames.has(hostname)) {
+        throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
+      }
+      return [{ address: '93.184.216.34', family: 4 }];
+    });
+    resetScrapePlane();
+    resetSearchPlane();
+    resetActiveCore();
+    // The #144 persistence seam rides along: the leg captures its turn-group
+    // transcript at terminal time and the outcome reads the SAME bytes back.
+    transcripts = new AgenticTranscriptStore(mkdtempSync(join(tmpdir(), 'lens-parity-transcripts-')));
     const { createResearchSession } = await import('./agentSessionHost');
     const surface = createAgenticToolSurface({
       sessionId,
@@ -344,7 +353,7 @@ export async function runAgenticLeg(
   if (lastError) {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
-  const turnGroups = transcripts.read(sessionId)?.turnGroups ?? [];
+  const turnGroups = transcripts?.read(sessionId)?.turnGroups ?? [];
   const transcript = turnGroups.length > 0 ? turnGroups[turnGroups.length - 1].messages : [];
   return {
     result: terminal ? { terminal, report: state.reportChunks.join(''), sources: [...state.sources] } : null,
@@ -500,27 +509,30 @@ async function runLeg(
   const emit = (e: LiveEvent) => events.push(e);
   const request = makeRequest(fixture, path === 'fanout');
   const previousFetch = globalThis.fetch;
-  globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
-  // Scrape-plane offline seam (#111): fixture hostnames must resolve for the
-  // vendored SSRF validator (real DNS never consulted). Non-fixture hostnames
-  // fail loudly — the offline contract is preserved, and the legs scrape the
-  // golden pages through the real vendored plane instead of degrading to
-  // identical-but-empty runs that would pass the stages vacuously.
   const { __testSeams: scrapeSeams } = await import('./scrapePlane');
-  const fixtureHostnames = new Set(
-    Object.keys(fixture.pageHtml).map((u) => {
-      try { return new URL(u).hostname; } catch { return u; }
-    })
-  );
-  scrapeSeams.setLookupOverride(async (hostname) => {
-    if (!fixtureHostnames.has(hostname)) {
-      throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
-    }
-    return [{ address: '93.184.216.34', family: 4 }];
-  });
-  resetActiveCore();
-  setActiveCore('pi', { overrideFactory: async () => options.provider });
+  // Global state (fetch, DNS seam, active core) is only mutated INSIDE the
+  // protected scope: any setup throw must still restore the process for the
+  // next leg/test, never leak a patched fetch or DNS override.
   try {
+    globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
+    // Scrape-plane offline seam (#111): fixture hostnames must resolve for the
+    // vendored SSRF validator (real DNS never consulted). Non-fixture hostnames
+    // fail loudly — the offline contract is preserved, and the legs scrape the
+    // golden pages through the real vendored plane instead of degrading to
+    // identical-but-empty runs that would pass the stages vacuously.
+    const fixtureHostnames = new Set(
+      Object.keys(fixture.pageHtml).map((u) => {
+        try { return new URL(u).hostname; } catch { return u; }
+      })
+    );
+    scrapeSeams.setLookupOverride(async (hostname) => {
+      if (!fixtureHostnames.has(hostname)) {
+        throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
+      }
+      return [{ address: '93.184.216.34', family: 4 }];
+    });
+    resetActiveCore();
+    setActiveCore('pi', { overrideFactory: async () => options.provider });
     await new ParentResearchAgent(
       `${options.sessionIdPrefix ?? 'parity'}-${fixture.name}`,
       emit,
