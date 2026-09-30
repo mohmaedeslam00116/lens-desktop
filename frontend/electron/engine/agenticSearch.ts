@@ -29,6 +29,7 @@ import {
   type TranscriptTurnGroup,
 } from './agenticConversationProjection';
 import type { AgenticTranscriptStore } from './agenticTranscript';
+import { isAnswerModeFetchCall, ANSWER_MODE_UNSUPPORTED_MESSAGE } from './piPackages';
 
 /** Result of one web_search call. */
 export interface AgenticSearchHit {
@@ -113,14 +114,25 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
     if (!entry) return null;
     const page = entry.page;
     const text = typeof page.content === 'string' ? page.content : '';
-    admitSource(context, {
+    const item: SourceItem = {
       url: page.url,
       title: page.title ?? page.url,
       domain: page.domain ?? safeHost(page.url),
       snippet: text.slice(0, 200),
       credibilityScore: page.credibilityScore ?? 0.5,
       passage: text,
-    });
+    };
+    const existing = context.state.sources.find((s) => s.url === item.url);
+    if (existing) {
+      // Evidence preservation (ADR-0013 boundary clause): a URL first
+      // admitted as a search snippet GAINS the full fetched passage when the
+      // same URL is later fetched — the content is never silently dropped by
+      // the admission dedupe.
+      if (!existing.passage && item.passage) existing.passage = item.passage;
+      if (!existing.domain && item.domain) existing.domain = item.domain;
+    } else {
+      admitSource(context, item);
+    }
     return { url: page.url, title: page.title ?? page.url, text };
   };
 
@@ -141,6 +153,13 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
     definitions,
     handler: async (call): Promise<AgenticToolOutcome> => {
       try {
+        // Primary-plane boundary (ADR-0013, D3) holds UNCHANGED on the agentic
+        // path (#143): answer-mode fetch_content is refused before any
+        // vendored execution, retrieval, or budget — graceful guidance, no
+        // model injection; synthesis ownership never splits.
+        if (call.name === 'fetch_content' && isAnswerModeFetchCall(call.arguments ?? {})) {
+          return { success: false, error: ANSWER_MODE_UNSUPPORTED_MESSAGE };
+        }
         if (call.name === 'web_search') {
           const query = String(call.arguments?.query ?? '').trim();
           if (!query) return { success: false, error: 'web_search requires a query.' };
