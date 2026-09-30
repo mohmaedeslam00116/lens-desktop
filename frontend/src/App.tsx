@@ -131,6 +131,7 @@ export function App() {
   // /ws/agent/:id stream — cards and chips render from real events only.
   const [agentRunFeed, setAgentRunFeed] = useState<AgentRunFeedState | null>(null);
   const agentAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const agentWsRef = useRef<WebSocket | null>(null);
 
   /**
    * The engine's live reachability. The workspace used to discover a dead engine
@@ -291,6 +292,11 @@ export function App() {
   };
 
   const handleNewResearch = () => {
+    // Teardown: a live agent socket must not outlive the session it belongs
+    // to, and the feed must not bleed an old run into the new one.
+    agentWsRef.current?.close();
+    agentWsRef.current = null;
+    setAgentRunFeed(null);
     sessionGenerationRef.current += 1;
     const previousSocket = wsRef.current;
     wsRef.current = null;
@@ -347,7 +353,10 @@ export function App() {
     setCurrentStatus(language === 'ar' ? 'بدء التشغيل الأجنتي...' : 'Starting the agentic run...');
     setAgents([]);
     setAgentEventCount(0);
-    setAgentRunFeed(initialAgentRunState(''));
+    // The feed seeds session-less (null) and SELF-SEEDS from the accept
+    // payload's real session id — seeding with a literal empty id would make
+    // the reducer reject every subsequent real event as another session's.
+    setAgentRunFeed(null);
 
     const controller = new AbortController();
     let sessionId = '';
@@ -372,8 +381,11 @@ export function App() {
       const streamPath = String(accept.session_url ?? `/ws/agent/${sessionId}`);
       if (!sessionId) throw new Error(language === 'ar' ? 'لم يُقم المحرك بمعرّف الجلسة.' : 'The engine did not return a session id.');
       agentAbortControllersRef.current.set(sessionId, controller);
+      // Seed the feed with the REAL session id from the accept payload.
+      setAgentRunFeed(initialAgentRunState(sessionId));
 
       const ws = new WebSocket(`${WS_BASE}${streamPath}`);
+      agentWsRef.current = ws;
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(String(event.data));
@@ -440,6 +452,17 @@ export function App() {
       ws.onclose = () => {
         agentAbortControllersRef.current.delete(sessionId);
         setIsSearching(false);
+        // Explicit-terminal law: a close without a prior terminal event is
+        // the error terminal — the feed never stays running silently.
+        setAgentRunFeed((prev) =>
+          prev && (prev.phase === 'running' || prev.phase === 'retrying' || prev.phase === 'idle')
+            ? reduceAgentRun(prev, { type: 'error', sessionId, message: 'The agentic event stream closed unexpectedly. | أُغلق تدفق الأحداث فجأة.' })
+            : prev
+        );
+        if (agentWsRef.current === ws) agentWsRef.current = null;
+      };
+      ws.onerror = () => {
+        setResearchError(language === 'ar' ? 'تعذر الاتصال بتدفق الأحداث.' : 'Could not reach the event stream.');
       };
     } catch (error: any) {
       if (controller.signal.aborted) return;

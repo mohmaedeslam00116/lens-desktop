@@ -150,13 +150,16 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
 
   const submitQuestion = (question: string) => {
     const trimmed = question.trim();
-    if (!trimmed || loading) return;
-    // While a run is live, a new question STEERS it (queued visibly) instead
-    // of starting a rival run — one loop, explicit cancel (v1 scope).
+    if (!trimmed) return;
+    // Steering outranks the loading guard: while a run is live, a new
+    // question STEERS it (queued visibly) instead of starting a rival run —
+    // one loop, explicit cancel (v1 scope). The guard must not make a live
+    // run unreachable for steering.
     if (runLive && agentRunFeed) {
       onSteerAgentRun(trimmed);
       return;
     }
+    if (loading) return;
     if (agentInteraction === 'deep-research') {
       onStartDeepResearch(trimmed);
       return;
@@ -293,7 +296,7 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
                 agents={agents}
                 agentEventCount={agentEventCount}
               />
-              <MessageInput onSendMessage={submitQuestion} loading={loading} language={language} />
+              <MessageInput onSendMessage={submitQuestion} loading={runLive ? false : loading} language={language} />
             </div>
           )}
         </main>

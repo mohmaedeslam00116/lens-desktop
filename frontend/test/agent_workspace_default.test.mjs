@@ -132,6 +132,36 @@ describe('Steering, retries, and cancel are visible states', () => {
     assert.equal(s2.phase, 'finished', 'the real terminal lands');
   });
 
+  it('the feed is seeded session-less, so the first real event seeds the real id (no deaf feed)', async () => {
+    const app = await readSrc('../src/App.tsx');
+    assert.doesNotMatch(
+      app,
+      /initialAgentRunState\(''\)/,
+      'seeding with an empty session id makes sameSession reject every real event — the feed would never leave idle'
+    );
+    assert.match(app, /setAgentRunFeed\(null\)/, 'the feed seeds to null and self-seeds from the first event');
+  });
+
+  it('New Research tears down the agent socket and the feed', async () => {
+    const app = await readSrc('../src/App.tsx');
+    assert.match(app, /agentWsRef/, 'the agent socket lives in a ref, not a local variable');
+    assert.match(
+      app,
+      /const handleNewResearch[\s\S]{0,600}agentWsRef\.current\?\.close\(\)[\s\S]{0,300}setAgentRunFeed\(null\)/,
+      'New Research closes the live agent socket and clears the feed'
+    );
+  });
+
+  it('an unexpected socket close is an explicit terminal — the feed never stays running silently', async () => {
+    const app = await readSrc('../src/App.tsx');
+    assert.match(app, /onerror/, 'the agent socket has an error handler');
+    assert.match(
+      app,
+      /ws\.onclose[\s\S]{0,800}type: 'error'/,
+      'a close without a terminal event dispatches the explicit error terminal'
+    );
+  });
+
   it('cancel is wired end-to-end: a stop control posting to the engine cancel route', async () => {
     const app = await readSrc('../src/App.tsx');
     assert.match(app, /cancelAgentRun/i, 'App owns a cancel transport');
