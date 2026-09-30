@@ -86,13 +86,19 @@ export const AgenticConversation: React.FC<AgenticConversationProps> = ({ record
       <ol className="mt-3 space-y-4">
         {normalized.turns.map((turn, turnIndex) => {
           const badge = TERMINAL_BADGE[turn.terminal] ?? TERMINAL_BADGE.error;
+          // A non-finite capturedAt (corrupt or hand-edited persistence)
+          // must not crash the workspace render — the timestamp is simply
+          // omitted, the turn itself still shows.
+          const capturedAt = Number.isFinite(turn.capturedAt) ? turn.capturedAt : undefined;
           return (
             <li key={turnIndex} className="space-y-2">
               <div className="flex items-center gap-2 text-xs text-muted">
                 <Clock size={12} />
-                <time dateTime={new Date(turn.capturedAt).toISOString()}>
-                  {new Date(turn.capturedAt).toLocaleString(isArabic ? 'ar' : 'en')}
-                </time>
+                {capturedAt !== undefined && (
+                  <time dateTime={new Date(capturedAt).toISOString()}>
+                    {new Date(capturedAt).toLocaleString(isArabic ? 'ar' : 'en')}
+                  </time>
+                )}
                 <span className="inline-flex items-center gap-1 text-muted">
                   {badge.icon}
                   {isArabic ? badge.ar : badge.en}

@@ -9,7 +9,7 @@
  */
 
 import { join } from 'path';
-import { mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import type { TranscriptRecord, TranscriptTurnGroup } from './agenticConversationProjection';
 
 export {
@@ -56,7 +56,16 @@ export class AgenticTranscriptStore {
       };
       record.turnGroups.push(entry);
       mkdirSync(this.dir, { recursive: true });
-      writeFileSync(this.pathFor(sessionId), JSON.stringify(record));
+      // Atomic replace (durability): the payload is written to a temp file
+      // in the same directory and renamed over the target, so a crash or
+      // power loss mid-write can never tear the committed record — the
+      // rename is all-or-nothing. An in-place write could truncate the
+      // session file, making `read` return undefined and the NEXT append
+      // rebuild a fresh record that silently drops every earlier turn-group.
+      const target = this.pathFor(sessionId);
+      const tmp = `${target}.${process.pid}.${(tmpSeq += 1)}.${Date.now()}.tmp`;
+      writeFileSync(tmp, JSON.stringify(record));
+      renameSync(tmp, target);
       return record;
     } catch {
       // Persistence failure degrades visibly (read returns undefined / stale);
@@ -82,6 +91,9 @@ export class AgenticTranscriptStore {
 }
 
 import { toPlainJson } from './agenticConversationProjection';
+
+/** Monotonic temp suffix: unique per write within a process, even in the same millisecond. */
+let tmpSeq = 0;
 
 function normalizeMessages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   return toPlainJson(messages) as Array<Record<string, unknown>>;

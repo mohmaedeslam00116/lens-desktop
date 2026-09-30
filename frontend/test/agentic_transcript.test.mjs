@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 /**
@@ -27,7 +28,6 @@ const importEngine = async (name) =>
 const {
   AgenticTranscriptStore,
   captureTranscriptAtTerminal,
-  readTranscript,
   buildConversationProjection,
 } = await importEngine('agenticTranscript.js');
 const { runAgenticSearch, createAgenticToolSurface } = await importEngine('agenticSearch.js');
@@ -125,6 +125,48 @@ describe('AgenticTranscriptStore — LENS-side plain-JSON persistence', () => {
   });
 });
 
+describe('AgenticTranscriptStore — atomic durability', () => {
+  it('a crash mid-write cannot corrupt the session record: the replace is atomic', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lens-transcript-'));
+    const store = new AgenticTranscriptStore(dir);
+    store.write('s-atomic', { question: 'first?', messages: [{ role: 'user', content: 'first?' }] });
+    const before = readFileSync(join(dir, 's-atomic.json'), 'utf8');
+    // Simulate power loss DURING the store's next write: bytes flush
+    // partially, then the process dies. If the store writes the target in
+    // place, the record is torn — read() returns undefined and the NEXT
+    // write rebuilds a fresh record, silently dropping every earlier
+    // turn-group. With an atomic temp+rename replace, the committed record
+    // survives byte-for-byte and the next append builds on the full history.
+    const require = createRequire(import.meta.url);
+    const fsModule = require('node:fs');
+    const realWriteFileSync = fsModule.writeFileSync;
+    fsModule.writeFileSync = function tornWrite(path, data, options) {
+      realWriteFileSync.call(fsModule, path, '{"sessionId', options);
+      throw Object.assign(new Error('simulated power loss mid-write'), { code: 'EPOWERLOSS' });
+    };
+    try {
+      const torn = store.write('s-atomic', { question: 'lost?', messages: [{ role: 'user', content: 'lost?' }] });
+      assert.equal(torn, undefined, 'the torn write degrades to undefined, never throws out of the store');
+    } finally {
+      fsModule.writeFileSync = realWriteFileSync;
+    }
+    assert.equal(store.read('s-atomic')?.turnGroups.length, 1, 'the committed record survives the crashed write');
+    assert.equal(readFileSync(join(dir, 's-atomic.json'), 'utf8'), before, 'byte-for-byte survival');
+    const after = store.write('s-atomic', { question: 'second?', messages: [{ role: 'user', content: 'second?' }] });
+    assert.equal(after.turnGroups.length, 2, 'the next append builds on the full history, not a rebuilt record');
+    assert.equal(store.read('s-atomic').turnGroups[0].question, 'first?');
+  });
+
+  it('the atomic replace leaves no debris: temp files are gone after a successful write', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lens-transcript-'));
+    const store = new AgenticTranscriptStore(dir);
+    store.write('s-clean', { question: 'q?', messages: [{ role: 'user', content: 'q?' }] });
+    store.write('s-clean', { question: 'q2?', messages: [{ role: 'user', content: 'q2?' }] });
+    const leftovers = readdirSync(dir).filter((f) => f.endsWith('.tmp'));
+    assert.deepEqual(leftovers, [], 'a completed rename leaves no temp residue in the store dir');
+  });
+});
+
 describe('captureTranscriptAtTerminal — the terminal-time seam on the real runner', () => {
   it('captures the live session messages when the run reaches its terminal', async () => {
     const sessionId = 's-capture-finished';
@@ -180,6 +222,34 @@ describe('captureTranscriptAtTerminal — the terminal-time seam on the real run
     const read = new AgenticTranscriptStore(dir).read(sessionId);
     assert.ok(read, 'a cancelled run still persisted its transcript');
     assert.equal(read.turnGroups[0].terminal, 'cancelled');
+  });
+
+  it('the finished terminal event carries the projection of the SAME run — capture lands before emit', async () => {
+    const sessionId = 's-proj-fresh';
+    resetFetchLedger(sessionId);
+    const QUESTION = 'What does the evidence say?';
+    const { session, state } = await buildScriptedSession(sessionId, QUESTION, 'The evidence says this exactly once.');
+    const dir = mkdtempSync(join(tmpdir(), 'lens-transcript-'));
+    const seen = [];
+    const result = await runAgenticSearch(session, {
+      sessionId,
+      question: QUESTION,
+      state,
+      emit: (event) => seen.push(event),
+      transcript: { store: new AgenticTranscriptStore(dir) },
+    });
+    assert.equal(result.terminal, 'finished');
+    assert.ok(result.conversationProjection, 'the result carries the projection of THIS run');
+    assert.equal(result.conversationProjection.turns.length, 1, 'the first finished run is already in the projection');
+    const finished = seen.find((e) => e.type === 'finished');
+    assert.ok(finished, 'a finished LiveEvent was emitted');
+    assert.ok(finished.conversationProjection, 'the finished event carries a projection');
+    assert.equal(finished.conversationProjection.turns.length, 1, 'not one turn-group behind: this run is projected');
+    assert.equal(
+      finished.conversationProjection.turns[0].entries.some((e) => e.kind === 'assistant' && e.text === 'The evidence says this exactly once.'),
+      true,
+      'the projected assistant text is THIS run, read from the persisted bytes'
+    );
   });
 
   it('a capture failure never breaks the run — the terminal lands, persistence degrades', async () => {

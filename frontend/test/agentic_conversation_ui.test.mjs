@@ -89,6 +89,17 @@ describe('AgenticConversation card — renderer contract', () => {
     assert.doesNotMatch(reexport, /agenticTranscript'/, 'no node-IO module in the renderer import path');
   });
 
+  it('a non-finite capturedAt cannot crash the workspace render — the guard holds', async () => {
+    const source = await read('../src/components/vane/AgenticConversation.tsx');
+    assert.match(source, /Number\.isFinite\(turn\.capturedAt\)/, 'the timestamp render is guarded against non-finite capturedAt');
+    // The code path (not a comment) must actually call through the guard.
+    const codeOnly = source
+      .split('\n')
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    assert.doesNotMatch(codeOnly, /new Date\(turn\.capturedAt\)\.toISOString\(\)/, 'no unguarded toISOString() on capturedAt');
+  });
+
   it('App wires the history rail: the replay surface reads the persisted projection by session id', async () => {
     const app = await read('../src/App.tsx');
     assert.match(app, /agentic-conversations/, 'App persists the agentic projection alongside its history entries');

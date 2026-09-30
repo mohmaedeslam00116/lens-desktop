@@ -273,11 +273,13 @@ export async function runAgenticSearch(session: any, options: AgenticRunOptions)
 
   const emitTerminal = (next: AgenticRunResult['terminal'], event: LiveEvent): AgenticRunResult => {
     terminal = next;
-    emit(event);
     // Terminal-time transcript capture (#144; SPEC-028 Decision 2): the
     // turn-group transcript is the session's own `state.messages` — plain
     // JSON — captured exactly once, when the run ends, into the LENS-side
-    // store. Persistence failure never breaks the terminal.
+    // store. The capture lands BEFORE the terminal event is emitted, so the
+    // projection riding the `finished` event is built from the SAME bytes
+    // this run just wrote — never one turn-group behind, never the live
+    // runtime. Persistence failure never breaks the terminal.
     const turn: TranscriptTurnGroup = {
       question,
       terminal: next,
@@ -285,7 +287,16 @@ export async function runAgenticSearch(session: any, options: AgenticRunOptions)
       messages: (session?.state?.messages ?? []) as Array<Record<string, unknown>>,
     };
     captureTranscriptAtTerminal(options.transcript?.store, sessionId, turn);
-    return { terminal, report: state.reportChunks.join(''), sources: [...state.sources] };
+    const projection =
+      next === 'finished'
+        ? buildConversationProjection(options.transcript?.store.read(sessionId))
+        : undefined;
+    if (projection !== undefined) {
+      (event as { conversationProjection?: ReturnType<typeof buildConversationProjection> }).conversationProjection =
+        projection;
+    }
+    emit(event);
+    return { terminal, report: state.reportChunks.join(''), sources: [...state.sources], conversationProjection: projection };
   };
 
   activeRuns.set(sessionId, { abort, detach, session });
@@ -317,12 +328,6 @@ export async function runAgenticSearch(session: any, options: AgenticRunOptions)
       report: state.reportChunks.join(''),
       sources: [...state.sources],
       costs: 0,
-      // The persisted conversation projection rides the terminal event
-      // (#144): the WS path forwards it for replay — built from the SAME
-      // bytes the store holds, never the live runtime.
-      conversationProjection: buildConversationProjection(
-        options.transcript ? options.transcript.store.read(sessionId) : undefined
-      ),
     } as LiveEvent);
   } catch (error: any) {
     if (abort.signal.aborted || options.signal?.aborted) {
