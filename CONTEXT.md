@@ -253,6 +253,9 @@ The official pi-coding-agent runtime object (`AgentSession`) hosted in-process p
 ### Agentic Conversation
 The fifth typed workspace artifact (SPEC-028): a projection of the persisted agentic transcript, replayable from the history rail exactly as it happened. The transcript is LENS-side plain JSON (`state.messages` keyed to the ResearchSession) — runtime state never becomes LENS state except through this seam.
 
+### Agentic Transcript
+The LENS-side plain-JSON persistence record (ticket #144) that backs the Agentic Conversation: one file per session under LENS-owned app data, capturing each Turn-Group's `state.messages` exactly once at terminal time. Read back byte-for-byte by the history path; a failing, absent, or corrupt record degrades visibly and is never fabricated. The projection (`buildConversationProjection`) is pure and isomorphic — the same implementation serves the engine's node tests and the inspector card.
+
 ### Turn-Group
 One agentic unit of execution: a question or a follow-up exchange handled by exactly one Agent Session (Pi). Steering and follow-ups mid-run queue through the runtime's `steer()`/`followUp()` paths within the same turn-group.
 

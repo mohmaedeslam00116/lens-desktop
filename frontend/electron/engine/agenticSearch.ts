@@ -23,6 +23,12 @@ import type { LiveEvent, SourceItem } from './types';
 import { attachAgentSessionBridge } from './agentSessionBridge';
 import { claimAndShare, resetFetchLedger } from './fetchLedger';
 import type { LensToolSurface } from './agentSessionHost';
+import {
+  captureTranscriptAtTerminal,
+  buildConversationProjection,
+  type TranscriptTurnGroup,
+} from './agenticConversationProjection';
+import type { AgenticTranscriptStore } from './agenticTranscript';
 
 /** Result of one web_search call. */
 export interface AgenticSearchHit {
@@ -190,12 +196,21 @@ export interface AgenticRunOptions {
   /** The accumulated state from the tool surface built for this run. */
   state: AgenticRunState;
   signal?: AbortSignal;
+  /**
+   * Transcript persistence (#144): when provided, the turn-group transcript
+   * is captured into this LENS-side store at terminal time. Absent → no
+   * capture (callers without persistence); a failing store never breaks the
+   * run — the explicit terminal outranks storage.
+   */
+  transcript?: { store: Pick<AgenticTranscriptStore, 'write' | 'read'> };
 }
 
 export interface AgenticRunResult {
   terminal: 'finished' | 'cancelled' | 'budget_exhausted' | 'error';
   report: string;
   sources: SourceItem[];
+  /** The persisted conversation projection on `finished` (#144); null otherwise. */
+  conversationProjection?: ReturnType<typeof buildConversationProjection>;
 }
 
 /** The cancel registry: one live run per sessionId. */
@@ -258,8 +273,30 @@ export async function runAgenticSearch(session: any, options: AgenticRunOptions)
 
   const emitTerminal = (next: AgenticRunResult['terminal'], event: LiveEvent): AgenticRunResult => {
     terminal = next;
+    // Terminal-time transcript capture (#144; SPEC-028 Decision 2): the
+    // turn-group transcript is the session's own `state.messages` — plain
+    // JSON — captured exactly once, when the run ends, into the LENS-side
+    // store. The capture lands BEFORE the terminal event is emitted, so the
+    // projection riding the `finished` event is built from the SAME bytes
+    // this run just wrote — never one turn-group behind, never the live
+    // runtime. Persistence failure never breaks the terminal.
+    const turn: TranscriptTurnGroup = {
+      question,
+      terminal: next,
+      capturedAt: Date.now(),
+      messages: (session?.state?.messages ?? []) as Array<Record<string, unknown>>,
+    };
+    captureTranscriptAtTerminal(options.transcript?.store, sessionId, turn);
+    const projection =
+      next === 'finished'
+        ? buildConversationProjection(options.transcript?.store.read(sessionId))
+        : undefined;
+    if (projection !== undefined) {
+      (event as { conversationProjection?: ReturnType<typeof buildConversationProjection> }).conversationProjection =
+        projection;
+    }
     emit(event);
-    return { terminal, report: state.reportChunks.join(''), sources: [...state.sources] };
+    return { terminal, report: state.reportChunks.join(''), sources: [...state.sources], conversationProjection: projection };
   };
 
   activeRuns.set(sessionId, { abort, detach, session });
