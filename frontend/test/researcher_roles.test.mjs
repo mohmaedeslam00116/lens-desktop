@@ -12,8 +12,12 @@ import {
 } from '../dist-electron/engine/researcherRoles.js';
 import { tokenizeBilingual } from '../dist-electron/engine/bm25.js';
 import { deriveFacetAssignments, ParentResearchAgent } from '../dist-electron/engine/parentAgent.js';
-import { ResearcherAgent } from '../dist-electron/engine/researcherAgent.js';
 import { setActiveCore, resetActiveCore } from '../dist-electron/engine/modelGateway.js';
+import {
+  resetScrapePlane,
+  __testSeams as scrapeTestSeams,
+} from '../dist-electron/engine/scrapePlane.js';
+import { makeScriptedResearcherFactory } from './parity_fixture_builders.mjs';
 
 async function pi() {
   return await import('@earendil-works/pi-ai');
@@ -26,6 +30,38 @@ function stubFetchEmpty() {
 }
 
 const REPORT = '# Fusion Energy Report\n\nFindings synthesized.';
+
+/** Serve the respecialization pages through the real vendored planes (the
+ * re-hosted researchers retrieve through them; DNS seam included). */
+function servePages(pages) {
+  const all = new Map(pages.map((s) => [s.url, s.content]));
+  globalThis.fetch = (async (input) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('html.duckduckgo.com')) {
+      const decoded = (() => { try { return decodeURIComponent(url).replace(/\+/g, ' ').toLowerCase(); } catch { return url.toLowerCase(); } })();
+      for (const s of pages) {
+        if (s.queries.some((q) => decoded.includes(q.toLowerCase()))) {
+          const entries = pages
+            .filter((p) => p.queries.some((q) => decoded.includes(q.toLowerCase())))
+            .map((p) => `<div class="result"><h2 class="result__a" href="${p.url}">${p.url}</h2></div>`);
+          return new Response(`<html><body>${entries.join('')}</body></html>`, { status: 200, headers: { 'content-type': 'text/html' } });
+        }
+      }
+      return new Response('<html><body></body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+    }
+    if (all.has(url)) return new Response(all.get(url), { status: 200, headers: { 'content-type': 'text/html' } });
+    return new Response(`no route for ${url}`, { status: 404 });
+  });
+  const hostnames = new Set(pages.map((s) => { try { return new URL(s.url).hostname; } catch { return s.url; } }));
+  scrapeTestSeams.setLookupOverride(async (hostname) => {
+    if (!hostnames.has(hostname)) throw new Error(`no DNS route for ${hostname}`);
+    return [{ address: '93.184.216.34', family: 4 }];
+  });
+}
+
+function articleHtml(text) {
+  return `<html><head><title>page</title></head><body><article>${`<p>${text}</p>`.repeat(20)}</article></body></html>`;
+}
 
 function planWith(milestones) {
   return {
@@ -128,10 +164,12 @@ describe('Closed 5-role catalog (ticket #93 — ADR-0010 decision 5)', () => {
   });
 });
 
-describe('Role flow through the agency run (offline e2e)', () => {
+describe('Role flow through the agency run (offline e2e, #146 re-hosted contract)', () => {
   afterEach(() => {
     resetActiveCore();
     globalThis.fetch = realFetch;
+    scrapeTestSeams.setLookupOverride(null);
+    resetScrapePlane();
   });
 
   it('role_selected telemetry precedes lifecycle; researchers receive their roles; identical plans select identically', async () => {
@@ -148,15 +186,15 @@ describe('Role flow through the agency run (offline e2e)', () => {
       ['m2', 'reactor architecture benchmarks'],
       ['m3', 'criticism and risks'],
     ]);
-    const parent = new ParentResearchAgent('s-93', (e) => emitted.push(e), undefined,
-      (sessionId, emit, options) => {
-        rolesSeen.push([options.facetIndex, options.role]);
-        return new ResearcherAgent(sessionId, emit, {
-          ...options,
-          toolPackages: false,
-          searchFn: async () => [],
-        });
-      });
+    // Re-hosted scripted researchers (ticket #146): REAL hosted sessions with
+    // scripted transports and no retrieval — the role ASSIGNMENT flow is the
+    // contract under test, and respecialization stays enabled so the
+    // zero-coverage facets earn their bounded follow-ups.
+    const factory = (sessionId, emit, options) => {
+      rolesSeen.push([options.facetIndex, options.role]);
+      return makeScriptedResearcherFactory({ report: REPORT, pagesFor: () => [] })(sessionId, emit, options);
+    };
+    const parent = new ParentResearchAgent('s-93', (e) => emitted.push(e), undefined, factory);
     await parent.run(baseRequest(plan, { researcher_mode: true }));
 
     // Deterministic selection surfaced in telemetry before lifecycle events.
@@ -197,30 +235,30 @@ describe('Role flow through the agency run (offline e2e)', () => {
     const emitted = [];
     const runsByRole = [];
     const plan = planWith([['m1', 'a facet with poor coverage']]);
-    const parent = new ParentResearchAgent('s-93-rs', (e) => emitted.push(e), undefined,
-      (sessionId, emit, options) => {
-        runsByRole.push(options.role);
-        return new ResearcherAgent(sessionId, emit, {
-          ...options,
-          toolPackages: false,
-          // Facet 0's first pass finds nothing (deficit); the re-specialized
-          // follow-up (role mapped by deficit kind) finds two sources.
-          searchFn: async () => (options.role === 'technical'
-            ? [
-                { url: 'https://rs-1.example/a', title: 'RS1', snippet: 'x' },
-                { url: 'https://rs-2.example/b', title: 'RS2', snippet: 'x' },
-              ]
-            : []),
-          scrapeFn: async (url) => ({
-            url,
-            title: url,
-            domain: new URL(url).hostname,
-            content: `Respecialized evidence for the facet with poor coverage. `.repeat(10),
-            credibilityScore: 80,
-          }),
-        });
-      });
+    // Re-hosted scripted researchers (ticket #146): the first pass searches
+    // a query with no served results (deficit); the re-specialized follow-up
+    // (role mapped by deficit kind: primary -> technical) searches a query
+    // whose DDG page lists the two rs-* URLs — served through the REAL
+    // planes, fetched through the session ledger.
+    const pageSpecs = [
+      { url: 'https://rs-1.example/a', content: articleHtml('Respecialized evidence for the facet with poor coverage. '), queries: ['respecialization retrieval query'] },
+      { url: 'https://rs-2.example/b', content: articleHtml('Respecialized evidence for the facet with poor coverage. '), queries: ['respecialization retrieval query'] },
+    ];
+    servePages(pageSpecs);
+    const factory = (sessionId, emit, options) => {
+      runsByRole.push(options.role);
+      return makeScriptedResearcherFactory({
+        report: REPORT,
+        pagesFor: (opts) => (opts.role === 'technical' ? pageSpecs.map((s) => s.url) : []),
+        searchQueryFor: (opts) => (opts.role === 'technical' ? 'respecialization retrieval query' : 'a query with no served results'),
+      })(sessionId, emit, options);
+    };
+    // The engine hands each decorator the researcher's OWN brief, so the
+    // scripted transport recognizes the window's opening turn verbatim and a
+    // custom `searchQueryFor` never couples to the brief's wording (#146).
+    const parent = new ParentResearchAgent('s-93-rs', (e) => emitted.push(e), undefined, factory);
     await parent.run(baseRequest(plan, { researcher_mode: true }));
+    console.log('RS-TRACE:', emitted.map((e) => e.type).join(','));
 
     // First pass: primary (no hits). Re-specialization: primary deficit ->
     // technical follow-up, which returns two merged findings.
@@ -233,10 +271,19 @@ describe('Role flow through the agency run (offline e2e)', () => {
     assert.match(respecializationEvents[0].researcherTelemetry.counts.rationale, /coverage deficit/);
 
     // Merged findings entered the delegated pool with the facet's provenance.
-    const finished = emitted.find((e) => e.type === 'finished');
+    // The delegated terminal is the LAST finished event (since #146 each
+    // re-hosted researcher window carries its own window-scoped finished).
+    const finished = emitted.filter((e) => e.type === 'finished').at(-1);
     assert.ok(finished, 'run completes');
-    const rsSources = (finished.sources ?? []).filter((s) => String(s.url).includes('rs-'));
-    assert.ok(rsSources.length >= 2, `respecialized findings in report sources (got ${rsSources.length})`);
+    const finishedSources = finished.sources ?? [];
+    // Both respecialized pages merged (the fixture serves two hosts).
+    const rsSources = finishedSources.filter(
+      (s) => String(s.url).startsWith('https://rs-1.example') || String(s.url).startsWith('https://rs-2.example')
+    );
+    assert.ok(
+      rsSources.length >= 2,
+      `respecialized findings missing from the final pool: ${JSON.stringify(finishedSources.map((s) => s.url))}`
+    );
     for (const s of rsSources) assert.ok(s.milestoneId, 'provenance preserved');
   });
 
@@ -250,15 +297,13 @@ describe('Role flow through the agency run (offline e2e)', () => {
     const emitted = [];
     const launched = [];
     const plan = planWith(Array.from({ length: 8 }, (_, i) => [`m${i + 1}`, `deficit facet ${i + 1} overview`]));
-    const parent = new ParentResearchAgent('s-93-cap', (e) => emitted.push(e), undefined,
-      (sessionId, emit, options) => {
-        launched.push(options.researcherId);
-        return new ResearcherAgent(sessionId, emit, {
-          ...options,
-          toolPackages: false,
-          searchFn: async () => [], // everyone finds nothing -> all deficits
-        });
-      });
+    // Re-hosted scripted researchers (ticket #146): fully-scripted windows
+    // that find nothing -> every facet is a deficit -> the budget binds.
+    const factory = (sessionId, emit, options) => {
+      launched.push(options.researcherId);
+      return makeScriptedResearcherFactory({ report: REPORT, pagesFor: () => [] })(sessionId, emit, options);
+    };
+    const parent = new ParentResearchAgent('s-93-cap', (e) => emitted.push(e), undefined, factory);
     await parent.run(baseRequest(plan, { researcher_mode: true }));
 
     // 8 facets reach the session cap of 8 researchers; no re-specialization

@@ -1,6 +1,6 @@
 import { LiveEvent, ResearchPlan, ResearchRequest } from './types';
 import { DeepResearchAgent } from './agent';
-import { ResearcherAgent, ResearcherOptions, ResearcherRunResult } from './researcherAgent';
+import { ResearcherOptions, ResearcherRunResult, runRehostedResearcher } from './researcherAgent';
 import { SkillActivationManager } from './skills';
 import { loadTodoPlanStore, TodoPlanStore } from './piPackages';
 import { auditEvidenceCoverage } from './evidenceCoverage';
@@ -10,13 +10,25 @@ import { assignRoles, planRespecialization, ResearcherRole, ROLE_LABELS } from '
 import { normalizeCanonicalUrl } from './dedup';
 import { tokenizeBilingual } from './bm25';
 
-/** Researcher construction seam (pi-subagents-shaped): the default factory
- * builds in-process researchers; tests and later phases can supply
- * specialized constructions without changing the orchestration flow. */
-export type ResearcherFactory = (sessionId: string, emitEvent: (event: LiveEvent) => void, options: ResearcherOptions) => ResearcherAgent;
+/**
+ * Researcher construction seam (pi-subagents-shaped): the default factory
+ * builds RE-HOSTED researchers — one hosted AgentSession per facet through
+ * the #140 construction seam (ticket #146, the SPEC-028 final migration;
+ * ADR-0014 decision 7). The result envelope (`ResearcherRunResult`) is
+ * unchanged, so the parent's fan-out, caps, budget, and telemetry read
+ * exactly what they always read. Tests and later phases can still supply
+ * specialized constructions — including a scripted-transport decorator for
+ * offline determinism (the pi runtime's own session-level seam) — without
+ * changing the orchestration flow.
+ */
+export type ResearcherFactory = (sessionId: string, emitEvent: (event: LiveEvent) => void, options: ResearcherOptions) => {
+  run: (request: ResearchRequest, signal?: AbortSignal) => Promise<ResearcherRunResult>;
+};
 
 const defaultResearcherFactory: ResearcherFactory =
-  (sessionId, emitEvent, options) => new ResearcherAgent(sessionId, emitEvent, options);
+  (sessionId, emitEvent, options) => ({
+    run: (request, signal) => runRehostedResearcher(sessionId, emitEvent, options, request, signal),
+  });
 
 /**
  * parentAgent.ts — Parent Research Agent orchestration seam (ADR-0010 phase 1,
@@ -412,6 +424,7 @@ export class ParentResearchAgent {
             // Ticket #92: consume the parent's compression lease URL (absent
             // = uncompressed; degradation notices were already emitted).
             proxyBaseUrl,
+            compressionProxyUrl: proxyBaseUrl,
             compressionNotices,
           });
             // A transient researcher failure must not prevent the delegated
@@ -530,6 +543,7 @@ export class ParentResearchAgent {
               activationManager: this.activationManager,
               searchProvider: request.search_provider,
               proxyBaseUrl,
+              compressionProxyUrl: proxyBaseUrl,
               compressionNotices,
             });
             let result: ResearcherRunResult;

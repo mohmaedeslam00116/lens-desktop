@@ -1,6 +1,7 @@
 import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem, WideResearchRequest, PlanMilestone } from './types';
 import { MultiSearchProvider } from './search';
 import { primarySearchPlane } from './searchPlane';
+import { claimAndShare } from './fetchLedger';
 import { PageScraper, ScrapedPage } from './scraper';
 import { auditEvidenceClaims, buildAuditSection } from './evidenceAuditor';
 import { LLMRequestOptions, LLMToolDefinition, ToolCallHandler } from './models';
@@ -50,11 +51,24 @@ export class DeepResearchAgent {
       });
 
       try {
-        const scraped = await PageScraper.scrape(hit.url, 7000, signal);
-        if (!scraped || !scraped.content || scraped.content.startsWith('Content unavailable from ') || scraped.content.startsWith('Error retrieving ')) {
-          console.warn(`[Agent] Scrape returned unavailable content for ${hit.url}`);
-          continue;
-        }
+        // The ONE-FETCH-FEEDS-EVERY-CONSUMER contract (#89, ADR-0010 D8) holds
+        // for the WHOLE delegated loop since #146: the re-hosted researchers
+        // admit through the session fetch ledger (keyed on the parent's own
+        // session id — the delegated run shares it), so a walk re-fetch of a
+        // researcher-admitted page must ATTACH to the ledger's claim (same
+        // admitted page, `shared`, no second raw fetch) instead of issuing a
+        // raw scrape. Without this, one page costs two raw fetches and two
+        // budget units whenever both the fan-out and the walk discover it.
+        const entry = await claimAndShare(this.sessionId, hit.url, async () => {
+          const scraped = await PageScraper.scrape(hit.url, 7000, signal);
+          if (!scraped || !scraped.content || scraped.content.startsWith('Content unavailable from ') || scraped.content.startsWith('Error retrieving ')) {
+            console.warn(`[Agent] Scrape returned unavailable content for ${hit.url}`);
+            return null;
+          }
+          return scraped;
+        });
+        const scraped = entry?.page as ScrapedPage | undefined;
+        if (!scraped) continue;
         scrapedSources.push(scraped);
 
         this.emitEvent({
@@ -320,11 +334,16 @@ Return ONLY a valid JSON array of strings, for example:
       }
     }
 
-    // ADR-0010 phase 2 (#89): researcher subagents (researcher_mode) may seed
-    // the evidence pool with findings already tagged with per-facet milestone
-    // provenance. They were streamed live as `source` events by the
-    // researchers, so they join the pool without re-emission; registering
-    // their URLs keeps the dedupe contract (one fetch feeds every consumer).
+    // ADR-0010 phase 2 (#89): researcher subagents may seed the evidence
+    // pool with findings already tagged with per-facet milestone provenance.
+    // They were streamed live as `source` events by the researchers, so they
+    // join the pool without re-emission; registering their URLs keeps the
+    // dedupe contract (one fetch feeds every consumer — the re-hosted
+    // researchers fetch through the SAME plane ledger, so a delegated-walk
+    // re-fetch of a researcher page shares the one raw fetch instead of
+    // duplicating it). Seeding stays AFTER the delegated walk: the walk's own
+    // discovery telemetry (thought/graph_node per ingested page) is part of
+    // the recorded #94 backbone and must not move (ticket #146 parity).
     const seededSources = ((request as { scraped_sources?: ScrapedPage[] }).scraped_sources ?? []) as ScrapedPage[];
     for (const page of seededSources) {
       if (page?.url && !discoveredUrls.has(page.url)) {

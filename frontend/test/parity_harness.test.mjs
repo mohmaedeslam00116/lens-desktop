@@ -18,6 +18,15 @@ import {
   resetScrapePlane,
   __testSeams as scrapeTestSeams,
 } from '../dist-electron/engine/scrapePlane.js';
+// #146: the golden-fixture builders are SHARED (test/parity_fixture_builders.mjs)
+// across the parity suites. The shared pages carry substantive content because
+// every leg must admit its pages through the SAME vendored plane (whose
+// extractor enforces a usefulness bar) — the #94 file-local thin pages
+// predate the vendored scrape plane's completeness gate.
+import {
+  makeFixture,
+  makeFauxProvider,
+} from './parity_fixture_builders.mjs';
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -39,68 +48,12 @@ async function pi() {
 }
 
 // ---------------------------------------------------------------------------
-// Golden fixtures: deterministic DDG results + article pages served to the
-// REAL retrieval stack (MultiSearchProvider + PageScraper) by the harness's
-// routing fetch. No network anywhere.
+// Golden fixtures come from the SHARED builders (test/parity_fixture_builders.mjs):
+// the same fixture shape replays through the #94 agency legs, the #143 agentic
+// leg, and the #146 researcher leg, and the pages carry substantive content so
+// every leg admits them through the SAME vendored plane (its extractor enforces
+// a usefulness bar that thin pre-#146 pages failed).
 // ---------------------------------------------------------------------------
-
-function ddgResultsPage(entries) {
-  return `<html><body>${entries
-    .map(
-      (e) => `<div class="result">
-        <h2 class="result__a" href="${e.url}">${e.title}</h2>
-        <a class="result__snippet" href="${e.url}">${e.snippet}</a>
-      </div>`
-    )
-    .join('')}</body></html>`;
-}
-
-function articlePage(title, paragraphs) {
-  return `<html><head><title>${title}</title></head><body><article>${paragraphs
-    .map((p) => `<p>${p}</p>`)
-    .join('')}</article></body></html>`;
-}
-
-/** Builds a fixture with per-milestone DDG pages and article pages whose
- * content mirrors the milestone query (so coverage is measurable). */
-function makeFixture(name, objective, milestoneQueries, pagesPerFacet = 3) {
-  const plan = {
-    id: `plan-${name}`,
-    version: 2,
-    objective,
-    milestones: milestoneQueries.map((q, i) => ({
-      id: `m${i + 1}`,
-      query: q,
-      rationale: `facet ${i + 1}`,
-      status: 'pending',
-    })),
-    suggestedSkills: [],
-    status: 'approved',
-    estimatedScope: { targetSources: 8, maxHops: 2 },
-  };
-  const searchHtml = {};
-  const pageHtml = {};
-  for (const q of milestoneQueries) {
-    const entries = [];
-    for (let i = 1; i <= pagesPerFacet; i++) {
-      const url = `https://${q.replace(/[^a-z0-9]+/gi, '')}-src${i}.example/article`;
-      entries.push({ url, title: `${q} source ${i}`, snippet: `${q} overview` });
-      pageHtml[url] = articlePage(`${q} source ${i}`, [
-        `Detailed evidence about ${q}.`,
-        `Findings on ${q} show measurable progress and reproducible results across independent measurements.`,
-        `Additional analysis of ${q} confirms the reported trends under controlled conditions.`,
-      ]);
-    }
-    searchHtml[q] = ddgResultsPage(entries);
-  }
-  const report =
-    `# ${objective} Report\n\n` +
-    `The evidence shows clear findings across the research facets. ` +
-    `The first key finding is grounded in the retrieved sources [1]. ` +
-    `The second key finding is grounded in additional sources [2]. ` +
-    `The third key finding is grounded in further sources [3].\n`;
-  return { name, query: objective, language: 'en', plan, report, searchHtml, pageHtml };
-}
 
 const FIXTURES = [
   // Legacy 'quick' depth caps ingestion at 4 sources (initialSourceCap) and
@@ -119,15 +72,7 @@ const REPORT = FIXTURES[0].report;
  * the runner consumes fixtures sequentially, so responses are grouped per
  * fixture (responseCount per fixture, report per fixture). */
 async function makeFaux(fixtures) {
-  const ai = await pi();
-  const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
-  const queued = [];
-  for (const fixture of fixtures) {
-    for (let i = 0; i < responseCount(fixture); i++) {
-      queued.push(ai.fauxAssistantMessage(fixture.report));
-    }
-  }
-  faux.setResponses(queued);
+  const faux = await makeFauxProvider(fixtures);
   return faux;
 }
 
