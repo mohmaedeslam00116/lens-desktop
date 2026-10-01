@@ -57,6 +57,10 @@ auto-retry) at permanent maintenance cost.
    researcher orchestration remains until each researcher re-hosts as an
    `AgentSession` under this contract, gated by the ADR-0011 parity harness
    with expand–contract retirement of the native researcher loop.
+   *(Closed by #146: the migration ran green — every researcher now executes
+   its brief on a hosted `AgentSession` through the #140 construction seam;
+   the native loop is retired with its tests, no dual maintenance; the parent's
+   briefs, fan-out caps, budget, auditor, and telemetry are unchanged.)*
 
 ## Consequences
 

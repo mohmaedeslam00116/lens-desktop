@@ -34,10 +34,13 @@
  *                 for the strict sequence stage
  *   - fanout    : ParentResearchAgent with researcher_mode ON — the outcome
  *                 stages (coverage / grounding / admissions) pin this leg's
- *                 RESULTS to the baseline. Comparisons here are
- *                 order-insensitive (admission set semantics): researchers
- *                 may admit the same pages in a different order and emit
- *                 extra per-facet `source` events; the SET of admitted
+ *                 RESULTS to the baseline. Since #146 the researchers are the
+ *                 RE-HOSTED hosted sessions on the scripted transport (one
+ *                 AgentSession per facet, tool rounds inside the runtime
+ *                 window); comparisons remain order-insensitive (admission
+ *                 set semantics): researchers may admit the same pages in a
+ *                 different order and emit extra per-facet `source` events
+ *                 and window-vocabulary events; the SET of admitted
  *                 sources, the coverage score, and the grounding decisions
  *                 must still match exactly.
  *
@@ -123,14 +126,19 @@ interface LegOutcome {
 
 /** Collapse consecutive report_chunk runs and strip additive/leg-specific
  * events — the delegated-loop backbone contract (#88 precedent, #104
- * two-leg form). `source` events are excluded: the fan-out leg emits
- * per-researcher provenance copies the admissions stage already covers as
- * URL sets. */
+ * two-leg form; #146 window-vocabulary extension). `source` events are
+ * excluded: the fan-out leg emits per-researcher provenance copies the
+ * admissions stage already covers as URL sets. Events carrying a `sessionId`
+ * field are the re-hosted researcher windows' runtime-bridge vocabulary
+ * (session_state / window status / window report_chunk / window finished) —
+ * additive researcher events by the same rule: the delegated loop's own
+ * events never carry the field. */
 export function backboneOf(events: LiveEvent[]): string[] {
   const filtered = events.filter(
     (e) => e.type !== 'researcher_telemetry'
       && e.type !== 'fanout_telemetry'
       && e.type !== 'source'
+      && (e as { sessionId?: unknown }).sessionId === undefined
       && !(e.type === 'status' && typeof e.message === 'string' && e.message.includes('agency mode'))
   );
   const backbone: string[] = [];
@@ -484,6 +492,257 @@ export async function checkFixtureAgentic(
   };
 }
 
+// ---------------------------------------------------------------------------
+// The researcher leg (#146): the golden fixture replays through the REAL
+// researcher machinery — a hosted AgentSession (ADR-0014 construction
+// contract) on the plane-backed research toolset, driven by the scripted
+// transport inside the agent window. The offline contract is the agentic
+// leg's: routing fetch, DNS seam for fixture hostnames, planes + core reset
+// in the SAME finally. The outcome is the researcher contract shape
+// (`ResearcherRunResult`) plus the raw events, so `checkFixtureResearcher`
+// can diff it against the baseline leg (order-insensitive admission sets).
+// ---------------------------------------------------------------------------
+
+export interface ResearcherLegFinding {
+  url: string;
+  title: string;
+  domain: string;
+  content: string;
+  credibilityScore: number;
+  milestoneId?: string;
+  milestoneTitle?: string;
+}
+
+export interface ResearcherLegOutcome {
+  result: {
+    researcherId: string;
+    facetIndex: number;
+    facet: string;
+    findings: ResearcherLegFinding[];
+    toolCalls: number;
+    dedupeShared: number;
+  } | null;
+  events: LiveEvent[];
+  /** Vendored-plane ledger snapshots captured before the finally's reset —
+   * the D5 proof that the leg retrieved through the planes. */
+  planeLedger: { search: { ledgered: number; active: number }; scrape: { ledgered: number; active: number } } | null;
+}
+
+/** Replay one fixture facet through the re-hosted researcher path (ticket
+ * #146): a hosted AgentSession on the plane-backed research tools with the
+ * scripted transport, offline via the routing fetch. */
+export async function runResearcherLeg(
+  fixture: ParityFixture,
+  options: ParityHarnessOptions
+): Promise<ResearcherLegOutcome> {
+  const { createAgenticToolSurface } = await import('./agenticSearch');
+  const { claimAndShare, resetFetchLedger } = await import('./fetchLedger');
+  const { primarySearchPlane } = await import('./searchPlane');
+  const { primaryScrapePlane, __testSeams: scrapeSeams, resetScrapePlane } = await import('./scrapePlane');
+  const { resetSearchPlane } = await import('./searchPlane');
+
+  const sessionId = `${options.sessionIdPrefix ?? 'parity-researcher'}-${fixture.name}`;
+  const events: LiveEvent[] = [];
+  const findings: ResearcherLegFinding[] = [];
+  let fetchesTotal = 0;
+  let planeLedger: ResearcherLegOutcome['planeLedger'] = null;
+
+  const previousFetch = globalThis.fetch;
+  let lastError: unknown = undefined;
+  try {
+    // Same protected global-scope pattern as every leg (#151 review law):
+    // fetch and the DNS seam are patched INSIDE the try, restored in the
+    // finally — a setup throw never leaks process state.
+    globalThis.fetch = makeFixtureFetch(fixture) as typeof globalThis.fetch;
+    const fixtureHostnames = new Set(
+      Object.keys(fixture.pageHtml).map((u) => {
+        try { return new URL(u).hostname; } catch { return u; }
+      })
+    );
+    scrapeSeams.setLookupOverride(async (hostname) => {
+      if (!fixtureHostnames.has(hostname)) {
+        throw new Error(`parity fixture "${fixture.name}" has no DNS route for ${hostname}`);
+      }
+      return [{ address: '93.184.216.34', family: 4 }];
+    });
+    resetScrapePlane();
+    resetSearchPlane();
+    resetActiveCore();
+
+    // ONE HOSTED SESSION PER MILESTONE — the parent's fan-out contract
+    // (one researcher per facet, #90): the re-hosted leg replays every
+    // facet the plan assigns, sequentially for deterministic parity.
+    const { createResearchSession } = await import('./agentSessionHost');
+    const { runAgenticSearch } = await import('./agenticSearch');
+    const seen = new Set<string>();
+    for (let facetIndex = 0; facetIndex < fixture.plan.milestones.length; facetIndex++) {
+      const milestone = fixture.plan.milestones[facetIndex];
+      const facet = milestone?.query ?? fixture.query;
+      const milestoneId = milestone?.id || `m${facetIndex + 1}`;
+      const milestoneTitle = milestone?.query || facet;
+      const brief = [
+        `You are a specialized research subagent.`,
+        `Your assigned research facet (topic ${facetIndex + 1}/${fixture.plan.milestones.length}): "${facet}".`,
+        `Investigate ONLY this facet. Use the provided web tools to search for, fetch, and verify sources relevant to the facet.`,
+        `Be concise: report the key facts you verified with their sources. Do not write a full report — the parent agent synthesizes.`,
+      ].join('\n');
+
+      // The REAL researcher tool surface — the SAME plane-backed surface the
+      // #143 agentic leg uses (createAgenticToolSurface): the LENS-wrapped
+      // web_search/fetch_content tools whose retrieval routes through the
+      // ADR-0013 plane ledger with the gate and SSRF validation inside the
+      // wrappers, and the admission guard as the start-time authority.
+      const facetState = { sources: [] as SourceItem[], reportChunks: [] as string[], fetchesUsed: 0 };
+      const surface = createAgenticToolSurface({
+        sessionId,
+        state: facetState,
+        maxFetches: 8,
+        emit: (event) => events.push(event),
+        search: async (query) => {
+          const hits = await primarySearchPlane(query);
+          return hits.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
+        },
+        fetchPage: async (url) => {
+          const page = await primaryScrapePlane(url);
+          if (!page?.content || page.content.startsWith('Content unavailable from ')) return null;
+          return { url: page.url, title: page.title, text: page.content };
+        },
+      });
+
+      // Researcher-harvest contract (the #89 ingestUrl contract, fed by the
+      // runtime's tool execution): every URL surfaced by the surface's
+      // web_search is FETCHED through the session ledger into the facet's
+      // findings pool with the facet's milestone provenance — a snippet-only
+      // shared entry is never enough (the #150 evidence-preservation clause:
+      // findings carry the full page). Cross-researcher dedupe semantics
+      // survive the swap bit-for-bit: the ledger shares one raw fetch.
+      const harvest = async (url: string): Promise<void> => {
+        if (seen.has(url) || findings.length >= 8) return;
+        seen.add(url);
+        try {
+          const entry = await claimAndShare(sessionId, url, async () => {
+            const page = await primaryScrapePlane(url);
+            if (!page?.content || page.content.startsWith('Content unavailable from ') || page.content.startsWith('Error retrieving ')) return null;
+            return page;
+          });
+          const page = entry?.page;
+          if (
+            !page
+            || typeof page.title !== 'string'
+            || typeof page.domain !== 'string'
+            || typeof page.content !== 'string'
+            || typeof page.credibilityScore !== 'number'
+          ) return;
+          findings.push({
+            url: page.url,
+            title: page.title,
+            domain: page.domain,
+            content: page.content,
+            credibilityScore: page.credibilityScore,
+            milestoneId,
+            milestoneTitle,
+          });
+          events.push({
+            type: 'source',
+            url: page.url,
+            title: page.title,
+            domain: page.domain,
+            credibility: page.credibilityScore as number,
+            snippet: page.content.slice(0, 160),
+            milestoneId,
+            milestoneTitle,
+          });
+        } catch (err) {
+          seen.delete(url);
+          console.warn(`[runResearcherLeg] ingest failed for ${url}:`, err);
+        }
+      };
+      const surfaceHandler = surface.handler;
+      surface.handler = async (call) => {
+        const outcome = await surfaceHandler(call);
+        if (call.name === 'web_search' && outcome.success && typeof outcome.result === 'string') {
+          let urlCount = 0;
+          for (const match of outcome.result.matchAll(/https?:\/\/[^\s"'<>\\)\]]+/g)) {
+            if (urlCount >= 8) break;
+            urlCount += 1;
+            await harvest(match[0].replace(/[.,;]+$/, ''));
+          }
+        }
+        return outcome;
+      };
+
+      // This facet's retrievable pages: the fixture builders derive each
+      // page host from its milestone query slug, so the facet's script
+      // fetches ITS facet's pages (the parent researcher never touches
+      // another facet's evidence).
+      const facetSlug = facet.replace(/[^a-z0-9]+/gi, '');
+      const facetPages = Object.keys(fixture.pageHtml).filter((u) => {
+        try { return new URL(u).hostname.startsWith(facetSlug); } catch { return false; }
+      });
+
+      // Construction through the #140 seam (same form as the #142 runner's
+      // bootstrap); the scripted transport rides as streamFunction (the #142
+      // scripted-transport precedent), and the brief drives the agent window.
+      // The run itself goes through the REAL runner — runAgenticSearch — so
+      // the researcher window carries the explicit-terminal and
+      // event-faithfulness contracts, not a hand-rolled loop.
+      const hosted = await createResearchSession(
+        { sessionId, agentDir: mkdtempSync(join(tmpdir(), 'lens-parity-researcher-')) },
+        surface
+      );
+      hosted.session.agent.streamFunction = makeResearcherLegTransport(
+        fixture.report,
+        facetPages,
+        facet,
+        [brief]
+      );
+
+      await runAgenticSearch(hosted.session, {
+        sessionId,
+        question: brief,
+        state: facetState,
+        emit: (event) => events.push(event),
+      });
+      fetchesTotal += facetState.fetchesUsed;
+    }
+    lastError = undefined;
+  } catch (error) {
+    lastError = error;
+  } finally {
+    // The D5 evidence is captured BEFORE the planes reset: the snapshot
+    // proves the leg exercised the vendored planes (never the silent
+    // fallbacks), and it must survive the finally's own restoration.
+    try {
+      const { searchPlaneLedgerSnapshot } = await import('./searchPlane');
+      const { scrapePlaneLedgerSnapshot } = await import('./scrapePlane');
+      planeLedger = { search: searchPlaneLedgerSnapshot(), scrape: scrapePlaneLedgerSnapshot() };
+    } catch {
+      planeLedger = null;
+    }
+    globalThis.fetch = previousFetch;
+    scrapeSeams.setLookupOverride(null);
+    resetScrapePlane();
+    resetSearchPlane();
+    resetActiveCore();
+    resetFetchLedger(sessionId);
+  }
+  if (lastError) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+  return {
+    result: {
+      researcherId: `researcher_${sessionId}`,
+      facetIndex: 0,
+      facet: fixture.plan.milestones[0]?.query ?? fixture.query,
+      findings,
+      toolCalls: fetchesTotal,
+      dedupeShared: 0,
+    },
+    events,
+    planeLedger,
+  };
+}
+
 function makeRequest(fixture: ParityFixture, researcherMode: boolean): ResearchRequest {
   return {
     query: fixture.query,
@@ -500,7 +759,186 @@ function makeRequest(fixture: ParityFixture, researcherMode: boolean): ResearchR
   } as ResearchRequest;
 }
 
-async function runLeg(
+// ---------------------------------------------------------------------------
+// The researcher parity check (#146): the re-hosted leg against the ADR-0011
+// four-stage diff. Baseline = the parent's DELEGATED run (researcher_mode
+// OFF) — the same reference the fan-out stage has used since #94. Comparison
+// semantics are the order-insensitive admission semantics (the re-hosted
+// researcher may admit pages in a different order than the loop); grounding
+// is diffed on the canonical (URL-sorted) pool; the sequence stage is the
+// delegated-loop backbone (researcher/additive events excluded). A
+// zero-ledger re-hosted run (no findings at all) is a broken run, never a
+// vacuous pass (ADR-0013 D5).
+// ---------------------------------------------------------------------------
+
+export async function checkFixtureResearcher(
+  fixture: ParityFixture,
+  options: ParityHarnessOptions
+): Promise<ParityReport> {
+  const stages: ParityStageResult[] = [];
+  const coverageThreshold = options.thresholds?.coverageDelta ?? PARITY_THRESHOLDS.coverageDelta;
+  const baseline = await runLeg(fixture, 'delegation', options);
+  const rehosted = await runResearcherLeg(fixture, options);
+
+  const baselineSources = baseline.finished?.sources ?? [];
+  const rehostedSources = rehosted.result?.findings ?? [];
+
+  // Stage 1: coverage — ABSOLUTE form (the #143 agentic-leg precedent): the
+  // re-hosted researcher's admitted pages must cover the golden query. A
+  // delta against the delegated leg's finished sources would compare unequal
+  // SHAPES, not equivalent pipelines: the delegated loop's finished sources
+  // surface snippets only (its own admission pipeline), while the researcher
+  // contract (ResearcherRunResult) carries full pages — the same evidence at
+  // greater depth. Absolute coverage measures the re-hosted execution
+  // against the fixture's golden facts.
+  const rehostedCoverage = auditEvidenceCoverage(
+    fixture.query,
+    [],
+    rehostedSources.map((f) => ({ content: f.content, domain: f.domain })),
+    { language: fixture.language === 'ar' ? 'ar' : 'en' }
+  ).overallScore;
+  stages.push({
+    stage: 'coverage',
+    ok: rehostedCoverage >= 1 - coverageThreshold,
+    detail: `re-hosted coverage=${rehostedCoverage} (≥ ${1 - coverageThreshold})`,
+    expected: '≥ ' + (1 - coverageThreshold),
+    actual: rehostedCoverage,
+  });
+
+  // Stage 2: grounding — ABSOLUTE form (#143): the citation contract's
+  // decisions on the golden report over the canonical (URL-sorted) re-hosted
+  // pool — every citation valid, none hallucinated.
+  const canonical = (sources: Array<{ url: string; content?: string }>): SourceItem[] =>
+    ([...sources] as SourceItem[]).sort((a, b) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0));
+  const contract = new CitationGroundingContract();
+  contract.registerExcerpts(canonical(rehostedSources).map((s) => ({
+    ...s,
+    passage: (s as SourceItem).passage ?? (s as { content?: string }).content,
+  })));
+  const v = contract.verifyAndSanitize(fixture.report);
+  const groundingOk = v.totalFound > 0 && v.hallucinatedCount === 0;
+  stages.push({
+    stage: 'grounding',
+    ok: groundingOk,
+    detail: groundingOk
+      ? `grounding holds over the re-hosted pool (${v.validCount} valid / 0 hallucinated)`
+      : `grounding diverged (${v.validCount} valid / ${v.hallucinatedCount} hallucinated of ${v.totalFound})`,
+    expected: 'all citations valid',
+    actual: groundingOk ? undefined : v.hallucinatedIndices,
+  });
+
+  // Stage 3: admissions — CROSS-LEG parity: the re-hosted researcher must
+  // admit exactly the URL set the delegated baseline admitted for the same
+  // fixture (order-insensitive), and a zero-ledger run is a broken run,
+  // never a vacuous pass (ADR-0013 D5).
+  const admittedUrls = [...new Set(rehostedSources.map((f) => f.url))].sort();
+  const baselineUrls = [...new Set(baselineSources.map((s) => s.url))].sort();
+  const zeroLedger = admittedUrls.length === 0;
+  const admissionsOk = !zeroLedger && JSON.stringify(admittedUrls) === JSON.stringify(baselineUrls);
+  stages.push({
+    stage: 'admissions',
+    ok: admissionsOk,
+    detail: zeroLedger
+      ? 'zero-ledger re-hosted run: no page admitted through the plane — a broken run, not a parity pass'
+      : admissionsOk
+        ? `identical admissions (${admittedUrls.length} sources, re-hosted vs baseline)`
+        : `admission sets diverged: baseline=${JSON.stringify(baselineUrls)} re-hosted=${JSON.stringify(admittedUrls)}`,
+    expected: admissionsOk ? undefined : baselineUrls,
+    actual: admissionsOk ? undefined : admittedUrls,
+  });
+
+  // Stage 4: sequence — ANCHORED agentic form (the #143 precedent): each
+  // re-hosted researcher window carries the runtime lifecycle with the tool
+  // rounds and streamed report inside the agent window, and terminates
+  // explicitly. The baseline leg's delegated backbone stays the recorded
+  // #88 contract (pinned by checkFixture); the re-hosted windows are the
+  // bridge vocabulary, not the delegated loop's.
+  const types: string[] = rehosted.events.map((e) => e.type as string);
+  // Multiple researcher windows (one per facet): the anchored read spans the
+  // WHOLE run — first window open to last window close, with the final
+  // terminal last.
+  const agentStart = types.indexOf('session_state');
+  const agentEnd = types.lastIndexOf('session_state');
+  const firstStatus = types.indexOf('status');
+  const firstReport = types.indexOf('report_chunk');
+  const finishedIdx = types.lastIndexOf('finished');
+  const anchored = [
+    agentStart !== -1,
+    firstStatus > agentStart && firstStatus < agentEnd,
+    firstReport > agentStart && firstReport < agentEnd,
+    finishedIdx > agentStart && finishedIdx > types.lastIndexOf('status'),
+    !types.includes('error') && !types.includes('cancelled') && !types.includes('budget_exhausted'),
+  ];
+  const sequenceOk = anchored.every(Boolean);
+  const baselineBackbone = backboneOf(baseline.events);
+  stages.push({
+    stage: 'sequence',
+    ok: sequenceOk,
+    detail: sequenceOk
+      ? `re-hosted windows anchored (${types.length} events; ${fixture.plan.milestones.length} researcher windows; delegated baseline backbone ${baselineBackbone.length} events intact)`
+      : `re-hosted backbone diverged: ${anchored.map((a, i) => ['agent-ran', 'tool-round-window', 'report-window', 'explicit-terminal', 'no-failure'][i] + '=' + (a ? '✔' : '✖')).join(' ')}`,
+    expected: sequenceOk ? undefined : 'session_state(running) → [tool rounds + report] → session_state(completed) → finished (per window)',
+    actual: sequenceOk ? undefined : types.join(','),
+  });
+
+  const ok = stages.every((s) => s.ok);
+  const fixtureResult: ParityFixtureResult = {
+    fixture: `researcher/${fixture.name}`,
+    ok,
+    stages,
+    summary: stages.map((s) => `${s.ok ? '✔' : '✖'} researcher/${fixture.name}/${s.stage}: ${s.detail}`),
+  };
+  const firstBad = stages.find((s) => !s.ok);
+  return {
+    ok,
+    results: [fixtureResult],
+    divergence: firstBad
+      ? {
+          fixture: `researcher/${fixture.name}`,
+          stage: firstBad.stage,
+          detail: firstBad.detail,
+          expected: firstBad.expected,
+          actual: firstBad.actual,
+        }
+      : null,
+  };
+}
+
+/** The scripted researcher for the fan-out leg (#146): one re-hosted
+ * hosted-session researcher per facet — the REAL runRehostedResearcher
+ * machinery on the session-level scripted transport (search its facet →
+ * fetch its pages → terse report), per-researcher temp agentDir. The
+ * parent's orchestration (fan-out pool, caps, budget, delegation) is the
+ * code under test and runs unchanged. */
+function makeScriptedResearcherFactory(fixture: ParityFixture) {
+  return (sessionId: string, emitEvent: (event: LiveEvent) => void, options: import('./researcherAgent').ResearcherOptions) => ({
+    run: async (request: ResearchRequest, signal?: AbortSignal) => {
+      const { runRehostedResearcher } = await import('./researcherAgent');
+      const slug = options.facet.replace(/[^a-z0-9]+/gi, '');
+      const pages = Object.keys(fixture.pageHtml).filter((u) => {
+        try { return new URL(u).hostname.startsWith(slug); } catch { return false; }
+      });
+      const decorate = (session: any) => {
+        session.agent.streamFunction = makeResearcherLegTransport(
+          fixture.report,
+          pages,
+          options.facet,
+          []
+        );
+      };
+      return runRehostedResearcher(
+        sessionId,
+        emitEvent,
+        { ...options, agentDir: mkdtempSync(join(tmpdir(), 'lens-parity-researcher-')) },
+        request,
+        signal,
+        decorate
+      );
+    },
+  });
+}
+
+export async function runLeg(
   fixture: ParityFixture,
   path: 'delegation' | 'fanout',
   options: ParityHarnessOptions
@@ -537,7 +975,7 @@ async function runLeg(
       `${options.sessionIdPrefix ?? 'parity'}-${fixture.name}`,
       emit,
       undefined,
-      undefined,
+      path === 'fanout' ? makeScriptedResearcherFactory(fixture) : undefined,
       { respecialization: false }
     ).run(request);
   } finally {
@@ -545,10 +983,93 @@ async function runLeg(
     scrapeSeams.setLookupOverride(null);
     resetActiveCore();
   }
-  const finished = events.find((e) => e.type === 'finished') as LiveEvent | undefined;
+  // #146: the fan-out leg now carries THREE finished events — the two
+  // re-hosted researchers' windows AND the delegated loop's terminal. The
+  // leg's outcome is the DELEGATED terminal (the last one): it carries the
+  // merged evidence pool. events.find would grab a researcher window's
+  // window-scoped terminal (2 window sources), breaking the parity stages.
+  const finished = events.filter((e) => e.type === 'finished').at(-1) as LiveEvent | undefined;
   return {
     events,
     finished: finished ? { report: finished.report, sources: finished.sources } : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The researcher leg (#146): the final migration. The golden fixture replays
+// through the REAL researcher machinery — a hosted AgentSession (ADR-0014
+// construction contract) on the plane-backed research toolset — driven by a
+// scripted transport inside the agent window. Same offline contract as every
+// other leg: the routing fetch serves the fixture pages, fixture hostnames
+// resolve for the vendored SSRF validator, and the SAME four-stage ADR-0011
+// diff applies (order-insensitive admission semantics for parallel fan-outs).
+// ---------------------------------------------------------------------------
+
+/** Scripted pi-ai transport for the researcher leg: one tool round
+ * (search → fetch the fixture pages) inside the agent window, then the
+ * golden report verbatim — identical synthesis inputs by construction.
+ * `briefTurns` are the exact user texts that open the researcher window
+ * (the brief itself); any other turn (session titling etc.) answers
+ * tersely without touching the tools. */
+export function makeResearcherLegTransport(
+  report: string,
+  pageUrls: string[],
+  searchQuery: string,
+  briefTurns: string[] = []
+): any {
+  const usage = { input: 1, output: 1, total: 2 };
+  const finalize = (m: any) => ({ ...m, role: 'assistant', api: 'scripted', provider: 'scripted', model: 'scripted-1', usage });
+  const streamOf = (m: any) => ({
+    async *[Symbol.asyncIterator]() {
+      yield { type: 'done', reason: m.stopReason, message: m };
+    },
+    async result() {
+      return m;
+    },
+  });
+  const toolResultCount = (context: any): number =>
+    (context?.messages ?? []).filter((m: any) => m.role === 'toolResult').length;
+  const lastUserText = (context: any): string => {
+    const messages = context?.messages ?? [];
+    const lastUser = [...messages].reverse().find((m: any) => m.role === 'user');
+    if (!lastUser) return '';
+    const content = lastUser.content ?? lastUser.text ?? '';
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) return content.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('');
+    return '';
+  };
+  return async (_model: unknown, context: any) => {
+    // Unrelated turns (session titling etc.) answer tersely; the researcher
+    // window opens on the brief (which embeds the facet query), a bare-facet
+    // question, or an explicitly registered brief text.
+    const userText = lastUserText(context);
+    const researcherTurn =
+      userText === searchQuery
+      || briefTurns.includes(userText)
+      || userText.includes(`"${searchQuery}"`);
+    if (!researcherTurn) {
+      return streamOf(finalize({ content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' }));
+    }
+    if (toolResultCount(context) === 0) {
+      return streamOf(finalize({
+        content: [{ type: 'toolCall', id: 'call-search', name: 'web_search', arguments: { query: searchQuery } }],
+        stopReason: 'toolUse',
+      }));
+    }
+    // Exactly ONE fetch round: re-emitting the page set when every result is
+    // already in context would re-spend the session budget on ledger-shared
+    // duplicate calls (#143: every fetch_content call costs a unit even when
+    // the fetch is shared) — with a full 8-page facet that exhausts the
+    // researcher's maxFetches before the report round.
+    if (toolResultCount(context) < pageUrls.length && pageUrls.length > 0) {
+      return streamOf(finalize({
+        content: pageUrls.map((url, i) => ({
+          type: 'toolCall', id: `call-fetch-${i}`, name: 'fetch_content', arguments: { url },
+        })),
+        stopReason: 'toolUse',
+      }));
+    }
+    return streamOf(finalize({ content: [{ type: 'text', text: report }], stopReason: 'stop' }));
   };
 }
 
@@ -567,12 +1088,19 @@ export async function checkFixture(
   const delegation = await runLeg(fixture, 'delegation', options);
   const fanout = await runLeg(fixture, 'fanout', options);
 
-  // Stage 1: coverage score (over each leg's finished sources).
+  // Stage 1: coverage score (over each leg's finished sources). Since #146
+  // the stage reads the SNIPPET layer only, on BOTH legs: the delegated
+  // loop's finished sources legitimately carry snippets-only, while the
+  // re-hosted researchers' findings enter the pool as full pages — measuring
+  // full-page depth on one leg and snippet depth on the other compares
+  // unequal shapes, not equivalent pipelines (the #143 absolute-form
+  // lesson). Admission equality (stage 3) keeps the evidence identical;
+  // this stage asserts both legs' reported evidence covers the query.
   const coverageOf = (leg: LegOutcome): number =>
     auditEvidenceCoverage(
       fixture.query,
       [],
-      (leg.finished?.sources ?? []).map((s) => ({ content: s.passage ?? s.snippet ?? '', domain: s.domain })),
+      (leg.finished?.sources ?? []).map((s) => ({ content: s.snippet ?? s.passage ?? '', domain: s.domain })),
       { language: fixture.language === 'ar' ? 'ar' : 'en' }
     ).overallScore;
   const baselineCoverage = coverageOf(delegation);
@@ -597,7 +1125,10 @@ export async function checkFixture(
     [...(leg.finished?.sources ?? [])].sort((a, b) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0));
   const groundingOf = (leg: LegOutcome) => {
     const contract = new CitationGroundingContract();
-    contract.registerExcerpts(canonicalSourcesOf(leg));
+    // The grounding pool reads the SNIPPET layer on both legs (shape-neutral;
+    // see stage 1's note): the citation contract's decisions must match
+    // exactly on identical evidence at the same reported depth.
+    contract.registerExcerpts(canonicalSourcesOf(leg).map((s) => ({ ...s, passage: s.snippet ?? s.passage })));
     const v = contract.verifyAndSanitize(leg.finished?.report ?? '');
     return {
       sanitizedText: v.sanitizedText,

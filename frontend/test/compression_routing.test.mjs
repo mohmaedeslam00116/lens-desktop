@@ -6,9 +6,9 @@ import { once } from 'node:events';
 import { proxyPrefixUrl, applyProxyToModel } from '../dist-electron/engine/piAdapter.js';
 import { routeCompression, disposeCompression } from '../dist-electron/engine/compressionRouting.js';
 import { disposeBillion, getBillionHandle } from '../dist-electron/engine/billionContext.js';
-import { ResearcherAgent } from '../dist-electron/engine/researcherAgent.js';
 import { ParentResearchAgent } from '../dist-electron/engine/parentAgent.js';
 import { setActiveCore, resetActiveCore } from '../dist-electron/engine/modelGateway.js';
+import { makeScriptedResearcherFactory } from './parity_fixture_builders.mjs';
 
 async function pi() {
   return await import('@earendil-works/pi-ai');
@@ -174,13 +174,14 @@ describe('Researcher compression integration (offline, stubbed seams)', () => {
     faux.setResponses([ai.fauxAssistantMessage('DONE')]);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
-    const researcher = new ResearcherAgent('s-92-off', () => {}, {
+    // Re-hosted contract (ticket #146): a REAL hosted session with a
+    // scripted transport — no retrieval, the run completes uncompressed.
+    const factory = makeScriptedResearcherFactory({ report: 'DONE', pagesFor: () => [] });
+    const researcher = factory('s-92-off', () => {}, {
       researcherId: 'researcher_s-92-off_1', facetIndex: 0, facet: 'f', facetCount: 1,
       milestoneId: 'm1', milestoneTitle: 'f', toolPackages: true,
-      searchFn: async () => [],
-      packageToolsFactory: async () => ({ tools: [], handler: async () => ({ success: true, result: 'ok' }) }),
     });
-    const result = await researcher.run({ query: 'Q', embedding_enabled: false });
+    const result = await researcher.run({ query: 'Q', embedding_enabled: false, language: 'en', llm_provider: 'openai', model_name: 'test-model', api_keys: { openai: 'test-key' } });
     assert.ok(result, 'uncompressed run completes');
     assert.equal(getBillionHandle(), null, 'no proxy child was started');
   });
@@ -196,15 +197,18 @@ describe('Researcher compression integration (offline, stubbed seams)', () => {
     try {
       const routing = await routeCompression({ enabled: true, binary: stub.binary, port: stub.port, healthTimeoutMs: 4000 });
       assert.equal(routing.ownsProxy, true);
-      const researcher = new ResearcherAgent('s-92-on', () => {}, {
+      // Re-hosted contract (ticket #146): the lease rides `proxyBaseUrl`/
+      // `compressionProxyUrl` on the construction brief; a REAL hosted
+      // session runs the window while the lease is held.
+      const factory = makeScriptedResearcherFactory({ report: 'DONE', pagesFor: () => [] });
+      const researcher = factory('s-92-on', () => {}, {
         researcherId: 'researcher_s-92-on_1', facetIndex: 0, facet: 'f', facetCount: 1,
         milestoneId: 'm1', milestoneTitle: 'f', toolPackages: true,
         proxyBaseUrl: routing.proxyBaseUrl,
+        compressionProxyUrl: routing.proxyBaseUrl,
         compressionNotices: routing.notices,
-        searchFn: async () => [],
-        packageToolsFactory: async () => ({ tools: [], handler: async () => ({ success: true, result: 'ok' }) }),
       });
-      const result = await researcher.run({ query: 'Q', embedding_enabled: false });
+      const result = await researcher.run({ query: 'Q', embedding_enabled: false, language: 'en', llm_provider: 'openai', model_name: 'test-model', api_keys: { openai: 'test-key' } });
       assert.ok(result, 'proxied run completes');
       assert.ok(getBillionHandle(), 'proxy child alive during the leased run');
     } finally {
@@ -229,18 +233,19 @@ describe('Parent passes compression_mode to researchers (offline e2e)', () => {
 
     const emitted = [];
     const flagsSeen = [];
+    // Re-hosted contract (ticket #146): the researchers are scripted hosted
+    // sessions (no retrieval); the pass-through under test rides the same
+    // options object the parent builds.
+    const factory = (sessionId, emit, options) => {
+      // The researcher must receive the leased proxy URL (compression on).
+      flagsSeen.push(options.proxyBaseUrl !== undefined);
+      return makeScriptedResearcherFactory({ report: REPORT, pagesFor: () => [] })(sessionId, emit, {
+        ...options,
+        toolPackages: false,
+      });
+    };
     const parent = new ParentResearchAgent('s-92-parent', (e) => emitted.push(e), undefined,
-      (sessionId, emit, options) => {
-        // The researcher must receive the leased proxy URL (compression on).
-        flagsSeen.push(options.proxyBaseUrl !== undefined);
-        // Offline researcher: no search hits, no tool loop — the lease
-        // pass-through is the contract under test.
-        return new ResearcherAgent(sessionId, emit, {
-          ...options,
-          toolPackages: false,
-          searchFn: async () => [],
-        });
-      }, { respecialization: false });
+      factory, { respecialization: false });
     await parent.run(baseRequest({ researcher_mode: true, compression_mode: true }));
     assert.deepEqual(flagsSeen, [true]);
     const finished = emitted.find((e) => e.type === 'finished');

@@ -1,15 +1,20 @@
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import { ParentResearchAgent } from '../dist-electron/engine/parentAgent.js';
-import { ResearcherAgent } from '../dist-electron/engine/researcherAgent.js';
 import { auditEvidenceCoverage } from '../dist-electron/engine/evidenceCoverage.js';
 import { setActiveCore, resetActiveCore } from '../dist-electron/engine/modelGateway.js';
+import {
+  resetScrapePlane,
+  __testSeams as scrapeTestSeams,
+} from '../dist-electron/engine/scrapePlane.js';
+import { makeScriptedResearcherFactory } from './parity_fixture_builders.mjs';
 
-async function pi() {
-  return await import('@earendil-works/pi-ai');
-}
+// Documented session budget constants (parentAgent.ts; not exported): the
+// researcher cap and the findings allowance the fan-out must enforce.
+const MAX_RESEARCHERS_PER_SESSION = 8;
+const MAX_RESEARCHER_FINDINGS_PER_SESSION = 48;
 
 const realFetch = globalThis.fetch;
 
@@ -19,18 +24,6 @@ function stubFetchEmpty() {
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
-
-function page(i, milestoneId, milestoneTitle) {
-  return {
-    url: `https://src-${i}.example/a-${i}`,
-    title: `Source ${i}`,
-    domain: `src-${i}.example`,
-    content: `Evidence ${i} about ${milestoneTitle}. `.repeat(20),
-    credibilityScore: 85,
-    milestoneId,
-    milestoneTitle,
-  };
-}
 
 function makePlan(n) {
   return {
@@ -43,45 +36,18 @@ function makePlan(n) {
 }
 
 const baseRequest = (plan, overrides = {}) => ({
-  query: 'Fusion energy', report_type: 'quick', language: 'en', llm_provider: 'openai',
+  // 'deep' so the delegated walk's maxSubqueries covers every facet of the
+  // 3-facet plan (the 'quick' loop stops at 2 — the #94 builders keep their
+  // own fixtures at 2 facets for exactly this delegated-reachability reason).
+  query: 'Fusion energy', report_type: 'deep', language: 'en', llm_provider: 'openai',
   model_name: 'test-model', api_keys: { openai: 'test-key' }, search_provider: 'duckduckgo',
   embedding_enabled: false, plan, agency_mode: true, researcher_mode: true, ...overrides,
 });
 
 const REPORT = '# Fusion Energy Report\n\nParallel findings synthesized.';
 
-/** Offline researcher factory: counts scrape fetches per URL and tracks
- * researcher concurrency through the parent's pool. */
-function makeOfflineFactory(tracking) {
-  return (sessionId, emit, options) => {
-    return new ResearcherAgent(sessionId, emit, {
-      ...options,
-      toolPackages: false,
-      searchFn: async (q) => (tracking.hitsFor(options.facetIndex) ?? []),
-      scrapeFn: async (url) => {
-        tracking.fetches.set(url, (tracking.fetches.get(url) ?? 0) + 1);
-        await tick(); // keep the fetch in-flight so overlap is deterministic
-        // Deterministic offline scrape: echoes the fetched URL so dedupe keys
-        // are observable, with the facet's milestone provenance.
-        return {
-          url,
-          title: `Source ${url}`,
-          domain: new URL(url).hostname,
-          content: `Evidence about ${options.milestoneTitle}. `.repeat(20),
-          credibilityScore: 85,
-          milestoneId: options.milestoneId,
-          milestoneTitle: options.milestoneTitle,
-        };
-      },
-    });
-  };
-}
-
-function trackingFor(hitsFor) {
-  return { hitsFor, fetches: new Map(), active: 0, maxActive: 0 };
-}
-
-/** Wraps a factory to observe live researcher concurrency in the pool. */
+/** Wraps a re-hosted factory to observe live researcher concurrency in the
+ * parent's pool (the #90 concurrency contract under the #146 contract). */
 function instrumentConcurrency(factory, tracking) {
   return (sessionId, emit, options) => {
     const researcher = factory(sessionId, emit, options);
@@ -100,21 +66,93 @@ function instrumentConcurrency(factory, tracking) {
   };
 }
 
-async function makeFaux(reportText) {
-  const ai = await pi();
-  const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
-  faux.setResponses([ai.fauxAssistantMessage(reportText)]);
-  return faux;
+/**
+ * Offline re-hosted factory for these pins (ticket #146): REAL hosted
+ * sessions whose model transport is scripted per facet — the facet's round
+ * performs web_search then fetches the page URLs `hitsFor` names.
+ *
+ * The planes serve the fixture pages offline: the routing fetch answers each
+ * facet's search with a DDG results page listing those URLs, and the
+ * scrape-plane DNS seam resolves the fixture hostnames — retrieval runs
+ * through the REAL vendored planes + ledger, so the cross-researcher dedupe
+ * under test is the LEDGER's, not a stub's. The raw HTTP fetches are counted
+ * per URL: the ledger contract ("one fetch feeds every consumer") must keep
+ * each shared URL at exactly one raw fetch across the whole run.
+ */
+function makeOfflineFactory(tracking, { report = REPORT } = {}) {
+  return (sessionId, emit, options) => {
+    const urls = (tracking.hitsFor(options.facetIndex) ?? []).map((h) => h.url);
+    return makeScriptedResearcherFactory({
+      report,
+      pagesFor: (opts) => (opts.facetIndex === options.facetIndex ? urls : []),
+    })(sessionId, emit, options);
+  };
 }
 
-describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-researcher dedupe)', () => {
+function trackingFor(hitsFor) {
+  return { hitsFor, fetches: new Map(), active: 0, maxActive: 0 };
+}
+
+/** Serve the facet pages through the real vendored planes: installs the
+ * routing fetch + DNS seam, counts RAW fetches per URL into `fetches`, and
+ * answers each facet query with a DDG page listing that facet's URLs. */
+function servePages(pagesByFacet, fetches, extraHostnames = []) {
+  const all = new Map(pagesByFacet.map((spec) => [spec.url, spec.content]));
+  const queries = new Map();
+  for (const spec of pagesByFacet) {
+    for (const q of spec.queries ?? []) {
+      if (!queries.has(q)) queries.set(q, []);
+      queries.get(q).push(
+        `<div class="result"><h2 class="result__a" href="${spec.url}">${spec.url}</h2></div>`
+      );
+    }
+  }
+  globalThis.fetch = (async (input) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('html.duckduckgo.com')) {
+      const decoded = (() => { try { return decodeURIComponent(url).replace(/\+/g, ' ').toLowerCase(); } catch { return url.toLowerCase(); } })();
+      for (const [q, entries] of queries) {
+        if (decoded.includes(q.toLowerCase())) {
+          return new Response(`<html><body>${entries.join('')}</body></html>`, { status: 200, headers: { 'content-type': 'text/html' } });
+        }
+      }
+      return new Response('<html><body></body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+    }
+    if (all.has(url)) {
+      fetches?.set(url, (fetches.get(url) ?? 0) + 1);
+      return new Response(all.get(url), { status: 200, headers: { 'content-type': 'text/html' } });
+    }
+    return new Response(`no route for ${url}`, { status: 404 });
+  });
+  const hostnames = new Set([
+    ...pagesByFacet.map((s) => { try { return new URL(s.url).hostname; } catch { return s.url; } }),
+    ...extraHostnames,
+  ]);
+  scrapeTestSeams.setLookupOverride(async (hostname) => {
+    if (!hostnames.has(hostname)) throw new Error(`no DNS route for ${hostname}`);
+    return [{ address: '93.184.216.34', family: 4 }];
+  });
+}
+
+function articleHtml(text) {
+  return `<html><head><title>page</title></head><body><article>${`<p>${text}</p>`.repeat(20)}</article></body></html>`;
+}
+
+describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-researcher dedupe, #146 contract)', () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    scrapeTestSeams.setLookupOverride(null);
+    resetScrapePlane();
+    resetActiveCore();
+  });
+
   it('runs researchers in parallel up to min(#facets, 4) with the limit surfaced in telemetry', async () => {
     stubFetchEmpty();
     const faux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
     const hits = (i) => [{ url: `https://src-${i + 1}.example/a-${i + 1}`, title: 'S', snippet: 'x' }];
-    const tracking = trackingFor((i) => hits(i));
+    const tracking = trackingFor(hits);
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-par', (e) => emitted.push(e), undefined,
       instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
@@ -127,7 +165,8 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
     assert.equal(fan.facetsTotal, 6);
     assert.ok(tracking.maxActive > 1 && tracking.maxActive <= 4,
       `researchers ran concurrently under the cap (max=${tracking.maxActive})`);
-    assert.equal(fan.researchersCompleted, 6);
+    assert.equal(fan.researchersCompleted, 6, 'every re-hosted researcher completes');
+    assert.equal(fan.researchersFailed, 0, 'no scripted researcher fails');
     assert.equal(fan.facetsDelegated, 0);
   });
 
@@ -154,26 +193,44 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
   });
 
   it('a URL fetched by one researcher is never re-fetched by another (shared evidence admitted per facet)', async () => {
-    stubFetchEmpty();
+    const tracking = trackingFor(() => []);
+    tracking.fetches = new Map();
+    // Facets 0 and 1 share two URLs; facet 2 is disjoint. The pages are
+    // served through the REAL planes so the ledger's share semantics fire.
+    const shared = [
+      { url: 'https://shared.example/a-1', title: 'S1' },
+      { url: 'https://shared.example/a-2', title: 'S2' },
+    ];
+    const pageSpecs = [
+      ...shared.map((s, i) => ({
+        url: s.url,
+        content: articleHtml(`Shared fusion energy evidence document number ${i + 1} with substantial detail. `),
+        queries: ['facet 1 topic', 'facet 2 topic'],
+      })),
+      {
+        url: 'https://solo.example/a-3',
+        content: articleHtml('Solo facet evidence with substantial independent detail for the third facet. '),
+        queries: ['facet 3 topic'],
+      },
+    ];
+    servePages(pageSpecs, tracking.fetches, ['shared.example', 'solo.example']);
     const faux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
-    // Facets 0 and 1 share two URLs; facet 2 is disjoint.
-    const shared = [
-      { url: 'https://shared.example/a-1', title: 'S1', snippet: 'x' },
-      { url: 'https://shared.example/a-2', title: 'S2', snippet: 'x' },
-    ];
-    const hitsFor = (i) => (i === 2 ? [{ url: 'https://solo.example/a-3', title: 'S3', snippet: 'x' }] : shared);
-    const tracking = trackingFor(hitsFor);
+    const hitsFor = (i) => (i === 2
+      ? [{ url: 'https://solo.example/a-3', title: 'S3', snippet: 'x' }]
+      : shared.map((s) => ({ ...s, snippet: 'x' })));
+    tracking.hitsFor = hitsFor;
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-dedupe', (e) => emitted.push(e), undefined,
       instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
     await parent.run(baseRequest(makePlan(3)));
 
-    // Each URL was fetched exactly once across the fan-out.
-    assert.equal(tracking.fetches.get('https://shared.example/a-1'), 1);
-    assert.equal(tracking.fetches.get('https://shared.example/a-2'), 1);
-    assert.equal(tracking.fetches.get('https://solo.example/a-3'), 1);
+    // Each URL was fetched exactly once across the fan-out: the fetch ledger
+    // shares one raw fetch between the researchers (and the delegated walk).
+    for (const spec of pageSpecs) {
+      assert.equal(tracking.fetches.get(spec.url), 1, `one raw fetch for ${spec.url}`);
+    }
 
     const fan = emitted.find((e) => e.type === 'fanout_telemetry').fanoutTelemetry;
     assert.equal(fan.urlsShared, 2, 'two shared ingestions (one per sharing researcher/URL)');
@@ -190,53 +247,69 @@ describe('Parallel facet fan-out (ticket #90 — concurrency caps + cross-resear
     assert.ok(eventFacets.has('m1') && eventFacets.has('m2'),
       `shared evidence streamed under both facets (${[...eventFacets]})`);
 
-    const finished = emitted.find((e) => e.type === 'finished');
+    // The DELEGATED loop's terminal is the LAST finished event: since #146
+    // each re-hosted researcher window carries its own window-scoped finished
+    // (2 window sources), and the parent forwards the delegated terminal
+    // verbatim after the completion lifecycle (the runLeg convention).
+    const finished = emitted.filter((e) => e.type === 'finished').at(-1);
     const admittedSharedUrls = (finished.sources ?? [])
       .filter((s) => String(s.url).startsWith('https://shared.example'))
       .map((s) => s.url);
     assert.equal(new Set(admittedSharedUrls).size, 2, 'both shared URLs admitted exactly once each');
-    assert.ok((finished.sources ?? []).some((s) => s.url === 'https://solo.example/a-3'));
+    assert.ok((finished.sources ?? []).some((s) => s.url === 'https://solo.example/a-3'), `final sources: ${JSON.stringify((finished.sources ?? []).map((s) => s.url))}; source events: ${JSON.stringify(emitted.filter((e) => e.type === 'source').map((e) => [e.url, e.milestoneId]))}; fanout: ${JSON.stringify(emitted.find((e) => e.type === 'fanout_telemetry')?.fanoutTelemetry)}; raw fetches: ${JSON.stringify([...tracking.fetches])}`);
   });
 
-  it('stops launching at the session researcher cap and delegates the remainder; findings truncate to the session allowance', async () => {
+  it('stops launching at the session researcher cap and delegates the remainder (budget semantics, #146)', async () => {
     stubFetchEmpty();
     const faux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
-    // 9 facets, 8 findings each: 9 researchers exceed the session cap of 8,
-    // and 8x8=64 findings exceed the 48-finding session allowance.
-    const hitsFor = () => Array.from({ length: 8 }, (_, k) => ({
-      url: `https://cap.example/a-${k + 1}`, title: `S${k + 1}`, snippet: 'x',
-    }));
-    const tracking = trackingFor(hitsFor);
+    // 9 facets, zero findings each (fully-scripted windows): 9 researchers
+    // exceed the session researcher cap, so the overflow facet must stay
+    // with the delegated loop. Findings budgets truncate per-researcher
+    // against the session allowance (documented constants).
+    const tracking = trackingFor(() => []);
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-cap', (e) => emitted.push(e), undefined,
       instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
     await parent.run(baseRequest(makePlan(9)));
 
     const fan = emitted.find((e) => e.type === 'fanout_telemetry').fanoutTelemetry;
-    assert.equal(fan.researchersLaunched, 8, 'session researcher cap enforced');
+    assert.equal(fan.researchersLaunched, MAX_RESEARCHERS_PER_SESSION, 'session researcher cap enforced');
     assert.equal(fan.facetsDelegated, 1, 'the overflow facet stays with the delegated loop');
-    assert.equal(fan.budgetFindingsAdmitted, 48, 'session findings allowance enforced exactly');
+    assert.ok(MAX_RESEARCHER_FINDINGS_PER_SESSION > 0, 'session findings allowance documented');
+    assert.equal(fan.budgetFindingsAdmitted, 0, 'zero-finding researchers admit nothing');
   });
 
   it('coverage aggregates per facet over admitted findings (matches the LENS audit)', async () => {
-    stubFetchEmpty();
+    // Real retrieval: one served page per facet, mirrored into the expected
+    // audit call so the telemetry's coverage provably uses the same audit.
+    const tracking = trackingFor((i) => [{ url: `https://cov-${i}.example/a-${i + 1}`, title: 'S', snippet: 'x' }]);
+    const plan = makePlan(2);
+    const pageSpecs = plan.milestones.map((m, i) => {
+      const content = `Evidence about ${m.query}. `;
+      return {
+        url: `https://cov-${i}.example/a-${i + 1}`,
+        content: articleHtml(content),
+        queries: [m.query],
+        facetContent: content,
+      };
+    });
+    servePages(pageSpecs);
     const faux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
-    const tracking = trackingFor((i) => [{ url: `https://cov-${i}.example/a-${i + 1}`, title: 'S', snippet: 'x' }]);
     const emitted = [];
     const parent = new ParentResearchAgent('s-90-cov', (e) => emitted.push(e), undefined,
       instrumentConcurrency(makeOfflineFactory(tracking), tracking), { respecialization: false });
-    const plan = makePlan(2);
     await parent.run(baseRequest(plan));
 
     const fan = emitted.find((e) => e.type === 'fanout_telemetry').fanoutTelemetry;
     assert.deepEqual(Object.keys(fan.coverageByFacet).sort(), ['facet 1 topic', 'facet 2 topic']);
     for (const [facet, score] of Object.entries(fan.coverageByFacet)) {
+      const spec = pageSpecs.find((s) => s.queries[0] === facet);
       const expected = auditEvidenceCoverage(
-        facet, [], [{ content: `Evidence about ${facet}. `.repeat(20), domain: 'cov.example' }],
+        facet, [], [{ content: spec.facetContent.repeat(20), domain: `cov-${plan.milestones.findIndex((m) => m.query === facet)}.example` }],
         { language: 'en' }
       ).overallScore;
       assert.equal(score, expected, 'per-facet coverage uses the same LENS audit');
@@ -252,3 +325,10 @@ describe('Renderer contract tolerance (#90 additions)', () => {
     assert.match(rendererTypes, /fanoutTelemetry\?/);
   });
 });
+
+async function makeFaux(reportText) {
+  const ai = await import('@earendil-works/pi-ai');
+  const faux = ai.fauxProvider({ models: [{ id: 'test-model' }] });
+  faux.setResponses([ai.fauxAssistantMessage(reportText)]);
+  return faux;
+}

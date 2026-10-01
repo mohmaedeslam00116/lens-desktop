@@ -50,7 +50,14 @@ artifact identifying the failing stage.
 2. **Golden fixtures** *(amended by #104: the harness runs two agency legs —
    delegation baseline vs fan-out — after the legacy single-loop route was
    removed; the legacy-vs-delegation byte-equivalence remains pinned at the
-   agent level by the #88 contract test)*: plan +
+   agent level by the #88 contract test. Amended by #146: a researcher leg —
+   `runResearcherLeg`/`checkFixtureResearcher` — replays the fixture through
+   the re-hosted researcher (one hosted AgentSession per facet, scripted
+   transport, offline via the routing fetch) under the #143 agentic-leg stage
+   forms: absolute coverage and grounding over the re-hosted pool,
+   order-insensitive admission sets cross-checked against the delegated
+   baseline, and the anchored-window sequence with the zero-ledger vacuity
+   rule; this leg is the gate that retired the native researcher loop)*: plan +
    offline retrieval stubs (per-facet search/scrape maps) + expected report.
    Fixture JSON stores the plan and retrieval maps; deterministic offline
    agents live in the harness. No network. The agency leg runs with

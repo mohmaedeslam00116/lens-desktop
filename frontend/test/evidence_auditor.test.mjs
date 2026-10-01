@@ -162,10 +162,13 @@ describe('Audit integration in research runs (advisory — parity preserved)', (
     await parent.run(baseRequest({ researcher_mode: true }));
 
     // Order: fanout telemetry (researcher phase) precedes the audit, and the
-    // audit precedes the terminal finished event.
+    // audit precedes the terminal finished event. The DELEGATED terminal is
+    // the last `finished` (since #146 each re-hosted researcher window
+    // carries its own window-scoped terminals upstream of the delegated
+    // run; the first finished is a researcher's, not the run's).
     const fanIndex = emitted.findIndex((e) => e.type === 'fanout_telemetry');
     const auditIndex = emitted.findIndex((e) => e.type === 'audit_telemetry');
-    const finishedIndex = emitted.findIndex((e) => e.type === 'finished');
+    const finishedIndex = emitted.findLastIndex((e) => e.type === 'finished');
     assert.ok(fanIndex > -1, 'fan-out telemetry present (researcher phase ran first)');
     assert.ok(auditIndex > fanIndex, 'audit runs after researcher fan-out');
     assert.ok(auditIndex < finishedIndex, 'audit precedes finished');
@@ -176,7 +179,7 @@ describe('Audit integration in research runs (advisory — parity preserved)', (
 
     // Report integrity: stream + audit section == finished report.
     const joined = emitted.filter((e) => e.type === 'report_chunk').map((e) => e.chunk).join('');
-    assert.equal(joined, emitted.find((e) => e.type === 'finished').report);
+    assert.equal(joined, emitted.findLast((e) => e.type === 'finished').report);
     assert.match(joined, /## Evidence Audit/);
   });
 
