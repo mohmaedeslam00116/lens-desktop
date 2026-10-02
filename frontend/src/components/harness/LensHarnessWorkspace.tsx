@@ -1,18 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, Eye, FileText, History, PanelLeft, Plus, Square } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Eye, FileText, History, PanelLeft, Plus } from 'lucide-react';
 import { BrandLogo } from '../brand/BrandLogo';
 import { EmptyChatMessageInput } from '../vane/EmptyChatMessageInput';
 import { MessageBox } from '../vane/MessageBox';
 import { MessageInput } from '../vane/MessageInput';
 import { AgentFeedList } from '../AgentFeedList';
 import { AgentRunFeed } from './AgentRunFeed';
+import { AgentSessionHeader } from './AgentSessionHeader';
 import { HarnessArtifactInspector } from './HarnessArtifactInspector';
 import {
   availableHarnessArtifacts,
   defaultHarnessArtifact,
-  deriveHarnessSessionCard,
   type HarnessArtifactTab,
 } from '../../utils/harnessWorkspace';
+import type { AgenticConversationProjection } from '../../utils/agenticConversation';
 import type { AgentRunFeedState } from '../../utils/agentRunFeed.mjs';
 import type { AgentFeedState } from '../../utils/liveFeed';
 import type {
@@ -64,11 +65,12 @@ interface LensHarnessWorkspaceProps {
   wideExpansionHistory?: WideResearchTelemetry[];
   /** The live agentic run feed (reduced real events; null when no live run). */
   agentRunFeed: AgentRunFeedState | null;
+  /** The persisted Agentic Conversation projection (#144), when this session holds one. */
+  conversationProjection?: AgenticConversationProjection | null;
   /** Start an Agentic Search run (the default interaction). */
   onStartAgentRun: (query: string) => void;
   /** Start a Deep Research run (plan-first; the explicit opt-in). */
-  onStartDeepResearch: (query: string) => void;
-  /** Steer the live agentic run (queues visibly before applying). */
+  onStartDeepResearch: (query: string) => void;  /** Steer the live agentic run (queues visibly before applying). */
   onSteerAgentRun: (message: string) => void;
   /** Cancel the live agentic run (explicit terminal, evidence retained). */
   onCancelAgentRun: () => void;
@@ -77,14 +79,6 @@ interface LensHarnessWorkspaceProps {
   onOpenSettings: () => void;
   onExport: (format: 'pdf' | 'docx' | 'markdown') => void;
 }
-
-const cardStateClass: Record<AgentFeedState['status'], string> = {
-  running: 'text-muted',
-  waiting: 'text-muted',
-  retrying: 'text-amber-400',
-  success: 'text-emerald-400',
-  failed: 'text-rose-400',
-};
 
 export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
   language,
@@ -114,6 +108,7 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
   wideTelemetry,
   wideExpansionHistory,
   agentRunFeed,
+  conversationProjection,
   onStartAgentRun,
   onStartDeepResearch,
   onSteerAgentRun,
@@ -124,7 +119,10 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
   onExport,
 }) => {
   const ar = language === 'ar';
-  const artifactInput = useMemo(() => ({ plan, sources, report, graphNodes }), [plan, sources, report, graphNodes]);
+  const artifactInput = useMemo(
+    () => ({ plan, sources, report, graphNodes, conversation: conversationProjection != null }),
+    [plan, sources, report, graphNodes, conversationProjection]
+  );
   const availableTabs = useMemo(() => availableHarnessArtifacts(artifactInput), [artifactInput]);
   const [selectedTab, setSelectedTab] = useState<HarnessArtifactTab | null>(() => defaultHarnessArtifact(artifactInput));
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
@@ -144,7 +142,6 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
     }
   }, [artifactInput, availableTabs, selectedTab]);
 
-  const sessionCard = deriveHarnessSessionCard({ loading, status: currentStatus, error: researchError });
   const hasSession = Boolean(currentQuery || report || loading || researchError || agentRunFeed);
   const runLive = Boolean(agentRunFeed && (agentRunFeed.phase === 'running' || agentRunFeed.phase === 'retrying'));
 
@@ -249,18 +246,23 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
                 setSourceFocus={setSourceFocus}
                 researchMode={researchMode}
                 setResearchMode={setResearchMode}
+                interaction={agentInteraction}
+                onSelectInteraction={setAgentInteraction}
               />
             </div>
           ) : (
             <div className="harness-active-state">
-              {sessionCard && (
-                <section className="harness-session-card" aria-live="polite">
-                  <div>
-                    <h1>{currentQuery}</h1>
-                    {sessionCard.detail && <p>{sessionCard.detail}</p>}
-                  </div>
-                  <span className={cardStateClass[sessionCard.status]}>{sessionCard.status}</span>
-                </section>
+              <AgentSessionHeader
+                question={currentQuery}
+                mode={agentInteraction}
+                feed={agentRunFeed}
+                live={loading || runLive}
+                language={language}
+                onCancel={onCancelAgentRun}
+              />
+
+              {researchError && (
+                <p className="harness-session-error" role="alert">{researchError}</p>
               )}
 
               {agentRunFeed && (
@@ -295,39 +297,20 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
                 wideExpansionHistory={wideExpansionHistory}
                 agents={agents}
                 agentEventCount={agentEventCount}
+                conversationProjection={conversationProjection}
+                hideQueryHeader
               />
-              <MessageInput onSendMessage={submitQuestion} loading={runLive ? false : loading} language={language} />
+              <MessageInput
+                onSendMessage={submitQuestion}
+                loading={runLive ? false : loading}
+                language={language}
+                runLive={runLive}
+                interaction={agentInteraction}
+                onSelectInteraction={setAgentInteraction}
+              />
             </div>
           )}
         </main>
-
-        <footer className="harness-composer-foot">
-          <fieldset className="harness-interaction" aria-label={ar ? 'نمط الإجابة' : 'Answer mode'}>
-            <legend className="sr-only">{ar ? 'نمط الإجابة' : 'Answer mode'}</legend>
-            <label className={`harness-interaction-option${agentInteraction === 'agent' ? ' is-active' : ''}`}>
-              <input
-                className="sr-only"
-                type="radio"
-                name="agent-interaction"
-                value="agent"
-                checked={agentInteraction === 'agent'}
-                onChange={() => setAgentInteraction('agent')}
-              />
-              <span>{ar ? 'بحث وكيل' : 'Agentic Search'}</span>
-            </label>
-            <label className={`harness-interaction-option${agentInteraction === 'deep-research' ? ' is-active' : ''}`}>
-              <input
-                className="sr-only"
-                type="radio"
-                name="agent-interaction"
-                value="deep-research"
-                checked={agentInteraction === 'deep-research'}
-                onChange={() => setAgentInteraction('deep-research')}
-              />
-              <span>{ar ? 'البحث المعمّق' : 'Deep Research'}</span>
-            </label>
-          </fieldset>
-        </footer>
       </section>
 
       {isInspectorOpen && selectedTab && (
@@ -341,6 +324,7 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
           sources={sources}
           report={report}
           graphNodes={graphNodes}
+          conversationProjection={conversationProjection}
         />
       )}
     </div>

@@ -35,6 +35,27 @@ describe('Harness workspace model', () => {
     assert.equal(defaultHarnessArtifact(input), 'plan');
   });
 
+  it('adds the conversation artifact only when a persisted projection exists', () => {
+    const base = {
+      plan: null,
+      sources: [{ url: 'https://example.com', title: 'Source' }],
+      report: '',
+      graphNodes: [],
+    };
+
+    assert.deepEqual(availableHarnessArtifacts(base), ['evidence']);
+    assert.deepEqual(
+      availableHarnessArtifacts({ ...base, conversation: true }),
+      ['evidence', 'conversation'],
+      'the fifth artifact rides the persisted projection, never a live session'
+    );
+    assert.deepEqual(
+      availableHarnessArtifacts({ ...base, conversation: false }),
+      ['evidence'],
+      'an absent projection keeps the tab hidden'
+    );
+  });
+
   it('derives retrying and failed session cards from actual renderer state', () => {
     assert.equal(
       deriveHarnessSessionCard({ loading: true, status: 'Reconnecting to live research…', error: '' })?.status,
@@ -57,6 +78,27 @@ describe('Harness artifact inspector contract', () => {
     assert.match(inspector, /availableTabs\.map/);
     assert.match(inspector, /onClose/);
     assert.doesNotMatch(inspector, /Antigravity|Pull request|Terminal|Repository/);
+  });
+
+  it('mounts the Agentic Conversation card through the persisted projection', async () => {
+    const inspector = await readFile(
+      new URL('../src/components/harness/HarnessArtifactInspector.tsx', import.meta.url),
+      'utf8',
+    );
+
+    assert.match(inspector, /AgenticConversation/, 'the fifth artifact renders the conversation card');
+    assert.match(inspector, /conversationProjection/, 'the card takes the persisted projection, never a live session');
+    assert.match(inspector, /conversation:\s*\{/, 'the conversation tab is registered in the tab metadata');
+  });
+
+  it('evidence rows carry the structured admission (snippet, credibility), not just titles', async () => {
+    const inspector = await readFile(
+      new URL('../src/components/harness/HarnessArtifactInspector.tsx', import.meta.url),
+      'utf8',
+    );
+
+    assert.match(inspector, /source\.snippet/, 'admitted passages surface in the evidence list');
+    assert.match(inspector, /credibility/, 'credibility scores surface in the evidence list');
   });
 });
 

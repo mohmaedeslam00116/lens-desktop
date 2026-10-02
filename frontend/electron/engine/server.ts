@@ -4,7 +4,6 @@ import { homedir } from 'os';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as crypto from 'crypto';
 import { LiveEvent, ResearchPlan, ResearchRequest, WideResearchRequest } from './types';
-import { ModelClient } from './models';
 import { DeepResearchAgent } from './agent';
 import { ParentResearchAgent, resetResearcherBudget } from './parentAgent';
 // ADR-0010 closure (ticket #104): DeepResearchAgent's only remaining
@@ -14,7 +13,6 @@ import { evictPackageToolCache } from './piResearchTools';
 import {
   runAgenticSearch,
   cancelAgenticSearch,
-  agenticAdmissionGuard,
   createAgenticToolSurface,
   type AgenticRunState,
 } from './agenticSearch';
@@ -54,37 +52,52 @@ export function normalizeResearchRequest(body: WideResearchRequest): WideResearc
   };
 }
 
-const PROVIDER_KEY_FIELD: Record<string, string> = {
-  openai: 'openai',
-  gemini: 'gemini',
-  anthropic: 'anthropic',
-  groq: 'groq',
-  deepseek: 'deepseek',
-  openrouter: 'openrouter',
-  mistral: 'mistral',
-};
-
-/** Start-time admission guard: cloud providers require a usable key (settings
- * key or direct field), Ollama requires a reachable endpoint. Returns a
- * bilingual, user-presentable message or null when the provider can plausibly
- * work. Keyed-provider engine errors still surface mid-run via `fail()`; this
- * guard only removes the guaranteed-hang case (visibility fix, ticket #119). */
-export function providerAdmissionGuard(body: Partial<WideResearchRequest> | undefined): string | null {
-  const provider = (body?.llm_provider || 'gemini').trim().toLowerCase();
-  if (provider === 'ollama') {
-    const endpoint = (body?.ollama_endpoint || '').trim();
-    if (!endpoint) {
-      return 'No Ollama endpoint configured. Open Settings → add your Ollama server URL (e.g. http://127.0.0.1:11434), then retry. | لم يتم إعداد خادم Ollama. افتح الإعدادات ← أضف عنوان الخادم (مثال: http://127.0.0.1:11434) ثم أعد المحاولة.';
-    }
+/** Start-time admission guard for Ollama (tracer P4): the persisted
+ * `models.json` overlay is the authority — an entry with probed models
+ * admits; missing or model-less means no usable server. Bilingual, never a
+ * silent hang. */
+export async function ollamaAdmissionGuard(): Promise<string | null> {
+  try {
+    const { getPiCatalogSnapshot } = await import('./piCatalog');
+    const snapshot = await getPiCatalogSnapshot();
+    const entry = snapshot.providers.find((p) => p.id === 'ollama');
+    if (entry && entry.models.length > 0) return null;
+  } catch {
+    // Catalog unreadable: let the run fail with its own precise error.
     return null;
   }
-  const keyField = PROVIDER_KEY_FIELD[provider];
-  if (!keyField) return null; // unknown provider id: let the engine fail with its own precise error
-  const key = (body?.api_keys?.[keyField] || '').trim();
-  if (!key) {
-    return `No API key configured for "${provider}". Open Settings → paste your ${provider} key, then retry. | لا يوجد مفتاح API للمزود "${provider}". افتح الإعدادات ← أضف المفتاح ثم أعد المحاولة.`;
+  return 'No Ollama server configured. Open Settings → add your Ollama server URL (e.g. http://127.0.0.1:11434), then retry. | لم يتم إعداد خادم Ollama. افتح الإعدادات ← أضف عنوان الخادم (مثال: http://127.0.0.1:11434) ثم أعد المحاولة.';
+}
+
+/** Start-time admission guard (Pi owns auth): cloud providers require
+ * Pi-stored auth (`auth.json` under the agent directory — never request
+ * keys), Ollama requires the persisted `models.json` overlay (tracer P4).
+ * Returns a bilingual, user-presentable message or null when the provider
+ * can plausibly work. Keyed-provider engine errors still surface mid-run via
+ * `fail()`; this guard only removes the guaranteed-hang case (visibility
+ * fix, ticket #119). */
+export async function providerAdmissionGuard(
+  body: Partial<WideResearchRequest> | undefined
+): Promise<string | null> {
+  const provider = (body?.llm_provider || 'google').trim().toLowerCase();
+  if (provider === 'gemini') {
+    return 'Unknown Pi provider "gemini" — the Pi id is "google". Update Settings to the Pi provider id, then retry. | مزود Pi غير معروف "gemini" — المعرف الصحيح هو "google". حدث الإعدادات ثم أعد المحاولة.';
   }
-  return null;
+  if (provider === 'ollama') {
+    return ollamaAdmissionGuard();
+  }
+  try {
+    const { getPiCatalogSnapshot } = await import('./piCatalog');
+    const snapshot = await getPiCatalogSnapshot();
+    const entry = snapshot.providers.find((p) => p.id === provider);
+    if (!entry) return null; // unknown provider id: let the engine fail with its own precise error
+    if (!entry.auth.configured) {
+      return `No API key configured for "${provider}". Open Settings → paste your ${provider} key, then retry. | لا يوجد مفتاح API للمزود "${provider}". افتح الإعدادات ← أضف المفتاح ثم أعد المحاولة.`;
+    }
+    return null;
+  } catch {
+    return null; // catalog unreadable: let the run fail with its own precise error
+  }
 }
 
 export function createResearchAgent(
@@ -117,40 +130,58 @@ globalSkillRegistry.discoverAll().catch(err => {
  * Deep Research's plan-gated path. */
 export const AGENTIC_ROUTES = ['/api/agent/start', '/api/agent/steer', '/api/agent/cancel'] as const;
 
-/** The agentic-run request shape: one question, one admission surface. */
+/** The agentic-run request shape: one question, one admission surface.
+ * Pi ids only — auth and the Ollama endpoint resolve from Pi's files
+ * (`auth.json`, `models.json`), never from the request. */
 export interface AgenticStartRequest {
   question: string;
   provider?: string;
-  api_key?: string;
-  ollama_endpoint?: string;
   max_fetches?: number;
+  /** The user's chosen model id (Settings) — resolved inside the requested provider. */
+  model_name?: string;
 }
 
 /** Server-side admission-time normalization of the start request. */
 function normalizeAgentStartRequest(body: Partial<AgenticStartRequest> | undefined): AgenticStartRequest {
-  const provider = typeof body?.provider === 'string' && body.provider.trim() ? body.provider.trim().toLowerCase() : 'gemini';
+  const provider = typeof body?.provider === 'string' && body.provider.trim() ? body.provider.trim().toLowerCase() : 'google';
   return {
     question: String(body?.question ?? '').trim(),
     provider,
-    api_key: typeof body?.api_key === 'string' ? body.api_key : undefined,
-    ollama_endpoint: typeof body?.ollama_endpoint === 'string' ? body.ollama_endpoint : undefined,
     max_fetches: typeof body?.max_fetches === 'number' && Number.isFinite(body.max_fetches) && body.max_fetches > 0
       ? Math.floor(body.max_fetches)
       : 12,
+    model_name: typeof body?.model_name === 'string' && body.model_name.trim() ? body.model_name.trim() : undefined,
   };
 }
 
 /**
  * Start-time admission guard for the agentic surface (mirrors #119): without
  * a usable provider the run can only hang, so it is rejected bilingually —
- * an HTTP 422, never a started run that starves in silence.
+ * an HTTP 422, never a started run that starves in silence. Pi owns auth
+ * (tracer P2): the guard reads Pi standing, never request keys.
  */
-export function providerAdmissionGuardForAgent(body: Partial<AgenticStartRequest> | undefined): string | null {
-  return agenticAdmissionGuard({
-    provider: body?.provider,
-    apiKey: body?.api_key,
-    ollamaEndpoint: body?.ollama_endpoint,
-  });
+export async function providerAdmissionGuardForAgent(
+  body: Partial<AgenticStartRequest> | undefined
+): Promise<string | null> {
+  const provider = (body?.provider || 'google').trim().toLowerCase();
+  if (provider === 'gemini') {
+    return 'Unknown Pi provider "gemini" — the Pi id is "google". | مزود Pi غير معروف "gemini" — المعرف الصحيح هو "google".';
+  }
+  if (provider === 'ollama') {
+    return ollamaAdmissionGuard();
+  }
+  try {
+    const { getPiCatalogSnapshot } = await import('./piCatalog');
+    const snapshot = await getPiCatalogSnapshot();
+    const entry = snapshot.providers.find((p) => p.id === provider);
+    if (!entry) return null;
+    if (!entry.auth.configured) {
+      return `No API key configured for "${provider}". Open Settings → paste your ${provider} key, then retry. | لا يوجد مفتاح API للمزود "${provider}". افتح الإعدادات ← أضف المفتاح ثم أعد المحاولة.`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 interface ActiveAgentRun {
@@ -162,13 +193,23 @@ interface ActiveAgentRun {
  * so streaming subscribers always find their session) and removed at terminal. */
 const activeAgentSessions = new Map<string, ActiveAgentRun>();
 
+/**
+ * Run-terminal classification for the agentic surface. ONLY the runner's
+ * explicit run terminals evict the session: `budget_exhausted` is a mid-run
+ * retrieval warning emitted from inside the fetch wrapper (the run continues
+ * into its answer and real terminal) — classifying it as a terminal dropped
+ * every later event, including `finished`, on the floor.
+ */
+export function isAgenticRunTerminal(type: string): boolean {
+  return type === 'finished' || type === 'error' || type === 'cancelled';
+}
+
 /** Fan one agentic LiveEvent out to the run's live event subscribers, and
  * remove the run from the live map at its terminal. Every event reaches the
  * subscriber with an incrementing `eventId` — the same delta-replay contract
  * the research sessions stream under — and lands in the bounded per-session
  * log so a late /ws/agent/:id attach replays what it missed. */
-function emitAgentEvent(sessionId: string, event: LiveEvent): void {
-  const run = activeAgentSessions.get(sessionId);
+function emitAgentEvent(sessionId: string, event: LiveEvent): void {  const run = activeAgentSessions.get(sessionId);
   if (!run) return;
   agentEventSeq.set(sessionId, (agentEventSeq.get(sessionId) ?? 0) + 1);
   const envelope: LiveEvent & { eventId?: number } = { ...event, eventId: agentEventSeq.get(sessionId) };
@@ -183,7 +224,7 @@ function emitAgentEvent(sessionId: string, event: LiveEvent): void {
       // A broken subscriber never starves the run or its other observers.
     }
   }
-  if (['finished', 'error', 'cancelled', 'budget_exhausted'].includes(event.type)) {
+  if (isAgenticRunTerminal(event.type)) {
     activeAgentSessions.delete(sessionId);
     agentEventSeq.delete(sessionId);
     // The log outlives the run briefly so a subscriber attaching around the
@@ -259,7 +300,7 @@ export async function startAgenticSearchSession(
   });
   const session = await createAgenticResearchSession(sessionId, surface, {
     provider: request.provider,
-    apiKey: request.api_key,
+    modelName: request.model_name,
   });
   activeAgentSessions.set(sessionId, { state, session });
   // Registered BEFORE the run starts: the first emissions find their session.
@@ -579,23 +620,163 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           return;
         }
 
-        // Provider Models
+        // Pi catalog reads — read-only Pi truth (providers, models, auth
+        // standing) for the Settings UI to render. No key material is ever
+        // serialized; failures are 500s, never hangs. Ollama lists from the
+        // persisted `models.json` overlay (tracer P4) — no probe parameter,
+        // no per-request endpoints.
+        if (pathname === '/api/pi/providers' && req.method === 'GET') {
+          try {
+            const { getPiCatalogSnapshot } = await import('./piCatalog');
+            const snapshot = await getPiCatalogSnapshot();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                providers: snapshot.providers.map(({ id, name, models }) => ({ id, name, models })),
+              })
+            );
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Pi catalog unavailable: ${err?.message ?? String(err)}` }));
+          }
+          return;
+        }
+
+        if (pathname === '/api/pi/auth-status' && req.method === 'GET') {
+          try {
+            const { getPiCatalogSnapshot } = await import('./piCatalog');
+            const snapshot = await getPiCatalogSnapshot();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                providers: snapshot.providers.map(({ id, auth }) => ({ id, ...auth })),
+              })
+            );
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Pi auth status unavailable: ${err?.message ?? String(err)}` }));
+          }
+          return;
+        }
+
+        // Pi auth write-through (tracer P2): chat keys persist into Pi's
+        // `auth.json` via Pi's native `login` — never into request envelopes
+        // or localStorage. Empty key = logout (delete the entry). Pi ids only.
+        if (pathname === '/api/pi/auth' && req.method === 'POST') {
+          const body = await parseJsonBody<{ provider?: string; apiKey?: string }>(req);
+          try {
+            const { savePiChatKey } = await import('./piAuth');
+            const result = await savePiChatKey(
+              String(body?.provider ?? ''),
+              typeof body?.apiKey === 'string' ? body.apiKey : ''
+            );
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, ...result }));
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message ?? String(err) }));
+          }
+          return;
+        }
+
+        // Pi defaults (tracer P2): the default provider/model persist into
+        // Pi's file-backed `settings.json` — the same store sessions resolve
+        // against. Pi ids only.
+        if (pathname === '/api/pi/defaults' && req.method === 'GET') {
+          try {
+            const { getPiDefaults } = await import('./piAuth');
+            const defaults = await getPiDefaults();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(defaults));
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err?.message ?? String(err) }));
+          }
+          return;
+        }
+        if (pathname === '/api/pi/defaults' && req.method === 'POST') {
+          const body = await parseJsonBody<{ provider?: string; model?: string }>(req);
+          try {
+            const { savePiDefaults } = await import('./piAuth');
+            const defaults = await savePiDefaults(
+              typeof body?.provider === 'string' ? body.provider : '',
+              typeof body?.model === 'string' ? body.model : ''
+            );
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, ...defaults }));
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message ?? String(err) }));
+          }
+          return;
+        }
+
+        // Pi Ollama persistence (tracer P4): the local server persists as an
+        // ordinary provider entry in the `models.json` overlay. GET reports
+        // the file truth; POST probes the endpoint and writes it (unreachable
+        // still records the base URL with an empty model list + warning, so
+        // the endpoint is remembered without inventing models).
+        if (pathname === '/api/pi/ollama' && req.method === 'GET') {
+          try {
+            const { readOllamaOverlay } = await import('./piOllama');
+            const overlay = readOllamaOverlay();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(overlay));
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err?.message ?? String(err) }));
+          }
+          return;
+        }
+        if (pathname === '/api/pi/ollama' && req.method === 'POST') {
+          const body = await parseJsonBody<{ endpoint?: string }>(req);
+          try {
+            const { saveOllamaEndpoint, writeOllamaOverlay, normalizeOllamaEndpoint } = await import('./piOllama');
+            const endpoint = String(body?.endpoint ?? '');
+            try {
+              const saved = await saveOllamaEndpoint(endpoint);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, ...saved }));
+            } catch (probeErr: any) {
+              const base = normalizeOllamaEndpoint(endpoint);
+              const saved = writeOllamaOverlay(base, [], undefined);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  success: true,
+                  ...saved,
+                  warning: probeErr?.message ?? String(probeErr),
+                })
+              );
+            }
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message ?? String(err) }));
+          }
+          return;
+        }
+
+        // Embedding models (tracer P3): keyless listing. Ollama probes the
+        // persisted Pi endpoint; cloud providers attempt live discovery with
+        // the Pi-stored key and fall back to static defaults without one. No
+        // key material — and no endpoint — ever travels the query string.
         if (pathname === '/api/models' && req.method === 'GET') {
-          const provider = parsedUrl.searchParams.get('provider') || 'gemini';
-          const apiKey = parsedUrl.searchParams.get('api_key') || undefined;
-          const endpoint = parsedUrl.searchParams.get('endpoint') || undefined;
+          const provider = parsedUrl.searchParams.get('provider') || 'google';
           const type = parsedUrl.searchParams.get('type') || 'chat';
 
           if (type === 'embedding') {
-            const models = await fetchEmbeddingModels(provider, apiKey, endpoint);
+            const models = await fetchEmbeddingModels(provider);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ provider, type: 'embedding', models }));
             return;
           }
 
-          const models = await ModelClient.fetchDynamicModels(provider, apiKey, endpoint);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ provider, models }));
+          res.writeHead(410, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: 'Chat model listing moved to Pi: GET /api/pi/providers (Pi ids, keyless).',
+            })
+          );
           return;
         }
 
@@ -689,17 +870,35 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           return;
         }
 
-        // Connection & Latency Test
-        if (pathname === '/api/models/test' && req.method === 'POST') {
-          const body = await parseJsonBody<any>(req);
-          const result = await ModelClient.testConnection(
-            body.provider,
-            body.api_key,
-            body.endpoint,
-            body.model_name
-          );
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(result));
+        // Pi connection test — tracer P1 of the Pi-only backend migration.
+        // The key (or Ollama endpoint) arms the Pi provider transiently and a
+        // minimal turn runs on Pi transport. Nothing is persisted. This
+        // replaces `/api/models/test` (deleted with its last caller below):
+        // Settings proves the exact provider+model it will run, on the exact
+        // runtime that will run it. Pi ids in (`google`, never LENS `gemini`).
+        if (pathname === '/api/pi/test' && req.method === 'POST') {
+          const body = await parseJsonBody<{
+            provider?: string;
+            model?: string;
+            apiKey?: string;
+            endpoint?: string;
+          }>(req);
+          try {
+            const { testPiProvider } = await import('./piCatalog');
+            const result = await testPiProvider({
+              provider: String(body?.provider ?? ''),
+              model: typeof body?.model === 'string' ? body.model : undefined,
+              apiKey: typeof body?.apiKey === 'string' ? body.apiKey : undefined,
+              endpoint: typeof body?.endpoint === 'string' ? body.endpoint : undefined,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (err: any) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({ success: false, latency_ms: 0, error: err?.message ?? String(err) })
+            );
+          }
           return;
         }
 
@@ -724,7 +923,9 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           return;
         }
 
-        // Embedding Connection & Latency Test
+        // Embedding Connection & Latency Test: the credential and the Ollama
+        // endpoint resolve from Pi truth inside the factory — the body
+        // carries provider/model only, never keys or endpoints.
         if (pathname === '/api/models/test-embedding' && req.method === 'POST') {
           const body = await parseJsonBody<any>(req);
           const startTime = Date.now();
@@ -732,8 +933,6 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
             const modelInstance = createEmbeddingModel({
               provider: body.provider,
               model: body.model_name,
-              apiKey: body.api_key,
-              endpoint: body.endpoint,
               timeoutMs: 8000
             });
             const vectors = await modelInstance.embedText(['Test connection ping']);
@@ -764,7 +963,7 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           // Fail loudly at admission when no usable model provider is configured:
           // without this guard the run hangs silently (no provider → no tokens,
           // no exception) — the reported "stuck at checking" experience.
-          const providerGuard = providerAdmissionGuard(body);
+          const providerGuard = await providerAdmissionGuard(body);
           if (providerGuard) {
             res.writeHead(422, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: providerGuard }));
@@ -971,7 +1170,7 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           return;
         }
 
-        // Follow-up question endpoint
+        // Follow-up question endpoint (Pi ids only — auth from Pi store).
         if (pathname === '/api/followup' && req.method === 'POST') {
           const body = await parseJsonBody<any>(req);
           const answer = await DeepResearchAgent.answerFollowup(
@@ -979,10 +1178,8 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
             body.report_content || '',
             body.chat_history || [],
             {
-              provider: body.llm_provider || 'gemini',
+              provider: body.llm_provider || 'google',
               model: body.model_name,
-              apiKey: body.api_keys?.[body.llm_provider] || body.api_keys?.gemini,
-              endpoint: body.ollama_endpoint
             }
           );
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -994,7 +1191,7 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           const raw = await parseJsonBody<Partial<AgenticStartRequest>>(req);
           // Admission first (#119 mirrored at the agentic surface): without a
           // usable provider the run can only hang — reject bilingually.
-          const agentGuard = providerAdmissionGuardForAgent(raw);
+          const agentGuard = await providerAdmissionGuardForAgent(raw);
           if (agentGuard) {
             res.writeHead(422, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: agentGuard }));
@@ -1045,11 +1242,20 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
         }
 
         // Cancel the live agentic run for a session (explicit terminal).
+        // Idempotent around the terminal race: when the run just ended, its
+        // event log still outlives it briefly — cancelling that moment is a
+        // benign no-op (already_finished), not a 404. A session id with no
+        // live run AND no recent log is genuinely unknown.
         if (pathname === '/api/agent/cancel' && req.method === 'POST') {
           const body = await parseJsonBody<{ session_id?: string }>(req);
           const found = body.session_id ? activeAgentSessions.has(body.session_id) : false;
           const cancelled = found ? cancelAgenticSearch(body.session_id!) : false;
           if (!found || !cancelled) {
+            if (body.session_id && agentEventLog.has(body.session_id)) {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, session_id: body.session_id, already_finished: true }));
+              return;
+            }
             res.writeHead(404, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'No live agentic run for this session | لا يوجد تشغيل أجنتي حي لهذه الجلسة' }));
             return;

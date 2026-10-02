@@ -20,8 +20,11 @@ const importEngine = async (name) =>
   await import(pathToFileURL(join(process.cwd(), 'dist-electron', 'engine', name)).href);
 
 const host = (await importEngine('agentSessionHost.js')).__testSeams.host;
-const { runAgenticSearch, createAgenticToolSurface, cancelAgenticSearch, agenticAdmissionGuard } =
+const { runAgenticSearch, createAgenticToolSurface, cancelAgenticSearch } =
   await importEngine('agenticSearch.js');
+const { providerAdmissionGuardForAgent } = await importEngine('server.js');
+const { __testSeams: authSeams } = await importEngine('piAuth.js');
+const { __testSeams: ollamaSeams } = await importEngine('piOllama.js');
 const { resetFetchLedger } = await importEngine('fetchLedger.js');
 
 /** Extract the text of the last user message in a loop context. */
@@ -192,6 +195,11 @@ describe('Agentic Search end-to-end — scripted provider, real seams', () => {
     assert.equal(result.terminal, 'finished');
     assert.ok(result.sources.length >= 2, 'search results admitted as sources');
     assert.ok(result.report.includes('The agentic answer'), 'the answer streamed into the report draft');
+    assert.equal(
+      result.report,
+      'The agentic answer, grounded in admitted sources.',
+      'the streamed answer lands EXACTLY once — streamed deltas plus the message_end snapshot must not double-count'
+    );
 
     const types = emitted.map((e) => e.type);
     assert.ok(types.includes('session_state'), 'bridge lifecycle flowed');
@@ -304,16 +312,39 @@ describe('Agentic Search end-to-end — scripted provider, real seams', () => {
   });
 });
 
-describe('Agentic admission guard — no usable provider, no run', () => {
-  it('rejects a cloud start without a key, bilingually', () => {
-    const message = agenticAdmissionGuard({ provider: 'gemini' });
+describe('Agentic admission guard — no Pi truth, no run', () => {
+  it('rejects a cloud start with no Pi key, bilingually', async () => {
+    await authSeams.savePiChatKey('mistral', '', undefined).catch(() => {});
+    const message = await providerAdmissionGuardForAgent({ provider: 'mistral', question: 'probe' });
     assert.ok(message);
     assert.match(message, /API key/);
     assert.match(message, /مفتاح API/);
   });
-  it('rejects an Ollama start without an endpoint', () => {
-    const message = agenticAdmissionGuard({ provider: 'ollama' });
+  it('rejects a LENS provider id as unknown Pi truth', async () => {
+    const message = await providerAdmissionGuardForAgent({ provider: 'gemini', question: 'probe' });
     assert.ok(message);
-    assert.match(message, /Ollama/);
+    assert.match(message, /Pi id is "google"/);
+  });
+  it('rejects an Ollama start with no persisted overlay', async () => {
+    const { existsSync, readFileSync, writeFileSync, rmSync } = await import('node:fs');
+    const agentDir = host.resolveAgentDir();
+    const modelsPath = join(agentDir, 'models.json');
+    const backup = existsSync(modelsPath) ? readFileSync(modelsPath, 'utf-8') : null;
+    try {
+      ollamaSeams.clearOllamaEndpoint(undefined);
+      const message = await providerAdmissionGuardForAgent({ provider: 'ollama', question: 'probe' });
+      assert.ok(message);
+      assert.match(message, /Ollama/);
+    } finally {
+      try {
+        if (backup === null) {
+          if (existsSync(modelsPath)) rmSync(modelsPath);
+        } else {
+          writeFileSync(modelsPath, backup, 'utf-8');
+        }
+      } catch {
+        // Best-effort restore; the assertions already ran.
+      }
+    }
   });
 });

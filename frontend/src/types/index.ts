@@ -2,8 +2,8 @@ export type Language = 'ar' | 'en';
 export type ResearchDepth = 'quick' | 'deep' | 'storm';
 export type ResearchPerspective = 'balanced' | 'technical' | 'market' | 'critical' | 'storm';
 export type ResearchMode = 'standard' | 'wide';
-export type LLMProvider = 'openai' | 'gemini' | 'anthropic' | 'groq' | 'deepseek' | 'openrouter' | 'mistral' | 'ollama';
-export type EmbeddingProvider = 'gemini' | 'openai' | 'ollama' | 'none';
+export type LLMProvider = 'openai' | 'google' | 'anthropic' | 'groq' | 'deepseek' | 'openrouter' | 'mistral' | 'ollama';
+export type EmbeddingProvider = 'google' | 'openai' | 'ollama' | 'none';
 
 export interface ModelOption {
   id: string;
@@ -266,9 +266,6 @@ export interface EmbeddingSettings {
   provider: EmbeddingProvider;
   model_name: string;
   custom_model_name?: string;
-  api_key?: string;
-  use_chat_key?: boolean;
-  endpoint?: string;
 }
 
 export interface ApiSettings {
@@ -278,14 +275,10 @@ export interface ApiSettings {
   custom_model_name?: string;
   ollama_endpoint: string;
   embedding?: EmbeddingSettings;
+  // P2: chat keys are gone — Pi's `auth.json` owns them (never localStorage,
+  // never request envelopes). P3: embedding keys are gone too. Only search
+  // keys survive here (provisioned to `web-search.json` via write-through).
   keys: {
-    openai?: string;
-    gemini?: string;
-    anthropic?: string;
-    groq?: string;
-    deepseek?: string;
-    openrouter?: string;
-    mistral?: string;
     tavily?: string;
     serper?: string;
   };

@@ -6,7 +6,7 @@ import { PageScraper, ScrapedPage } from './scraper';
 import { auditEvidenceClaims, buildAuditSection } from './evidenceAuditor';
 import { LLMRequestOptions, LLMToolDefinition, ToolCallHandler } from './models';
 import { generate } from './modelGateway';
-import { createEmbeddingModel, rankSourcePassages, fallbackEvidence, EmbeddingProvider } from './embeddings';
+import { createEmbeddingModel, defaultEmbeddingModel, rankSourcePassages, fallbackEvidence, EmbeddingProvider } from './embeddings';
 import { auditEvidenceCoverage, generateAdaptiveHopPlan, formatAuditReflections } from './evidenceCoverage';
 import { SkillActivationManager, CompactionShield } from './skills';
 import { CitationGroundingContract } from './synthesis';
@@ -111,17 +111,15 @@ export class DeepResearchAgent {
     const perspective = request.perspective || 'balanced';
     const language = request.language || 'ar';
     const searchProvider = request.search_provider || 'duckduckgo';
-    const llmProvider = request.llm_provider || 'gemini';
+    const llmProvider = request.llm_provider || 'google';
     const modelName = request.model_name;
-    const apiKeys = request.api_keys || {};
-    const ollamaEndpoint = request.ollama_endpoint;
     const embeddingEnabled = request.embedding_enabled !== false;
     const defaultEmbeddingProvider: EmbeddingProvider =
-      llmProvider === 'gemini' ? 'gemini' : llmProvider === 'openai' ? 'openai' : llmProvider === 'ollama' ? 'ollama' : 'none';
+      llmProvider === 'google' ? 'google' : llmProvider === 'openai' ? 'openai' : llmProvider === 'ollama' ? 'ollama' : 'none';
     const embeddingProvider = request.embedding_provider || defaultEmbeddingProvider;
     const embeddingModelName = request.embedding_model;
-    const embeddingApiKey = request.embedding_api_key || apiKeys[embeddingProvider] || (embeddingProvider === 'gemini' ? apiKeys['google'] : undefined);
-    const embeddingEndpoint = request.embedding_endpoint || ollamaEndpoint;
+    // P3/P4: embedding credentials AND the Ollama endpoint resolve from Pi
+    // truth inside the factories — the envelope carries provider/model only.
 
     const toolHandler: ToolCallHandler = async (call) => {
       if (call.name === 'activate_skill' && this.activationManager) {
@@ -160,8 +158,6 @@ export class DeepResearchAgent {
     const llmBaseOpts: Omit<LLMRequestOptions, 'messages'> = {
       provider: llmProvider,
       model: modelName,
-      apiKey: apiKeys[llmProvider] || apiKeys[llmProvider === 'gemini' ? 'google' : ''],
-      endpoint: ollamaEndpoint,
       tools:
         llmProvider !== 'ollama' && this.activationManager
           ? [this.activationManager.getToolDefinition(), ...packageTools]
@@ -322,7 +318,7 @@ Return ONLY a valid JSON array of strings, for example:
 
       let searchHits: any[] = [];
       try {
-        searchHits = await primarySearchPlane(subq, searchProvider, apiKeys, 6, signal);
+        searchHits = await primarySearchPlane(subq, searchProvider, undefined, 6, signal);
       } catch (err) {
         if (signal?.aborted) return;
         console.warn(`[Agent] Search failed for subquery "${subq}":`, err);
@@ -423,7 +419,7 @@ Return ONLY a valid JSON array of strings, for example:
 
         let hopHits: any[] = [];
         try {
-          hopHits = await primarySearchPlane(targetQ, searchProvider, apiKeys, 3, signal);
+          hopHits = await primarySearchPlane(targetQ, searchProvider, undefined, 3, signal);
         } catch (err) {
           if (signal?.aborted) return;
           console.warn(`[Agent] Search failed for adaptive query "${targetQ}":`, err);
@@ -452,14 +448,13 @@ Return ONLY a valid JSON array of strings, for example:
     let evidenceText = '';
     let usedSemanticRetrieval = false;
 
-    // Check if semantic embedding retrieval is enabled and provider is configured
+    // Check if semantic embedding retrieval is enabled and provider is configured.
+    // No key inspection (tracer P3): the factory resolves Pi-stored auth and
+    // throws when unconfigured — caught below into the lexical fallback.
     if (embeddingEnabled && embeddingProvider && embeddingProvider !== 'none' && scrapedSources.length > 0) {
       try {
-        const isLocal = embeddingProvider === 'ollama';
-        if (isLocal || (embeddingApiKey && embeddingApiKey.trim())) {
-          const defaultModelForProvider =
-            embeddingProvider === 'gemini' ? 'text-embedding-004' : embeddingProvider === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text';
-          const activeEmbedModel = embeddingModelName || defaultModelForProvider;
+        const defaultModelForProvider = defaultEmbeddingModel(embeddingProvider);
+        const activeEmbedModel = embeddingModelName || defaultModelForProvider;
 
           this.emitEvent({
             type: 'thought',
@@ -471,8 +466,6 @@ Return ONLY a valid JSON array of strings, for example:
           const embeddingClient = createEmbeddingModel({
             provider: embeddingProvider,
             model: activeEmbedModel,
-            apiKey: embeddingApiKey,
-            endpoint: embeddingEndpoint,
             timeoutMs: 15000
           });
 
@@ -492,7 +485,6 @@ Return ONLY a valid JSON array of strings, for example:
               ? `اكتمل الترتيب الدلالي: تم استخلاص ${ranked.selectedChunks.length} مقطعاً من ${ranked.metrics.sourcesCovered} مصادر بدقة متجهات ${ranked.metrics.vectorDimensions} بعداً (متوسط التطابق: ${(ranked.metrics.averageScore * 100).toFixed(0)}%).`
               : `Semantic ranking complete: extracted ${ranked.selectedChunks.length} passages across ${ranked.metrics.sourcesCovered} sources (${ranked.metrics.vectorDimensions} dims, avg relevance: ${(ranked.metrics.averageScore * 100).toFixed(0)}%).`
           });
-        }
       } catch (err: any) {
         console.warn('[DeepResearchAgent] Semantic retrieval failed, using standard excerpt fallback:', err);
         this.emitEvent({
@@ -669,8 +661,6 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
     options: {
       provider: string;
       model?: string;
-      apiKey?: string;
-      endpoint?: string;
     }
   ): Promise<string> {
     const systemPrompt = `You are an AI Deep Research Specialist.
@@ -692,8 +682,6 @@ Cite relevant sections or sources where applicable.`;
       return await generate({
         provider: options.provider as any,
         model: options.model,
-        apiKey: options.apiKey,
-        endpoint: options.endpoint,
         messages,
         temperature: 0.3
       });

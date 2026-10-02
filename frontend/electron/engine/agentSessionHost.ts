@@ -15,8 +15,9 @@
  *  - **LENS-owned discovery** — the resource loader's agentDir points under
  *    LENS's own app-data directory (never the user's `~/.pi`), and the model
  *    runtime is created with network catalog refresh disabled (the
- *    `PI_OFFLINE` equivalent — LENS provisions providers itself). Provider
- *    keys ride as non-persisted runtime overrides.
+ *    `PI_OFFLINE` equivalent — LENS provisions providers itself). Chat auth
+ *    resolves from Pi's file-backed `auth.json` under that directory (tracer
+ *    P2); requests never carry keys.
  *  - **Enforcement stays in the tools** (ADR-0013; ADR-0014 decision 4): the
  *    retrieval gate, plane ledger, and SSRF validation live inside the
  *    LENS-wrapped tools handed to the session. Pi's call hooks are observation
@@ -78,8 +79,8 @@ export interface LensToolSurface {
 
 export interface ResearchSessionOptions {
   sessionId: string;
-  /** Per-run provider overrides: non-persisted runtime keys from LENS settings. */
-  providerOverrides?: Record<string, string>;
+  /** Pi provider id that drives this session (`google`, never LENS `gemini`). */
+  provider?: string;
   /** Resource-discovery working directory; defaults to the engine's cwd. */
   cwd?: string;
   /**
@@ -89,6 +90,13 @@ export interface ResearchSessionOptions {
    * on) the runtime's credential file, which is environment-dependent.
    */
   agentDir?: string;
+  /**
+   * The requested model id (Settings' `model_name`, bare id or
+   * `provider/id`). Resolved inside the requested Pi provider — a stale id
+   * falls back to that provider's default rather than wandering to ambient
+   * auth's pick. Absent = provider default.
+   */
+  modelName?: string;
 }
 
 export interface HostedSession {
@@ -138,34 +146,51 @@ export interface ConstructionFacts {
 let lastConstruction: ConstructionFacts | undefined;
 
 /**
+ * Auth facts recorded by the last `createResearchSession` call: which
+ * provider the selected model needs and where its key came from. Pi owns
+ * auth (`auth.json` under the agent directory); requests never carry keys
+ * (tracer P2), so there is no override surface left to report.
+ */
+export interface SessionAuthFacts {
+  provider?: string;
+  /** `existing` = Pi already holds auth for the provider (stored, environment,
+   * or file-overlaid — including this run's persisted key);
+   * `placeholder` = the preflight fake (no real key anywhere); `none` = no
+   * provider selected / no runtime auth surface. Only `placeholder` (with no
+   * stored key) and `none` are failure states. */
+  keySource: 'placeholder' | 'existing' | 'none';
+}
+
+let lastAuth: SessionAuthFacts | undefined;
+
+/**
  * Create the offline ModelRuntime: catalog network refresh disabled (LENS
- * provisions providers itself), provider keys injected as non-persisted
- * runtime overrides. Returns the runtime plus the truthfully recorded
- * offline fact for the contract tests.
+ * provisions providers itself) with Pi file-backed auth (`auth.json` under
+ * the agent directory). When the requested provider is `ollama`, the local
+ * endpoint is probed and registered natively for this construction only
+ * (transient until P4 persists it as a `models.json` overlay).
  */
 /**
  * Construction options for the offline ModelRuntime — recorded once and
  * passed verbatim, so the tests can read the fact instead of a re-statement
  * of it. `allowModelNetwork: false` is the PI_OFFLINE equivalent; `authPath`
- * keeps the credential file inside LENS-owned app data (the default would
- * touch the user's real `~/.pi/agent`).
+ * and `modelsPath` keep the credential file and the provider overlay inside
+ * LENS-owned app data (the defaults would touch the user's real `~/.pi`).
  */
 function modelRuntimeOptions(agentDir: string): Record<string, unknown> {
-  return { allowModelNetwork: false, authPath: join(agentDir, 'auth.json') };
+  return {
+    allowModelNetwork: false,
+    authPath: join(agentDir, 'auth.json'),
+    modelsPath: join(agentDir, 'models.json'),
+  };
 }
 
-async function createModelRuntime(
-  agentDir: string,
-  providerOverrides: Record<string, string> | undefined
-): Promise<{ runtime: any; offline: boolean }> {
+async function createModelRuntime(agentDir: string): Promise<{ runtime: any; offline: boolean }> {
   const pi = await loadPiRuntime();
   const options = modelRuntimeOptions(agentDir);
+  // Ollama resolves from the persisted `models.json` overlay (tracer P4) —
+  // no per-construction endpoint, no transient registration.
   const runtime = await pi.ModelRuntime.create(options);
-  for (const [provider, key] of Object.entries(providerOverrides ?? {})) {
-    if (typeof key === 'string' && key.length > 0 && typeof runtime.setRuntimeApiKey === 'function') {
-      runtime.setRuntimeApiKey(provider, key);
-    }
-  }
   return { runtime, offline: options.allowModelNetwork === false };
 }
 
@@ -251,6 +276,63 @@ function ensureUsableModel(runtime: any): boolean {
 }
 
 /**
+ * Pin the session to the REQUESTED provider (and model) instead of letting
+ * pi's model resolution wander. Unpinned resolution prefers ambient auth —
+ * on a machine with stray provider keys it selects a foreign provider, on a
+ * clean machine the offline placeholder — while the user's key sits on an
+ * untranslated id. Either way every call fails and the run dies retrying.
+ *
+ * Returns the canonical model def, or undefined when there is nothing to pin
+ * to (keyless construction keeps the legacy path: placeholder + preflight).
+ */
+function resolveRequestedModel(
+  runtime: any,
+  provider: string | undefined,
+  modelName: string | undefined
+): any | undefined {
+  let models: Array<{ provider: string; id: string }> = [];
+  try {
+    const listed = typeof runtime?.getModels === 'function' ? runtime.getModels() : [];
+    if (Array.isArray(listed)) models = listed;
+  } catch {
+    return undefined;
+  }
+  if (models.length === 0) return undefined;
+  const wanted = (modelName ?? '').trim().toLowerCase();
+  if (wanted) {
+    // A bare id resolves inside the requested provider first (Pi ids only);
+    // a `provider/id` pair resolves exactly. A stale id falls through to the
+    // provider pin below — never to a foreign provider.
+    const requested = (provider ?? '').trim().toLowerCase();
+    const exact =
+      models.find((m) => `${m.provider}/${m.id}`.toLowerCase() === wanted) ??
+      (requested
+        ? models.find((m) => m.provider.toLowerCase() === requested && String(m.id).toLowerCase() === wanted)
+        : undefined);
+    if (exact) {
+      try {
+        return typeof runtime?.getModel === 'function'
+          ? (runtime.getModel(exact.provider, exact.id) ?? exact)
+          : exact;
+      } catch {
+        return exact;
+      }
+    }
+  }
+  const pinned = (provider ?? '').trim();
+  if (!pinned) return undefined;
+  const first = models.find((m) => m.provider === pinned);
+  if (!first) return undefined;
+  try {
+    return typeof runtime?.getModel === 'function'
+      ? (runtime.getModel(first.provider, first.id) ?? first)
+      : first;
+  } catch {
+    return first;
+  }
+}
+
+/**
  * Build one research session (one Turn-Group) under the ADR-0014 contract.
  * Construction never requires a provider key — admission is a start-time
  * concern (the Provider Admission Guard), not a construction-time one.
@@ -266,15 +348,16 @@ export async function createResearchSession(
   // so first-construction never depends on prior app boot.
   mkdirSync(agentDir, { recursive: true });
 
-  const { runtime } = await createModelRuntime(agentDir, options.providerOverrides);
+  const { runtime } = await createModelRuntime(agentDir);
 
-  // Services: LENS-owned discovery surfaces only — in-memory settings, the
-  // LENS agentDir, the offline model runtime.
+  // Services: LENS-owned discovery surfaces only — the file-backed Pi
+  // settings (defaults live in `settings.json` under the agent directory,
+  // tracer P2), the LENS agentDir, the offline model runtime.
   const services = await pi.createAgentSessionServices({
     cwd,
     agentDir,
     modelRuntime: runtime,
-    settingsManager: pi.SettingsManager.inMemory(),
+    settingsManager: pi.SettingsManager.create(cwd, agentDir),
   });
 
   // Zero-configured-provider guarantee: AFTER the services' internal model
@@ -289,10 +372,18 @@ export async function createResearchSession(
 
   const customTools = (tools?.definitions ?? []).map((definition) => toPiTool(definition, tools!.handler));
 
+  // Provider pinning: the REQUESTED Pi provider drives this session — the
+  // requested model inside it when one was named, else that provider's
+  // catalog default. Without a pin, pi's findInitialModel prefers ambient
+  // auth and the session silently runs a foreign provider (or the offline
+  // placeholder). Pi ids only (`google`, never LENS `gemini`).
+  const pinnedModel = resolveRequestedModel(runtime, options.provider, options.modelName);
+
   const { session } = await pi.createAgentSessionFromServices({
     services,
     sessionManager,
     customTools,
+    ...(pinnedModel ? { model: pinnedModel } : {}),
     // The allow-list is the permission grant (ADR-0014 decision 2): the
     // default built-in tools (read/bash/edit/write) are disabled — without
     // this, customTools are ADDED ON TOP of the coding tools and the
@@ -307,17 +398,19 @@ export async function createResearchSession(
 
   // Auth preflight guarantee: AgentSession.prompt() rejects before streaming
   // when the selected model's provider has no configured auth — the exact
-  // silent-hang class the admission guards exist to prevent. The seam is the
-  // single point that owns the key surface, so it ensures a runtime override
-  // exists for the selected provider: the real LENS-settings key when one was
-  // passed, otherwise a non-persisted placeholder that satisfies the preflight
-  // (the transport call itself carries the credential in production; tests
-  // replace the transport entirely).
+  // silent-hang class the admission guards exist to prevent. Pi owns auth
+  // (`auth.json`); when nothing is configured the seam keeps the historical
+  // non-persisted placeholder so construction itself never becomes a dead
+  // end (the admission guard remains the start-time authority).
   const selectedModel = (session as any)?.model ?? (session as any)?.agent?.state?.model;
-  const provider: string | undefined = selectedModel?.provider;
-  if (provider && typeof runtime.hasConfiguredAuth === 'function' && runtime.hasConfiguredAuth(provider) !== true) {
-    const existingOverride = options.providerOverrides?.[provider];
-    await runtime.setRuntimeApiKey(provider, existingOverride ?? 'lens-runtime-override');
+  const selectedProvider: string | undefined = selectedModel?.provider;
+  if (selectedProvider && typeof runtime.hasConfiguredAuth === 'function' && runtime.hasConfiguredAuth(selectedProvider) !== true) {
+    await runtime.setRuntimeApiKey(selectedProvider, 'lens-runtime-override');
+    lastAuth = { provider: selectedProvider, keySource: 'placeholder' };
+  } else if (selectedProvider) {
+    lastAuth = { provider: selectedProvider, keySource: 'existing' };
+  } else {
+    lastAuth = { keySource: 'none' };
   }
 
   // Truth-in-tests: report the tools the runtime actually granted on the
@@ -344,9 +437,15 @@ export const __testSeams = {
       }
       return lastConstruction;
     },
+    describeLastAuth: async (): Promise<SessionAuthFacts> => {
+      if (!lastAuth) {
+        throw new Error('no auth recorded yet');
+      }
+      return lastAuth;
+    },
   },
   loadPiRuntime: async (): Promise<{ __offline: boolean }> => {
-    const { offline } = await createModelRuntime(resolveAgentDir(), undefined);
+    const { offline } = await createModelRuntime(resolveAgentDir());
     return { __offline: offline };
   },
 };

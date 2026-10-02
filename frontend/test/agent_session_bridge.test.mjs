@@ -160,6 +160,48 @@ describe('AgentSession → LiveEvent bridge — per-class mapping', () => {
     assert.equal(retryEnd.event.type, 'status');
   });
 
+  it('maps the runtime retry shapes: errorMessage/finalError/success survive to the status line', () => {
+    // pi-coding-agent 0.85.1 emits `errorMessage` (not `error`) on
+    // auto_retry_start, and `{ success, finalError }` (not `willRetry`) on
+    // auto_retry_end. Reading the wrong fields renders a bare "null" where
+    // the provider cause belongs — the exact symptom of a run that retries
+    // three times with no actionable message.
+    const retry = mapAgentSessionEvent(
+      { type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 1000, errorMessage: '401 Unauthorized' },
+      'agentic'
+    );
+    assert.equal(retry.event.type, 'status');
+    assert.match(retry.event.message, /401 Unauthorized/);
+    assert.doesNotMatch(retry.event.message, /null/);
+
+    const failed = mapAgentSessionEvent(
+      { type: 'auto_retry_end', success: false, attempt: 3, finalError: '401 Unauthorized' },
+      'agentic'
+    );
+    assert.equal(failed.event.type, 'status');
+    assert.match(failed.event.message, /401 Unauthorized/);
+    assert.doesNotMatch(failed.event.message, /null/);
+
+    const scheduled = mapAgentSessionEvent(
+      { type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 500, errorMessage: 'stream dropped' },
+      'agentic'
+    );
+    assert.match(scheduled.event.message, /stream dropped/);
+
+    // The summarization attempt events carry a `source` label, not an
+    // attempt number — either way the line must never read "null".
+    const attemptStart = mapAgentSessionEvent(
+      { type: 'summarization_retry_attempt_start', source: 'branchSummary' },
+      'agentic'
+    );
+    assert.doesNotMatch(attemptStart.event.message, /null/);
+    const attemptEnd = mapAgentSessionEvent(
+      { type: 'summarization_retry_attempt_end', source: 'branchSummary' },
+      'agentic'
+    );
+    assert.doesNotMatch(attemptEnd.event.message, /null/);
+  });
+
   it('JSON-safe: emitted payloads survive JSON round-trip without loss or throw', () => {
     const sampleEvents = [
       { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'web_search', args: { query: 'x' } },

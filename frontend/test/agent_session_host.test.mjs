@@ -1,9 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdir } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
@@ -94,6 +94,84 @@ describe('AgentSession host — ADR-0014 construction contract', () => {
         `coding tool "${tool}" was actually granted on the live session`
       );
     }
+  });
+});
+
+describe('AgentSession host - Pi ids drive the session (P2 Pi-only auth)', () => {
+  it('exposes no LENS-to-Pi translation seam', async () => {
+    assert.equal(typeof host.translateLensProviderId, 'undefined', 'the P2 cutover deletes the id-translation seam');
+  });
+
+  it("a Pi-stored 'google' key drives the session - never the preflight placeholder", async () => {
+    // P2 regression shape: auth lives in Pi's `auth.json` (persisted via
+    // `piAuth.savePiChatKey`), requests carry Pi ids only. The session pins
+    // to the requested Pi provider and the stored key arms it — no
+    // per-request overrides, no LENS `gemini` id anywhere.
+    const ambient = { GEMINI_API_KEY: process.env.GEMINI_API_KEY, GOOGLE_API_KEY: process.env.GOOGLE_API_KEY };
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    const agentDir = mkdtempSync(join(tmpdir(), 'lens-agent-'));
+    try {
+      const { __testSeams: authSeams } = await import(
+        pathToFileURL(join(engineRoot, 'piAuth.js')).href
+      );
+      await authSeams.savePiChatKey('google', 'test-key-sentinel', agentDir);
+      const hosted = await host.createResearchSession({
+        sessionId: 't-key-landing',
+        agentDir,
+        provider: 'google',
+      });
+      const model = hosted.session?.model ?? hosted.session?.agent?.state?.model;
+      assert.ok(model, 'the live session carries a model');
+      assert.equal(model.provider, 'google', "the session runs the REQUESTED provider, not ambient auth's pick");
+      assert.notEqual(model.provider, 'lens-offline', 'a stored Pi key must not resolve to the offline placeholder');
+      const facts = await host.describeLastConstruction();
+      assert.equal(facts.offlineFallback, false, 'a stored Pi key counts as a configured provider');
+      const auth = await host.describeLastAuth();
+      assert.equal(auth.provider, model.provider, 'the probe reports the selected model provider');
+      assert.equal(auth.keySource, 'existing', 'the stored Pi key arms the provider - not the preflight placeholder');
+    } finally {
+      if (ambient.GEMINI_API_KEY !== undefined) process.env.GEMINI_API_KEY = ambient.GEMINI_API_KEY;
+      if (ambient.GOOGLE_API_KEY !== undefined) process.env.GOOGLE_API_KEY = ambient.GOOGLE_API_KEY;
+    }
+  });
+
+  it('an explicit model name resolves inside the requested Pi provider', async () => {
+    const ambient = { GEMINI_API_KEY: process.env.GEMINI_API_KEY, GOOGLE_API_KEY: process.env.GOOGLE_API_KEY };
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    const agentDir = mkdtempSync(join(tmpdir(), 'lens-agent-'));
+    try {
+      const { __testSeams: authSeams } = await import(
+        pathToFileURL(join(engineRoot, 'piAuth.js')).href
+      );
+      await authSeams.savePiChatKey('google', 'test-key-sentinel', agentDir);
+      const hosted = await host.createResearchSession({
+        sessionId: 't-model-pick',
+        agentDir,
+        provider: 'google',
+        modelName: 'gemini-2.5-flash',
+      });
+      const model = hosted.session?.model ?? hosted.session?.agent?.state?.model;
+      assert.ok(model, 'the live session carries a model');
+      assert.equal(model.provider, 'google');
+      assert.match(String(model.id), /gemini-2\.5-flash/, 'the requested model id wins over provider defaults');
+    } finally {
+      if (ambient.GEMINI_API_KEY !== undefined) process.env.GEMINI_API_KEY = ambient.GEMINI_API_KEY;
+      if (ambient.GOOGLE_API_KEY !== undefined) process.env.GOOGLE_API_KEY = ambient.GOOGLE_API_KEY;
+    }
+  });
+
+  it('the LENS `gemini` id pins nothing (no translation backdoor)', async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), 'lens-agent-'));
+    const hosted = await host.createResearchSession({
+      sessionId: 't-no-translation',
+      agentDir,
+      provider: 'gemini',
+    });
+    const model = hosted.session?.model ?? hosted.session?.agent?.state?.model;
+    assert.ok(model, 'the live session carries a model');
+    assert.notEqual(model.provider, 'google', 'an untranslated LENS id must not resolve to the Pi provider');
   });
 });
 

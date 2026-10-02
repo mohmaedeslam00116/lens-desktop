@@ -1,6 +1,8 @@
 import React, { useRef } from 'react';
 import { ArrowUp, Loader2, Table2, Boxes, TrendingUp, ShieldCheck, Cpu, Globe, SlidersHorizontal } from 'lucide-react';
 import { Language, ApiSettings, ResearchMode } from '../../types';
+import { AgentInteractionSwitch } from '../harness/AgentInteractionSwitch';
+import type { AgentInteraction } from '../harness/LensHarnessWorkspace';
 
 interface EmptyChatMessageInputProps {
   query: string;
@@ -16,6 +18,9 @@ interface EmptyChatMessageInputProps {
   setSourceFocus: (f: 'web' | 'academic' | 'social') => void;
   researchMode: ResearchMode;
   setResearchMode: (mode: ResearchMode) => void;
+  /** Which loop answers: the agentic default hides research-tuning controls. */
+  interaction: AgentInteraction;
+  onSelectInteraction: (interaction: AgentInteraction) => void;
 }
 
 export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (props) => {
@@ -29,8 +34,17 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
   ];
   const modelLabel = props.settings.custom_model_name || props.settings.model_name || props.settings.llm_provider;
   const submit = () => { if (props.query.trim() && !props.loading) props.onSubmit(); };
+  // The agentic default entry is a clean ask: research-tuning controls
+  // (Standard/Wide, depth, source focus, prefix templates) belong to the
+  // plan-first Deep Research path and stay fully available there.
+  const showResearchTuning = props.interaction === 'deep-research';
   return (
     <div className="research-composer">
+      <AgentInteractionSwitch
+        interaction={props.interaction}
+        onSelect={props.onSelectInteraction}
+        language={props.language}
+      />
       <form className="composer-box" onSubmit={e => { e.preventDefault(); submit(); }}>
         <label htmlFor="research-query" className="sr-only">{ar ? 'سؤال البحث' : 'Research question'}</label>
         <textarea id="research-query" ref={textareaRef} value={props.query} onChange={e => props.setQuery(e.target.value)} rows={3}
@@ -41,6 +55,7 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
           }} />
         <div className="composer-toolbar">
           <div className="composer-options">
+            {showResearchTuning && (
             <fieldset className="composer-select border-0 p-0 flex items-center gap-1" aria-describedby={props.researchMode === 'wide' ? 'wide-research-guidance' : undefined}>
               <legend className="sr-only">{ar ? 'وضع البحث' : 'Research mode'}</legend>
               <label className={`cursor-pointer rounded px-2 py-1 text-xs focus-within:ring-2 focus-within:ring-line-strong focus-within:outline-none ${props.researchMode === 'standard' ? 'bg-hover text-ink' : 'text-muted'}`}>
@@ -52,6 +67,8 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
                 {ar ? 'البحث الموسع' : 'Wide Research'}
               </label>
             </fieldset>
+            )}
+            {showResearchTuning && (
             <label className="composer-select"><SlidersHorizontal size={15} aria-hidden="true" />
               <span className="sr-only">{ar ? 'عمق البحث' : 'Research depth'}</span>
               <select value={props.optimizationMode} onChange={e => props.setOptimizationMode(e.target.value as EmptyChatMessageInputProps['optimizationMode'])}>
@@ -60,6 +77,8 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
                 <option value="quality">{ar ? 'بحث عميق' : 'Deep research'}</option>
               </select>
             </label>
+            )}
+            {showResearchTuning && (
             <label className="composer-select"><Globe size={15} aria-hidden="true" />
               <span className="sr-only">{ar ? 'نطاق المصادر' : 'Source focus'}</span>
               <select value={props.sourceFocus} onChange={e => props.setSourceFocus(e.target.value as EmptyChatMessageInputProps['sourceFocus'])}>
@@ -68,6 +87,7 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
                 <option value="social">{ar ? 'المجتمعات' : 'Community'}</option>
               </select>
             </label>
+            )}
           </div>
           <button className="primary-button" type="submit" disabled={!props.query.trim() || props.loading}>
             <span>{props.loading ? (ar ? 'جارٍ البحث' : 'Researching') : (ar ? 'ابدأ البحث' : 'Research')}</span>
@@ -76,7 +96,8 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
         </div>
       </form>
       <div className="composer-meta"><button onClick={props.onOpenSettings} className="model-control" title={ar ? 'اختيار النموذج' : 'Choose model'}><Cpu size={14} /><bdi>{modelLabel}</bdi></button><span id="composer-hint">{ar ? 'Enter للبحث · Shift + Enter لسطر جديد' : 'Enter to research · Shift + Enter for a new line'}</span></div>
-      {props.researchMode === 'wide' && <p id="wide-research-guidance" className="text-xs text-muted mt-2">{ar ? 'ميزانية الاسترجاع الأولية تصل إلى 100 مصدر، وقد ترتفع تلقائيًا حتى 200 عند بقاء فجوات أدلة. يعرض المؤشر أدناه الأعداد الفعلية.' : 'The initial retrieval budget is up to 100 sources and may rise to 200 only when evidence gaps remain. The telemetry shows actual counts.'}</p>}
+      {props.researchMode === 'wide' && showResearchTuning && <p id="wide-research-guidance" className="text-xs text-muted mt-2">{ar ? 'ميزانية الاسترجاع الأولية تصل إلى 100 مصدر، وقد ترتفع تلقائيًا حتى 200 عند بقاء فجوات أدلة. يعرض المؤشر أدناه الأعداد الفعلية.' : 'The initial retrieval budget is up to 100 sources and may rise to 200 only when evidence gaps remain. The telemetry shows actual counts.'}</p>}
+      {showResearchTuning && (
       <div className="workflow-templates" aria-label={ar ? 'قوالب البحث' : 'Research templates'}>
         <span>{ar ? 'ابدأ بـ' : 'Start with'}</span>
         {templates.map(({ icon: Icon, label, prefix, mode, ...template }) => (
@@ -90,6 +111,7 @@ export const EmptyChatMessageInput: React.FC<EmptyChatMessageInputProps> = (prop
           }}><Icon size={14} aria-hidden="true" />{label}</button>
         ))}
       </div>
+      )}
     </div>
   );
 };

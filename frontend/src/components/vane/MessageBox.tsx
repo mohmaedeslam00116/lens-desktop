@@ -28,7 +28,7 @@ import { FacetGroupedShelf } from '../research/FacetGroupedShelf';
 import { EvidenceInspectionDrawer } from '../research/EvidenceInspectionDrawer';
 import { AgentFeedList } from '../AgentFeedList';
 import { AgentFeedState } from '../../utils/liveFeed';
-import { SourceItem, ResearchStep, Language, ResearchPlan, WideResearchTelemetry } from '../../types';
+import { SourceItem, ResearchStep, Language, ResearchPlan, ResearchGraphNode, WideResearchTelemetry } from '../../types';
 import { WideResearchTelemetry as WideResearchTelemetryPanel } from '../research/WideResearchTelemetry';
 import { extractTables, tableToCSV } from '../../utils/markdownArtifacts';
 
@@ -40,6 +40,8 @@ interface MessageBoxProps {
   loading: boolean;
   language: Language;
   plan?: ResearchPlan | null;
+  /** Reasoning-graph nodes for this session (the graph pill hides when empty). */
+  graphNodes?: ResearchGraphNode[];
   onExport: (format: 'pdf' | 'docx' | 'markdown') => void;
   onFollowUp: (q: string) => void;
   wideTelemetry?: WideResearchTelemetry | null;
@@ -49,6 +51,11 @@ interface MessageBoxProps {
   agentEventCount?: number;
   /** The persisted Agentic Conversation projection (#144), when history holds one. */
   conversationProjection?: import('../../utils/agenticConversation').AgenticConversationProjection | null;
+  /**
+   * Hide the query title: inside the harness the agent session header already
+   * carries the question — a second H1 would duplicate it.
+   */
+  hideQueryHeader?: boolean;
 }
 
 export const MessageBox: React.FC<MessageBoxProps> = ({
@@ -66,6 +73,8 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   agents,
   agentEventCount,
   conversationProjection,
+  hideQueryHeader,
+  graphNodes = [],
 }) => {
   const isArabic = language === 'ar';
   const [viewMode, setViewMode] = useState<'report' | 'shelf' | 'workspace' | 'graph'>('report');
@@ -148,12 +157,15 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
 
   return (
     <div className="w-full max-w-4xl mx-auto px-4 py-8 space-y-7 animate-fadeIn">
-      {/* 1. Query Title Header */}
-      <div className="space-y-2 pb-2">
-        <h1 className="text-2xl sm:text-3xl font-semibold text-slate-100 tracking-tight leading-relaxed">
-          {query}
-        </h1>
-      </div>
+      {/* 1. Query Title Header (hidden inside the harness — the agent session
+          header already carries the question). */}
+      {!hideQueryHeader && (
+        <div className="space-y-2 pb-2">
+          <h1 className="text-2xl sm:text-3xl font-semibold text-slate-100 tracking-tight leading-relaxed">
+            {query}
+          </h1>
+        </div>
+      )}
 
       {/* 2. Perplexity-Style Research Radar & Progressive Reasoning Timeline */}
       <PerplexityRadar 
@@ -222,6 +234,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
                 )}
               </button>
 
+              {(graphNodes.length > 0 || loading) && (
               <button
                 type="button"
                 onClick={() => setViewMode('graph')}
@@ -234,6 +247,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
                 <Network className="w-3.5 h-3.5 text-accent" />
                 <span>{isArabic ? 'خريطة المعرفة' : 'Reasoning Graph'}</span>
               </button>
+              )}
             </div>
 
             {/* Document Export Actions */}
@@ -351,11 +365,11 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
           )}
 
           {viewMode === 'graph' && (
-            <GraphView 
-              graphNodes={[]} 
-              query={query} 
-              loading={loading} 
-              language={language} 
+            <GraphView
+              graphNodes={graphNodes}
+              query={query}
+              loading={loading}
+              language={language}
             />
           )}
         </div>

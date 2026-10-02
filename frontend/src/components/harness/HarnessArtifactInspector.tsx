@@ -1,7 +1,9 @@
 import React from 'react';
-import { BookOpen, FileText, ListTree, Network, X } from 'lucide-react';
+import { BookOpen, FileText, ListTree, MessagesSquare, Network, X } from 'lucide-react';
 import type { Language, ResearchGraphNode, ResearchPlan, SourceItem } from '../../types';
+import type { AgenticConversationProjection } from '../../utils/agenticConversation';
 import type { HarnessArtifactTab } from '../../utils/harnessWorkspace';
+import { AgenticConversation } from '../vane/AgenticConversation';
 
 interface HarnessArtifactInspectorProps {
   availableTabs: HarnessArtifactTab[];
@@ -13,6 +15,8 @@ interface HarnessArtifactInspectorProps {
   sources: SourceItem[];
   report: string;
   graphNodes: ResearchGraphNode[];
+  /** The persisted Agentic Conversation projection (#144), when this session holds one. */
+  conversationProjection?: AgenticConversationProjection | null;
 }
 
 const tabMeta: Record<HarnessArtifactTab, { en: string; ar: string; icon: typeof ListTree }> = {
@@ -20,6 +24,7 @@ const tabMeta: Record<HarnessArtifactTab, { en: string; ar: string; icon: typeof
   evidence: { en: 'Evidence', ar: 'الأدلة', icon: BookOpen },
   report: { en: 'Report', ar: 'التقرير', icon: FileText },
   graph: { en: 'Graph', ar: 'الخريطة', icon: Network },
+  conversation: { en: 'Conversation', ar: 'المحادثة', icon: MessagesSquare },
 };
 
 /** A compact companion to the canvas: it never invents an unavailable artifact. */
@@ -33,6 +38,7 @@ export const HarnessArtifactInspector: React.FC<HarnessArtifactInspectorProps> =
   sources,
   report,
   graphNodes,
+  conversationProjection,
 }) => {
   if (availableTabs.length === 0) return null;
 
@@ -84,13 +90,28 @@ export const HarnessArtifactInspector: React.FC<HarnessArtifactInspectorProps> =
             <p className="harness-artifact-summary">
               {ar ? `${sources.length} مصدر متاح لهذه الجلسة` : `${sources.length} sources available in this session`}
             </p>
-            <ol>
-              {sources.map((source, index) => (
-                <li key={`${source.url}-${index}`}>
-                  <strong>{source.title || source.domain || source.url}</strong>
-                  {source.url && <bdi dir="ltr">{source.domain || source.url}</bdi>}
-                </li>
-              ))}
+            <ol className="harness-evidence-list">
+              {sources.map((source, index) => {
+                // Credibility arrives on two scales (engine scores 0–100,
+                // renderer defaults 0–1) — normalize for display only.
+                const rawCredibility = source.credibility ?? source.credibilityScore;
+                const credibilityPct =
+                  typeof rawCredibility === 'number'
+                    ? Math.round(rawCredibility > 1 ? rawCredibility : rawCredibility * 100)
+                    : null;
+                return (
+                  <li key={`${source.url}-${index}`}>
+                    <strong>{source.title || source.domain || source.url}</strong>
+                    {source.url && <bdi dir="ltr">{source.domain || source.url}</bdi>}
+                    {source.snippet && <p dir="auto">{source.snippet}</p>}
+                    {credibilityPct !== null && (
+                      <span className="harness-evidence-credibility">
+                        {ar ? `الموثوقية ${credibilityPct}٪` : `Credibility ${credibilityPct}%`}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ol>
           </section>
         )}
@@ -113,6 +134,10 @@ export const HarnessArtifactInspector: React.FC<HarnessArtifactInspectorProps> =
               {graphNodes.slice(0, 8).map((node) => <li key={node.id}>{node.label}</li>)}
             </ol>
           </section>
+        )}
+
+        {selectedTab === 'conversation' && (
+          <AgenticConversation projection={conversationProjection ?? null} language={language} />
         )}
       </div>
     </aside>

@@ -1,13 +1,15 @@
 import type { ResearchGraphNode, ResearchPlan, SourceItem } from '../types';
 import type { AgentFeedState } from './liveFeed';
 
-export type HarnessArtifactTab = 'plan' | 'evidence' | 'report' | 'graph';
+export type HarnessArtifactTab = 'plan' | 'evidence' | 'report' | 'graph' | 'conversation';
 
 export interface HarnessArtifactInput {
   plan?: ResearchPlan | null;
   sources: SourceItem[];
   report: string;
   graphNodes: ResearchGraphNode[];
+  /** True when a persisted Agentic Conversation projection is available to replay. */
+  conversation?: boolean;
 }
 
 export interface HarnessSessionInput {
@@ -27,12 +29,14 @@ export function availableHarnessArtifacts({
   sources,
   report,
   graphNodes,
+  conversation,
 }: HarnessArtifactInput): HarnessArtifactTab[] {
   return [
     ...(plan ? ['plan' as const] : []),
     ...(sources.length > 0 ? ['evidence' as const] : []),
     ...(report.trim() ? ['report' as const] : []),
     ...(graphNodes.length > 0 ? ['graph' as const] : []),
+    ...(conversation ? ['conversation' as const] : []),
   ];
 }
 

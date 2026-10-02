@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   X, 
   Cpu, 
@@ -20,10 +20,8 @@ import {
   Sparkles,
   Layers
 } from 'lucide-react';
-import { Language, ApiSettings, LLMProvider, ModelOption } from '../types';
+import { Language, ApiSettings, LLMProvider, EmbeddingProvider, ModelOption } from '../types';
 import { useDialogFocus } from '../hooks/useDialogFocus';
-
-const API_BASE = 'http://127.0.0.1:8000';
 
 interface SettingsModalProps {
   language: Language;
@@ -31,10 +29,12 @@ interface SettingsModalProps {
   onClose: () => void;
   settings: ApiSettings;
   onSave: (settings: ApiSettings) => void;
+  /** Resolved engine base URL from the preload bridge; null when the engine failed to start (no guessed port). */
+  apiBase: string | null;
 }
 
 const PROVIDER_CONSOLES: Record<string, string> = {
-  gemini: 'https://aistudio.google.com/app/apikey',
+  google: 'https://aistudio.google.com/app/apikey',
   openai: 'https://platform.openai.com/api-keys',
   anthropic: 'https://console.anthropic.com/settings/keys',
   groq: 'https://console.groq.com/keys',
@@ -50,6 +50,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   settings,
   onSave,
+  apiBase,
 }) => {
   const isArabic = language === 'ar';
   const dialogRef = useDialogFocus(isOpen, onClose);
@@ -57,33 +58,126 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const ensureEmbedding = (s: ApiSettings): ApiSettings => {
     if (!s.embedding) {
-      const p = s.llm_provider === 'openai' ? 'openai' : s.llm_provider === 'ollama' ? 'ollama' : 'gemini';
-      const m = p === 'gemini' ? 'text-embedding-004' : p === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text';
+      const p = s.llm_provider === 'openai' ? 'openai' : s.llm_provider === 'ollama' ? 'ollama' : 'google';
+      const m = p === 'google' ? 'text-embedding-004' : p === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text';
       return {
         ...s,
         embedding: {
           enabled: true,
           provider: p,
           model_name: m,
-          use_chat_key: true,
-          endpoint: s.ollama_endpoint || 'http://localhost:11434'
         }
       };
     }
-    return s;
+    // P3/P4: scrub legacy plaintext (`api_key`, `use_chat_key`, `endpoint`)
+    // and the legacy `gemini` provider id — Pi owns embedding credentials
+    // under `google` and the endpoint under the `models.json` overlay.
+    const raw = s.embedding as unknown as Record<string, unknown>;
+    const cleaned: ApiSettings['embedding'] = {
+      enabled: raw.enabled !== false,
+      provider: ((raw.provider as string) === 'gemini' ? 'google' : raw.provider) as EmbeddingProvider,
+      model_name: typeof raw.model_name === 'string' ? raw.model_name : 'text-embedding-004',
+      ...(typeof raw.custom_model_name === 'string' ? { custom_model_name: raw.custom_model_name } : {}),
+    };
+    return { ...s, embedding: cleaned };
   };
 
   const [current, setCurrent] = useState<ApiSettings>(() => ensureEmbedding(settings));
   const [showKey, setShowKey] = useState(false);
-  const [showEmbeddingKey, setShowEmbeddingKey] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Model discovery & filtering state
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
-  const [selectedTag, setSelectedTag] = useState<'all' | 'recommended' | 'reasoning' | 'fast'>('all');
   const [allowCustomModel, setAllowCustomModel] = useState(false);
+
+  // Pi catalog state (tracer P1): providers, models, and auth standing come
+  // from the Pi runtime, never from LENS-owned lists or catalog fetchers.
+  interface PiCatalogEntry {
+    id: string;
+    name: string;
+    models: { id: string; name: string }[];
+    auth: { configured: boolean; source: string | null };
+  }
+  const [piProviders, setPiProviders] = useState<PiCatalogEntry[]>([]);
+  const [isLoadingPi, setIsLoadingPi] = useState(false);
+  const [piError, setPiError] = useState('');
+
+  // P2: state speaks Pi ids directly (`google`, never LENS `gemini`) —
+  // requests carry Pi ids only and keys never enter `ApiSettings`.
+  // The providers LENS configures (key console links + key slots below).
+  // Rendered with Pi names; a Pi-unknown id renders no pill — an
+  // unconfigurable provider must not present itself as one.
+  const SUPPORTED_PI_IDS = ['google', 'openai', 'anthropic', 'groq', 'deepseek', 'openrouter', 'mistral', 'ollama'] as const;
+
+  // Transient key inputs (tracer P2): chat keys live in Pi's `auth.json`,
+  // never in `ApiSettings` or localStorage. The inputs hold the key only
+  // until Save persists it via `POST /api/pi/auth`, then clear.
+  const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
+  const [isSavingPi, setIsSavingPi] = useState(false);
+  const [piSaveError, setPiSaveError] = useState('');
+
+  // Persisted Ollama overlay status (tracer P4): the endpoint + probed
+  // models from Pi's `models.json` — the file truth Save writes and the
+  // catalog, guards, and transports read.
+  const [piOllama, setPiOllama] = useState<{ endpoint: string | null; models: { id: string; name: string }[] } | null>(null);
+
+  /** (Re)load the Pi catalog snapshot plus the persisted Ollama overlay. */
+  const refreshPiCatalog = async () => {
+    if (!apiBase) {
+      setPiProviders([]);
+      setPiOllama(null);
+      setIsLoadingPi(false);
+      setPiError('Research engine unavailable.');
+      return [];
+    }
+    setIsLoadingPi(true);
+    setPiError('');
+    try {
+      const [catalogRes, authRes, ollamaRes] = await Promise.all([
+        fetch(`${apiBase}/api/pi/providers`),
+        fetch(`${apiBase}/api/pi/auth-status`),
+        fetch(`${apiBase}/api/pi/ollama`),
+      ]);
+      if (!catalogRes.ok || !authRes.ok) throw new Error(`Pi catalog answered ${catalogRes.status}/${authRes.status}.`);
+      const catalog = await catalogRes.json();
+      const auth = await authRes.json();
+      const standing = new Map((auth.providers || []).map((e: any) => [e.id, e]));
+      const entries: PiCatalogEntry[] = (catalog.providers || [])
+        .filter((p: any) => typeof p?.id === 'string')
+        .map((p: any) => ({
+          id: p.id,
+          name: typeof p.name === 'string' && p.name ? p.name : p.id,
+          models: Array.isArray(p.models) ? p.models.filter((m: any) => typeof m?.id === 'string') : [],
+          auth: (() => {
+            const s: any = standing.get(p.id);
+            return {
+              configured: s?.configured === true,
+              source: typeof s?.source === 'string' ? s.source : null,
+            };
+          })(),
+        }));
+      setPiProviders(entries);
+      try {
+        const ollama = ollamaRes.ok ? await ollamaRes.json() : null;
+        setPiOllama(
+          ollama && typeof ollama === 'object'
+            ? { endpoint: typeof ollama.endpoint === 'string' ? ollama.endpoint : null, models: Array.isArray(ollama.models) ? ollama.models : [] }
+            : null
+        );
+      } catch {
+        setPiOllama(null);
+      }
+      return entries;
+    } catch (err: any) {
+      setPiProviders([]);
+      setPiError(err?.message || 'Pi catalog unavailable.');
+      return [];
+    } finally {
+      setIsLoadingPi(false);
+    }
+  };
 
   // Embedding discovery & test state
   const [availableEmbeddingModels, setAvailableEmbeddingModels] = useState<ModelOption[]>([]);
@@ -102,37 +196,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; latency_ms?: number; message?: string; error?: string } | null>(null);
 
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const embedDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-
   // Keep current in sync with props
   useEffect(() => {
     setCurrent(ensureEmbedding(settings));
   }, [settings, isOpen]);
 
   const activeApiKey = useMemo(() => {
-    return (current.keys[current.llm_provider as keyof ApiSettings['keys']] || '').trim();
-  }, [current.keys, current.llm_provider]);
+    return (keyInputs[current.llm_provider] || '').trim();
+  }, [keyInputs, current.llm_provider]);
 
-  const activeEmbeddingApiKey = useMemo(() => {
-    const provider = current.embedding?.provider || 'gemini';
-    if (current.embedding?.use_chat_key !== false) {
-      return (current.keys[provider as keyof ApiSettings['keys']] || '').trim();
-    }
-    return (current.embedding?.api_key || '').trim();
-  }, [current.embedding, current.keys]);
-
-  const fetchEmbeddingModelsDynamically = async (provider: string, apiKey: string, endpoint: string) => {
-    if (provider !== 'ollama' && !apiKey) {
+  // P3: embedding credentials live in Pi (`auth.json`) under the Pi provider
+  // id — the tab holds no key input and sends no key. Standing comes from the
+  // Pi catalog snapshot (`piProviders` below) by direct id match.
+  const fetchEmbeddingModelsDynamically = async (provider: string) => {
+    if (!apiBase) {
       setAvailableEmbeddingModels([]);
       setIsLoadingEmbeddingModels(false);
       return;
     }
     setIsLoadingEmbeddingModels(true);
     try {
-      const epParam = encodeURIComponent(endpoint || 'http://localhost:11434');
-      const keyParam = encodeURIComponent(apiKey || '');
-      const res = await fetch(`${API_BASE}/api/models?type=embedding&provider=${provider}&endpoint=${epParam}&api_key=${keyParam}`);
+      const res = await fetch(`${apiBase}/api/models?type=embedding&provider=${provider}`);
       if (res.ok) {
         const data = await res.json();
         const models: ModelOption[] = data.models || [];
@@ -144,7 +228,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             setCurrent(prev => ({
               ...prev,
               embedding: {
-                ...(prev.embedding || { enabled: true, provider: provider as any, use_chat_key: true }),
+                ...(prev.embedding || { enabled: true, provider: provider as EmbeddingProvider }),
                 model_name: defaultModel.id
               }
             }));
@@ -162,45 +246,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || activeTab !== 'embeddings') return;
-    const provider = current.embedding?.provider || 'gemini';
-    const endpoint = current.embedding?.endpoint || current.ollama_endpoint;
-
-    if (embedDebounceTimerRef.current) {
-      clearTimeout(embedDebounceTimerRef.current);
-    }
-
-    if (provider === 'ollama') {
-      fetchEmbeddingModelsDynamically('ollama', '', endpoint);
-    } else if (activeEmbeddingApiKey) {
-      embedDebounceTimerRef.current = setTimeout(() => {
-        fetchEmbeddingModelsDynamically(provider, activeEmbeddingApiKey, endpoint);
-      }, 400);
-    } else {
-      setAvailableEmbeddingModels([]);
-      setIsLoadingEmbeddingModels(false);
-    }
-
+    const provider = current.embedding?.provider || 'google';
+    // Keyless listing (tracer P4): the provider decides the list — cloud
+    // providers resolve Pi-stored auth server-side, Ollama probes the
+    // persisted Pi endpoint. No endpoint travels the query string.
+    fetchEmbeddingModelsDynamically(provider);
     setEmbeddingTestResult(null);
-
-    return () => {
-      if (embedDebounceTimerRef.current) clearTimeout(embedDebounceTimerRef.current);
-    };
-  }, [current.embedding?.provider, activeEmbeddingApiKey, current.embedding?.endpoint, current.ollama_endpoint, isOpen, activeTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current.embedding?.provider, isOpen, activeTab]);
 
   const handleTestEmbeddingConnection = async () => {
     setIsTestingEmbedding(true);
     setEmbeddingTestResult(null);
+    if (!apiBase) {
+      setEmbeddingTestResult({ success: false, error: isArabic ? 'محرك البحث غير متاح.' : 'Research engine unavailable.' });
+      setIsTestingEmbedding(false);
+      return;
+    }
     try {
-      const provider = current.embedding?.provider || 'gemini';
-      const endpoint = current.embedding?.endpoint || current.ollama_endpoint;
+      const provider = current.embedding?.provider || 'google';
       const modelName = current.embedding?.custom_model_name || current.embedding?.model_name;
-      const res = await fetch(`${API_BASE}/api/models/test-embedding`, {
+      // Pi ids on the wire; the credential and endpoint resolve from Pi
+      // truth server-side — the body carries no keys or endpoints, ever.
+      const res = await fetch(`${apiBase}/api/models/test-embedding`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider,
-          api_key: activeEmbeddingApiKey,
-          endpoint,
           model_name: modelName
         })
       });
@@ -213,126 +285,68 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  // Function to fetch models dynamically
-  const fetchModelsDynamically = async (provider: string, apiKey: string, endpoint: string) => {
-    // If not Ollama and no key is provided, models must be strictly empty!
-    if (provider !== 'ollama' && !apiKey) {
-      setAvailableModels([]);
-      setIsLoadingModels(false);
-      return;
-    }
-
-    setIsLoadingModels(true);
-    try {
-      const epParam = encodeURIComponent(endpoint || 'http://localhost:11434');
-      const keyParam = encodeURIComponent(apiKey);
-      const res = await fetch(`${API_BASE}/api/models?provider=${provider}&endpoint=${epParam}&api_key=${keyParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        const models: ModelOption[] = data.models || [];
-        setAvailableModels(models);
-
-        // Auto-select first recommended model if current model_name is empty or not in list
-        if (models.length > 0) {
-          const modelExists = models.some(m => m.id === current.model_name);
-          if (!modelExists || !current.model_name) {
-            const defaultModel = models.find(m => m.recommended) || models[0];
-            setCurrent(prev => ({ ...prev, model_name: defaultModel.id }));
-          }
-        }
-      } else {
-        setAvailableModels([]);
-      }
-    } catch (err) {
-      console.warn('Failed to fetch models dynamically:', err);
-      setAvailableModels([]);
-    } finally {
-      setIsLoadingModels(false);
-    }
-  };
-
-  // Trigger dynamic model fetch on provider change or when user edits the API key
+  // Chat models come from the Pi catalog snapshot (keyless, offline) — the
+  // provider the user picked decides the list, never a per-key fetch.
+  // Ollama lists from the persisted Pi overlay (tracer P4).
   useEffect(() => {
     if (!isOpen) return;
+    refreshPiCatalog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
+  // Derive the model list from the Pi entry; auto-select the first model
+  // when the stored one is absent from the Pi catalog (e.g. retired id).
+  useEffect(() => {
+    const entry = piProviders.find((p) => p.id === current.llm_provider);
+    const models: ModelOption[] = (entry?.models || []).map((m) => ({ id: m.id, name: m.name }));
+    setAvailableModels(models);
+    setIsLoadingModels(false);
+    if (models.length > 0) {
+      const exists = models.some((m) => m.id === current.model_name);
+      if (!exists || !current.model_name) {
+        const first = models[0];
+        setCurrent((prev) => ({ ...prev, model_name: first.id }));
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [piProviders, current.llm_provider]);
 
-    if (current.llm_provider === 'ollama') {
-      fetchModelsDynamically('ollama', '', current.ollama_endpoint);
-    } else if (activeApiKey) {
-      // Debounce slightly to avoid firing on every keystroke
-      debounceTimerRef.current = setTimeout(() => {
-        fetchModelsDynamically(current.llm_provider, activeApiKey, current.ollama_endpoint);
-      }, 500);
-    } else {
-      // Strictly empty when no key is entered
-      setAvailableModels([]);
-      setIsLoadingModels(false);
-    }
-
-    setTestResult(null);
-
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    };
-  }, [current.llm_provider, activeApiKey, current.ollama_endpoint, isOpen]);
-
-  // Filter models based on search query and category tags
+  // Filter models by search query only — Pi catalogs carry no LENS tag
+  // metadata (recommended/reasoning/fast pills retired with the old fetcher).
   const filteredModels = useMemo(() => {
-    let list = availableModels;
-
-    if (selectedTag === 'recommended') {
-      list = list.filter(m => m.recommended);
-    } else if (selectedTag === 'reasoning') {
-      list = list.filter(m => 
-        m.id.includes('r1') || m.id.includes('o1') || m.id.includes('o3') || 
-        m.id.includes('thinking') || m.id.includes('reasoner') ||
-        m.tags?.some(t => t.toLowerCase().includes('reasoning'))
-      );
-    } else if (selectedTag === 'fast') {
-      list = list.filter(m => 
-        m.id.includes('flash') || m.id.includes('mini') || m.id.includes('instant') ||
-        m.tags?.some(t => t.toLowerCase().includes('speed') || t.toLowerCase().includes('fast'))
-      );
-    }
-
-    if (!modelSearch.trim()) return list;
-
+    if (!modelSearch.trim()) return availableModels;
     const q = modelSearch.toLowerCase().trim();
-    return list.filter(m => 
-      m.id.toLowerCase().includes(q) || 
-      m.name.toLowerCase().includes(q) ||
-      m.tags?.some(t => t.toLowerCase().includes(q))
+    return availableModels.filter(
+      (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
     );
-  }, [availableModels, modelSearch, selectedTag]);
+  }, [availableModels, modelSearch]);
 
   if (!isOpen) return null;
 
-  const providers: { id: LLMProvider; name: string; tag: string }[] = [
-    { id: 'gemini', name: 'Google Gemini', tag: 'Recommended' },
-    { id: 'openai', name: 'OpenAI', tag: 'GPT-4o / o3' },
-    { id: 'anthropic', name: 'Anthropic Claude', tag: '3.7 Sonnet' },
-    { id: 'groq', name: 'Groq LPU', tag: 'Ultra-Fast' },
-    { id: 'deepseek', name: 'DeepSeek', tag: 'V3 / R1' },
-    { id: 'openrouter', name: 'OpenRouter', tag: 'Dynamic Catalog' },
-    { id: 'mistral', name: 'Mistral AI', tag: 'Europe' },
-    { id: 'ollama', name: 'Ollama', tag: 'Local Offline' },
-  ];
+  const piEntryFor = (piId: string) => piProviders.find((p) => p.id === piId);
+  const currentProviderName = piEntryFor(current.llm_provider)?.name || current.llm_provider;
 
   const handleTestConnection = async () => {
     setIsTesting(true);
     setTestResult(null);
+    if (!apiBase) {
+      setTestResult({ success: false, error: isArabic ? 'محرك البحث غير متاح.' : 'Research engine unavailable.' });
+      setIsTesting(false);
+      return;
+    }
     try {
-      const res = await fetch(`${API_BASE}/api/models/test`, {
+      // Pi ids on the wire: the test proves the exact provider+model the
+      // runtime will use, on Pi transport. A typed key arms the probe
+      // transiently; absent a key, the stored Pi credential drives it — so
+      // Test proves the saved configuration too. Ollama resolves the
+      // persisted Pi endpoint (tracer P4) — the body carries no endpoint.
+      const res = await fetch(`${apiBase}/api/pi/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: current.llm_provider,
-          api_key: activeApiKey,
-          endpoint: current.ollama_endpoint,
-          model_name: current.model_name
+          model: current.model_name || undefined,
+          apiKey: activeApiKey || undefined,
         }),
       });
       const data = await res.json();
@@ -344,22 +358,106 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleSave = () => {
-    onSave(current);
-    // Settings → web-search.json write-through (ADR-0013 D2/D7, #112): keyed
-    // search providers become opt-in via the vendored config the engine reads.
-    // Fire-and-forget: the local write must not block or fail the settings
-    // save; the response carries only a redacted summary — never key material.
-    fetch(`${API_BASE}/api/settings/search-keys`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keys: { tavily: current.keys.tavily || '', serper: current.keys.serper || '' } }),
-    }).catch(() => { /* engine unreachable: keys persist in LENS settings only */ });
-    setSavedSuccess(true);
-    setTimeout(() => {
-      setSavedSuccess(false);
-      onClose();
-    }, 500);
+  const handleSave = async () => {
+    setPiSaveError('');
+    if (!apiBase) {
+      setPiSaveError(isArabic ? 'محرك البحث غير متاح.' : 'Research engine unavailable.');
+      return;
+    }
+    setIsSavingPi(true);
+    // Local (not state): whether the Ollama persist warned — state setters
+    // do not re-render synchronously, so the close decision reads this.
+    let ollamaWarned = false;
+    try {
+      // Pi owns chat auth + defaults (tracer P2): the typed key persists via
+      // `POST /api/pi/auth` (empty = leave stored), the provider/model via
+      // `POST /api/pi/defaults`. `onSave` persists only the slimmed
+      // `ApiSettings` (no chat keys, Pi ids).
+      const typedKey = activeApiKey;
+      if (typedKey && current.llm_provider !== 'ollama') {
+        const authRes = await fetch(`${apiBase}/api/pi/auth`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: current.llm_provider, apiKey: typedKey }),
+        });
+        const authData = await authRes.json().catch(() => ({}));
+        if (!authRes.ok || authData.success === false) {
+          throw new Error(authData.error || `Pi rejected the ${current.llm_provider} key.`);
+        }
+      }
+      // Pi owns the Ollama endpoint (tracer P4): persist the Local-tab value
+      // into the `models.json` overlay. Only when it differs from Pi truth
+      // (avoids re-probing an unchanged server); a down server warns without
+      // blocking the rest of the save.
+      const ollamaEndpoint = (current.ollama_endpoint || '').trim();
+      if (ollamaEndpoint && ollamaEndpoint !== (piOllama?.endpoint || '').trim()) {
+        try {
+          const olRes = await fetch(`${apiBase}/api/pi/ollama`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ endpoint: ollamaEndpoint }),
+          });
+          const olData = await olRes.json().catch(() => ({}));
+          if (!olRes.ok || olData.success === false) {
+            throw new Error(olData.error || 'Pi rejected the Ollama endpoint.');
+          }
+          if (olData.warning) {
+            ollamaWarned = true;
+            setPiSaveError(
+              isArabic
+                ? `تم حفظ الإعدادات، لكن Ollama غير reachable: ${olData.warning}`
+                : `Settings saved, but Ollama is unreachable: ${olData.warning}`
+            );
+          }
+        } catch (err: any) {
+          // A down/probe-failing server must never block saving everything
+          // else — the admission guard reports it bilingually at run time.
+          ollamaWarned = true;
+          setPiSaveError(
+            isArabic
+              ? `تم حفظ الإعدادات، لكن تعذر حفظ Ollama: ${err?.message || 'unknown error'}`
+              : `Settings saved, but the Ollama endpoint did not persist: ${err?.message || 'unknown error'}`
+          );
+        }
+      }
+      const defRes = await fetch(`${apiBase}/api/pi/defaults`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: current.llm_provider,
+          model: current.model_name || undefined,
+        }),
+      });
+      const defData = await defRes.json().catch(() => ({}));
+      if (!defRes.ok || defData.success === false) {
+        throw new Error(defData.error || 'Pi rejected the default provider/model.');
+      }
+      onSave(current);
+      setKeyInputs((prev) => ({ ...prev, [current.llm_provider]: '' }));
+      // Settings → web-search.json write-through (ADR-0013 D2/D7, #112): keyed
+      // search providers become opt-in via the vendored config the engine reads.
+      // Fire-and-forget: the local write must not block or fail the settings
+      // save; the response carries only a redacted summary — never key material.
+      fetch(`${apiBase}/api/settings/search-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: { tavily: current.keys.tavily || '', serper: current.keys.serper || '' } }),
+      }).catch(() => { /* engine unreachable: keys persist in LENS settings only */ });
+      setSavedSuccess(true);
+      // Refresh Pi truth so pills/standing reflect the save; an Ollama
+      // warning keeps the dialog open so it is actually read.
+      refreshPiCatalog().catch(() => { /* best-effort */ });
+      if (!ollamaWarned) {
+        setTimeout(() => {
+          setSavedSuccess(false);
+          onClose();
+        }, 500);
+      }
+    } catch (err: any) {
+      setPiSaveError(err?.message || 'Pi save failed.');
+    } finally {
+      setIsSavingPi(false);
+    }
   };
 
   const navItems = [
@@ -369,8 +467,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     { id: 'local' as const, label: isArabic ? 'الذكاء الاصطناعي المحلي' : 'Local Ollama', icon: HardDrive },
     { id: 'preferences' as const, label: isArabic ? 'التفضيلات والنظام' : 'Preferences', icon: Sliders },
   ];
-
-  const currentProviderName = providers.find(p => p.id === current.llm_provider)?.name || current.llm_provider;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80  select-none animate-fadeIn">
@@ -453,19 +549,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {/* TAB 1: AI MODELS & PROVIDERS */}
               {activeTab === 'models' && (
                 <div className="space-y-4">
-                  {/* Provider Pills */}
+                  {/* Provider Pills — Pi providers LENS configures, named by Pi */}
                   <div className="space-y-1.5">
                     <label className="text-slate-300 font-medium">{isArabic ? 'اختر المزود' : 'Select Provider'}</label>
+                    {piError && (
+                      <p className="text-[11px] text-rose-400" role="alert">
+                        {isArabic ? `تعذر تحميل مزودي Pi: ${piError}` : `Pi catalog unavailable: ${piError}`}
+                      </p>
+                    )}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {providers.map((p) => {
-                        const isSelected = current.llm_provider === p.id;
+                      {SUPPORTED_PI_IDS.map((piId) => {
+                        const entry = piEntryFor(piId);
+                        if (!entry) return null;
+                        const isSelected = current.llm_provider === piId;
+                        const standing = entry.auth.configured
+                          ? (isArabic ? 'مُعد' : 'Ready')
+                          : (isArabic ? 'يحتاج مفتاحًا' : 'Needs key');
                         return (
                           <button
-                            key={p.id}
+                            key={piId}
                             type="button"
                             onClick={() => {
-                              setCurrent(prev => ({ ...prev, llm_provider: p.id }));
-                              setAvailableModels([]);
+                              setCurrent(prev => ({ ...prev, llm_provider: piId as LLMProvider }));
                               setModelSearch('');
                             }}
                             className={`p-2.5 rounded-xl border text-left rtl:text-right transition ${
@@ -474,8 +579,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 : 'bg-surface border-white/5 text-slate-300 hover:bg-hover'
                             }`}
                           >
-                            <p className="text-xs truncate font-medium">{p.name}</p>
-                            <p className="text-[10px] text-slate-500 truncate mt-0.5">{p.tag}</p>
+                            <p className="text-xs truncate font-medium">{entry.name}</p>
+                            <p className="text-[10px] text-slate-500 truncate mt-0.5">{standing}</p>
                           </button>
                         );
                       })}
@@ -517,33 +622,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="relative">
                         <input
                           type={showKey ? 'text' : 'password'}
-                          value={current.keys[current.llm_provider as keyof ApiSettings['keys']] || ''}
+                          value={keyInputs[current.llm_provider] || ''}
                           onChange={(e) => {
                             const val = e.target.value;
-                            setCurrent(prev => ({
-                              ...prev,
-                              keys: { ...prev.keys, [current.llm_provider]: val }
-                            }));
+                            setKeyInputs((prev) => ({ ...prev, [current.llm_provider]: val }));
                           }}
-                          placeholder={isArabic ? 'الصق مفتاح الـ API هنا لسحب النماذج تلقائياً...' : 'Paste your API key here to pull all models automatically...'}
+                          placeholder={(() => {
+                            const standing = piEntryFor(current.llm_provider)?.auth.configured === true;
+                            if (standing) {
+                              return isArabic
+                                ? 'المفتاح محفوظ في Pi — اتركه فارغًا للإبقاء، أو الصق مفتاحًا جديدًا للاستبدال...'
+                                : 'Key stored in Pi — leave empty to keep, or paste a new key to replace...';
+                            }
+                            return isArabic ? 'الصق مفتاح الـ API هنا...' : 'Paste your API key here...';
+                          })()}
                           aria-label={isArabic ? 'مفتاح API' : 'API key'}
                           className="w-full bg-canvas border border-white/10 rounded-xl px-3.5 py-2.5 text-slate-200 placeholder:text-muted font-mono text-xs focus:outline-none focus:border-accent/50 transition pr-24 rtl:pr-3.5 rtl:pl-24"
                         />
                         <button
                           type="button"
-                          disabled={!activeApiKey || isLoadingModels}
-                          onClick={() => fetchModelsDynamically(current.llm_provider, activeApiKey, current.ollama_endpoint)}
+                          disabled={isLoadingPi}
+                          onClick={() => refreshPiCatalog()}
                           className="absolute right-2 rtl:right-auto rtl:left-2 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-30 text-[10px] font-medium text-slate-300 flex items-center gap-1 transition"
                         >
-                          <RotateCcw className={`w-3 h-3 ${isLoadingModels ? 'animate-spin text-accent' : ''}`} />
+                          <RotateCcw className={`w-3 h-3 ${isLoadingPi ? 'animate-spin text-accent' : ''}`} />
                           <span>{isArabic ? 'تحديث' : 'Refresh'}</span>
                         </button>
                       </div>
 
                       <p className="text-[10px] text-slate-500 flex items-center gap-1.5">
                         <Key className="w-3 h-3 text-muted shrink-0" />
-                        <span>{isArabic ? 'تُحفظ المفاتيح محليًا في إعدادات التطبيق، ويستخدمها محرك البحث للاتصال بالمزود المختار.' : 'Keys are saved locally in app settings and used by the research engine to connect to your selected provider.'}</span>
+                        <span>{isArabic ? 'تُحفظ المفاتيح في مخزن Pi الآمن (auth.json)، ولا تغادر جهازك أو تُخزن في الإعدادات.' : 'Keys persist in Pi\u2019s secure store (auth.json) — never in app settings or localStorage.'}</span>
                       </p>
+                      {piSaveError && (
+                        <p className="text-[11px] text-rose-400" role="alert">{piSaveError}</p>
+                      )}
                     </div>
                   )}
 
@@ -586,30 +699,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </p>
                       </div>
                     ) : availableModels.length === 0 ? (
-                      /* STRICT EMPTY STATE (As requested: empty by default until key is placed) */
+                      /* Empty: the Pi entry holds no models (Ollama unreachable/empty,
+                         or the catalog failed) — never an invented list. */
                       <div className="py-8 px-4 rounded-xl border border-dashed border-white/10 bg-canvas/40 text-center space-y-3">
                         <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 mx-auto flex items-center justify-center">
                           <Key className="w-5 h-5" />
                         </div>
                         <div>
                           <h4 className="text-xs font-semibold text-slate-200">
-                            {current.llm_provider === 'ollama' 
+                            {current.llm_provider === 'ollama'
                               ? (isArabic ? 'لا توجد نماذج Ollama محلية مكتشفة' : 'No local Ollama models found')
-                              : (isArabic ? 'بانتظار إدخال مفتاح الـ API' : 'Awaiting API Key')}
+                              : (isArabic ? 'لا توجد نماذج في كتالوج Pi لهذا المزود' : 'Pi catalog holds no models for this provider')}
                           </h4>
                           <p className="text-[11px] text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
                             {current.llm_provider === 'ollama'
                               ? (isArabic ? 'تأكد من تشغيل Ollama على جهازك وسحب النماذج عبر الأمر `ollama run llama3.1`.' : 'Ensure Ollama is running locally and pull models via `ollama run llama3.1`.')
-                              : (isArabic 
-                                  ? `أدخل مفتاح API الخاص بـ ${currentProviderName} أعلاه لسحب قائمة النماذج المتاحة فورياً من حسابك.` 
-                                  : `Enter your ${currentProviderName} API key above to instantly pull all supported models from your account.`)}
+                              : (isArabic
+                                  ? `أدخل مفتاح API الخاص بـ ${currentProviderName} أعلاه لتمكين التشغيل — قائمة النماذج تأتي من Pi مباشرة.`
+                                  : `Enter your ${currentProviderName} API key above to enable runs — the model list itself comes straight from Pi.`)}
                           </p>
                         </div>
                       </div>
                     ) : (
                       /* POPULATED MODELS EXPLORER */
                       <div className="space-y-3 animate-fadeIn">
-                        {/* Search & Category Filter */}
+                        {/* Search (Pi catalogs carry no tag metadata) */}
                         <div className="flex items-center gap-2">
                           <div className="relative flex-1">
                             <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 rtl:left-auto rtl:right-3 top-1/2 -translate-y-1/2" />
@@ -617,7 +731,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               type="text"
                               value={modelSearch}
                               onChange={(e) => setModelSearch(e.target.value)}
-                              placeholder={isArabic ? 'تصفية وبحث في النماذج (مثال: flash, r1, mini)...' : 'Filter models (e.g. flash, r1, mini)...'}
+                              placeholder={isArabic ? 'تصفية وبحث في النماذج (مثال: flash, pro)...' : 'Filter models (e.g. flash, pro)...'}
                               className="w-full bg-canvas border border-white/10 rounded-lg pl-8 pr-3 rtl:pl-3 rtl:pr-8 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-accent/40"
                             />
                             {modelSearch && (
@@ -628,29 +742,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 <X className="w-3 h-3" />
                               </button>
                             )}
-                          </div>
-
-                          {/* Filter Chips */}
-                          <div className="flex items-center gap-1 shrink-0">
-                            {[
-                              { id: 'all' as const, label: isArabic ? 'الكل' : 'All' },
-                              { id: 'recommended' as const, label: '⭐' },
-                              { id: 'reasoning' as const, label: '🧠' },
-                              { id: 'fast' as const, label: '⚡' },
-                            ].map(chip => (
-                              <button
-                                key={chip.id}
-                                type="button"
-                                onClick={() => setSelectedTag(chip.id)}
-                                className={`px-2 py-1 rounded-md text-[10px] font-medium border transition ${
-                                  selectedTag === chip.id
-                                    ? 'bg-accent/20 border-accent/50 text-accent'
-                                    : 'bg-canvas border-white/5 text-slate-400 hover:text-slate-200'
-                                }`}
-                              >
-                                {chip.label}
-                              </button>
-                            ))}
                           </div>
                         </div>
 
@@ -762,7 +853,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <button
                         type="button"
                         onClick={handleTestConnection}
-                        disabled={isTesting || (!activeApiKey && current.llm_provider !== 'ollama')}
+                        disabled={isTesting || (current.llm_provider !== 'ollama' && !activeApiKey && piEntryFor(current.llm_provider)?.auth.configured !== true)}
                         className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 disabled:opacity-30 flex items-center gap-1.5 transition"
                       >
                         {isTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" /> : <Zap className="w-3.5 h-3.5 text-amber-400" />}
@@ -803,7 +894,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onClick={() => setCurrent(prev => ({
                         ...prev,
                         embedding: {
-                          ...(prev.embedding || { provider: 'gemini', model_name: 'text-embedding-004', use_chat_key: true }),
+                          ...(prev.embedding || { provider: 'google' as EmbeddingProvider, model_name: 'text-embedding-004' }),
                           enabled: prev.embedding?.enabled === false ? true : false
                         }
                       }))}
@@ -826,24 +917,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       {[
-                        { id: 'gemini', name: 'Google Gemini', desc: 'text-embedding-004 (768 dims)', tag: 'Recommended' },
+                        { id: 'google', name: 'Google', desc: 'text-embedding-004 (768 dims)', tag: 'Recommended' },
                         { id: 'openai', name: 'OpenAI', desc: 'text-embedding-3-small (1536 dims)', tag: 'Cloud' },
                         { id: 'ollama', name: 'Ollama (Local)', desc: 'nomic-embed-text (Local)', tag: 'Private' },
                       ].map((p) => {
-                        const isSelected = (current.embedding?.provider || 'gemini') === p.id;
+                        const isSelected = (current.embedding?.provider || 'google') === p.id;
                         return (
                           <button
                             key={p.id}
                             type="button"
                             onClick={() => {
-                              const defaultModel = p.id === 'gemini' ? 'text-embedding-004' : p.id === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text';
+                              const defaultModel = p.id === 'google' ? 'text-embedding-004' : p.id === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text';
                               setCurrent(prev => ({
                                 ...prev,
                                 embedding: {
                                   ...(prev.embedding || { enabled: true }),
-                                  provider: p.id as any,
+                                  provider: p.id as EmbeddingProvider,
                                   model_name: defaultModel,
-                                  use_chat_key: true
                                 }
                               }));
                             }}
@@ -864,100 +954,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
 
-                  {/* API Key / Endpoint Configuration */}
+                  {/* Pi Auth Standing / Endpoint Configuration (tracer P4):
+                      cloud embedding credentials live in Pi (`auth.json`) under
+                      the Pi provider id — the same key the chat tab saves — and
+                      the Ollama endpoint lives in Pi's `models.json` overlay,
+                      edited once under the Local tab. No key or endpoint input
+                      here, ever. */}
                   <div className="p-4 rounded-xl bg-surface border border-white/5 space-y-3">
                     <div className="flex items-center justify-between">
                       <label className="text-slate-300 font-medium">
                         {isArabic ? 'إعداد المصادقة ونقطة الاتصال' : 'Authentication & Connection'}
                       </label>
-                      {current.embedding?.provider !== 'ollama' && (
-                        <label className="flex items-center gap-2 cursor-pointer text-[11px] text-slate-400 hover:text-slate-200">
-                          <input
-                            type="checkbox"
-                            checked={current.embedding?.use_chat_key !== false}
-                            onChange={(e) => setCurrent(prev => ({
-                              ...prev,
-                              embedding: {
-                                ...(prev.embedding || { enabled: true, provider: 'gemini', model_name: 'text-embedding-004' }),
-                                use_chat_key: e.target.checked
-                              }
-                            }))}
-                            className="rounded border-white/20 bg-canvas text-accent focus:ring-0 focus:ring-offset-0"
-                          />
-                          <span>
-                            {isArabic
-                              ? `استخدام مفتاح ${current.embedding?.provider || 'المزود'} المسجل في إعدادات المحادثة`
-                              : `Use active ${current.embedding?.provider || 'chat'} API key from Settings`}
-                          </span>
-                        </label>
-                      )}
                     </div>
 
                     {current.embedding?.provider === 'ollama' ? (
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] text-slate-400">
-                          {isArabic ? 'عنوان خادم Ollama المحلي' : 'Local Ollama Endpoint'}
-                        </label>
-                        <input
-                          type="text"
-                          value={current.embedding?.endpoint || current.ollama_endpoint || 'http://localhost:11434'}
-                          onChange={(e) => setCurrent(prev => ({
-                            ...prev,
-                            embedding: {
-                              ...(prev.embedding || { enabled: true, provider: 'ollama', model_name: 'nomic-embed-text', use_chat_key: true }),
-                              endpoint: e.target.value
-                            }
-                          }))}
-                          className="w-full bg-canvas border border-white/10 rounded-xl px-3.5 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-accent/50"
-                        />
-                      </div>
-                    ) : (
-                      current.embedding?.use_chat_key === false && (
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] text-slate-400">
-                            {isArabic ? `مفتاح API مخصص لـ ${current.embedding?.provider}` : `Dedicated ${current.embedding?.provider} Embedding API Key`}
-                          </label>
-                          <div className="relative">
-                            <input
-                              type={showEmbeddingKey ? 'text' : 'password'}
-                              value={current.embedding?.api_key || ''}
-                              onChange={(e) => setCurrent(prev => ({
-                                ...prev,
-                                embedding: {
-                                  ...(prev.embedding || { enabled: true, provider: 'gemini', model_name: 'text-embedding-004' }),
-                                  api_key: e.target.value
-                                }
-                              }))}
-                              placeholder="sk-..."
-                              className="w-full bg-canvas border border-white/10 rounded-xl px-3.5 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-accent/50 pe-10"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setShowEmbeddingKey(prev => !prev)}
-                              className="absolute inset-y-0 end-0 pe-3 flex items-center text-slate-400 hover:text-slate-200"
-                            >
-                              {showEmbeddingKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    )}
-
-                    {current.embedding?.provider !== 'ollama' && current.embedding?.use_chat_key !== false && (
                       <div className="p-2.5 rounded-lg bg-canvas/60 border border-white/5 flex items-center justify-between text-[11px] text-slate-400">
                         <span className="flex items-center gap-1.5">
                           <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                           <span>
-                            {activeEmbeddingApiKey
-                              ? (isArabic ? 'تم ربط المفتاح تلقائياً من إعدادات المزود' : 'Inheriting active API key from model settings')
-                              : (isArabic ? 'لم يتم إدخال مفتاح للمزود بعد في إعدادات النماذج' : 'No API key entered yet in AI Models & Providers')}
+                            {piOllama?.endpoint
+                              ? (isArabic
+                                  ? `يستخدم التضمين خادم Pi ‏${piOllama.endpoint}‏ — يُحرر من تبويب Ollama المحلي.`
+                                  : `Embeddings use the Pi server ${piOllama.endpoint} — edited under Local Ollama.`)
+                              : (isArabic
+                                  ? 'لم يُحفظ خادم Ollama في Pi بعد — أضفه من تبويب Ollama المحلي.'
+                                  : 'No Ollama server saved in Pi yet — add it under Local Ollama.')}
                           </span>
                         </span>
-                        {activeEmbeddingApiKey && (
-                          <span className="font-mono text-[10px] text-slate-500">
-                            {activeEmbeddingApiKey.slice(0, 5)}...{activeEmbeddingApiKey.slice(-4)}
+                      </div>
+                    ) : (
+                      <div className="p-2.5 rounded-lg bg-canvas/60 border border-white/5 flex items-center justify-between text-[11px] text-slate-400">
+                        <span className="flex items-center gap-1.5">
+                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>
+                            {(() => {
+                              const standing = piProviders.find((p) => p.id === (current.embedding?.provider || 'google'))?.auth;
+                              if (standing?.configured) {
+                                return isArabic
+                                  ? `مفتاح Pi لـ ${current.embedding?.provider} جاهز${standing.source ? ` (${standing.source})` : ''} — يُستخدم للتضمين أيضًا.`
+                                  : `Pi key for ${current.embedding?.provider} is ready${standing.source ? ` (${standing.source})` : ''} — shared with embeddings.`;
+                              }
+                              return isArabic
+                                ? `لا يوجد مفتاح Pi لـ ${current.embedding?.provider} — أضفه من تبويب النماذج والمزودات.`
+                                : `No Pi key for ${current.embedding?.provider} — add it under AI Models & Providers.`;
+                            })()}
                           </span>
-                        )}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -980,9 +1022,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            const p = current.embedding?.provider || 'gemini';
-                            const ep = current.embedding?.endpoint || current.ollama_endpoint;
-                            fetchEmbeddingModelsDynamically(p, activeEmbeddingApiKey, ep);
+                            const p = current.embedding?.provider || 'google';
+                            fetchEmbeddingModelsDynamically(p);
                           }}
                           disabled={isLoadingEmbeddingModels}
                           className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-accent text-[11px] flex items-center gap-1 border border-white/10 transition"
@@ -1009,11 +1050,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onChange={(e) => setCurrent(prev => ({
                             ...prev,
                             embedding: {
-                              ...(prev.embedding || { enabled: true, provider: 'gemini', model_name: 'text-embedding-004' }),
+                              ...(prev.embedding || { enabled: true, provider: 'google', model_name: 'text-embedding-004' }),
                               custom_model_name: e.target.value
                             }
                           }))}
-                          placeholder={current.embedding?.provider === 'gemini' ? 'text-embedding-004' : current.embedding?.provider === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text'}
+                          placeholder={current.embedding?.provider === 'google' ? 'text-embedding-004' : current.embedding?.provider === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text'}
                           className="w-full bg-surface border border-white/10 rounded-xl px-3.5 py-2.5 text-slate-200 font-mono text-xs focus:outline-none focus:border-accent/50"
                         />
                         <span className="text-[10px] text-slate-500">
@@ -1024,7 +1065,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {(availableEmbeddingModels.length > 0
                           ? availableEmbeddingModels
-                          : (current.embedding?.provider === 'gemini'
+                          : ((current.embedding?.provider || 'google') === 'google'
                             ? [{ id: 'text-embedding-004', name: 'text-embedding-004', context: '768 dimensions', recommended: true }]
                             : current.embedding?.provider === 'openai'
                             ? [{ id: 'text-embedding-3-small', name: 'text-embedding-3-small', context: '1536 dimensions', recommended: true }, { id: 'text-embedding-3-large', name: 'text-embedding-3-large', context: '3072 dimensions' }]
@@ -1037,7 +1078,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               onClick={() => setCurrent(prev => ({
                                 ...prev,
                                 embedding: {
-                                  ...(prev.embedding || { enabled: true, provider: 'gemini' }),
+                                  ...(prev.embedding || { enabled: true, provider: 'google' }),
                                   model_name: m.id,
                                   custom_model_name: undefined
                                 }
@@ -1201,19 +1242,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         onChange={(e) => setCurrent({ ...current, ollama_endpoint: e.target.value })}
                         className="w-full bg-canvas border border-white/10 rounded-xl px-3.5 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-accent/50"
                       />
+                      <p className="text-[10px] text-slate-500">
+                        {isArabic ? 'يُحفظ العنوان في Pi عند الحفظ — تشغيل المحادثات والتضمين يقرآنه من هناك.' : 'The endpoint persists into Pi on Save — chat and embeddings both read it from there.'}
+                      </p>
                     </div>
 
                     <div className="p-3 rounded-xl bg-canvas border border-white/5 flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                        <span className="text-[11px] text-slate-300 font-mono">http://localhost:11434</span>
+                        <div className={`w-2 h-2 rounded-full ${piOllama?.endpoint ? 'bg-emerald-400 animate-pulse' : 'bg-white/20'}`} />
+                        <span className="text-[11px] text-slate-300 font-mono">
+                          {piOllama?.endpoint
+                            ? `${piOllama.endpoint} (${piOllama.models.length} ${isArabic ? 'نموذج' : 'models'})`
+                            : (isArabic ? 'لم يُحفظ في Pi بعد' : 'Not yet saved in Pi')}
+                        </span>
                       </div>
                       <button
                         type="button"
-                        onClick={() => fetchModelsDynamically('ollama', '', current.ollama_endpoint)}
+                        onClick={() => refreshPiCatalog()}
                         className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-accent text-[11px] flex items-center gap-1"
                       >
-                        <RotateCcw className="w-3 h-3" />
+                        <RotateCcw className={`w-3 h-3 ${isLoadingPi ? 'animate-spin' : ''}`} />
                         <span>{isArabic ? 'فحص النماذج المحلية' : 'Scan Models'}</span>
                       </button>
                     </div>
@@ -1260,7 +1308,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <button
                   type="button"
                   onClick={handleSave}
-                  className="primary-button"
+                  disabled={isSavingPi}
+                  className="primary-button disabled:opacity-50"
                 >
                   {savedSuccess ? <Check className="w-3.5 h-3.5" /> : null}
                   <span>{savedSuccess ? (isArabic ? 'تم الحفظ!' : 'Saved!') : (isArabic ? 'حفظ الإعدادات' : 'Save Settings')}</span>

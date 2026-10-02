@@ -114,16 +114,21 @@ function buildModel(modelId: string, providerId: string, api: string, baseUrl = 
   } as PiModel;
 }
 
-/** Custom OpenAI-compatible provider for Ollama and other local endpoints. */
+/** Custom OpenAI-compatible provider for Ollama and other local endpoints.
+ * The endpoint resolves from the persisted Pi `models.json` overlay (tracer
+ * P4) unless explicitly supplied (tests/faux transports) — never guessed
+ * per request anywhere else. */
 export async function createOpenAiCompatibleProvider(
   providerId: string,
   endpoint?: string,
   apiKey?: string
 ): Promise<any> {
   const ai = await importPiAi();
-  const base = (endpoint || (providerId === 'ollama' ? 'http://localhost:11434' : '') || '')
-    .trim()
-    .replace(/\/+$/, '');
+  let base = (endpoint || '').trim().replace(/\/+$/, '');
+  if (!base && providerId === 'ollama') {
+    const { resolveOllamaBaseUrl } = await import('./piOllama');
+    base = resolveOllamaBaseUrl().replace(/\/v1$/, '');
+  }
   const baseUrl = base ? `${base}/v1` : '';
   return ai.createProvider({
     id: providerId,
@@ -340,16 +345,45 @@ export interface PiGenerateResult {
   providerRequests: number;
 }
 
-/** Drive pi-ai `streamSimple` with a depth-capped tool loop, honoring `signal` at each boundary. */
+/** Drive pi-ai `streamSimple` with a depth-capped tool loop, honoring `signal` at each boundary.
+ *
+ * Tracer P2: requests carry Pi ids only — the credential resolves from Pi's
+ * file-backed `auth.json` (the same store the sessions use), never from the
+ * request envelope. `options.apiKey` survives only as a test seam (faux
+ * providers via `overrideFactory` ignore auth entirely); production
+ * call-sites must not set it. */
 export async function generateWithPi(
   options: LLMRequestOptions,
   adapterOptions?: PiAdapterOptions
 ): Promise<PiGenerateResult> {
   const signal = adapterOptions?.signal;
-  const providerId = PI_PROVIDER_IDS[normalizeProvider(options.provider)] || normalizeProvider(options.provider);
+  const rawProvider = normalizeProvider(options.provider);
+  if (rawProvider === 'gemini') {
+    throw new Error('[PiAdapter] Unknown Pi provider "gemini" — the Pi id is "google".');
+  }
+  const providerId = PI_PROVIDER_IDS[rawProvider] || rawProvider;
   const modelName = options.model;
-  const apiKey = options.apiKey;
   const endpoint = options.endpoint;
+  // Pi-owned auth: stored credential wins; an explicit per-request key is a
+  // test-only override (never sent by the renderer after P2).
+  let apiKey = options.apiKey;
+  if (!apiKey && !adapterOptions?.overrideFactory && providerId !== 'ollama') {
+    try {
+      const { resolveAgentDir } = await import('./agentSessionHost');
+      const { join } = await import('path');
+      const { readFileSync, existsSync } = await import('fs');
+      const authPath = join(resolveAgentDir(), 'auth.json');
+      if (existsSync(authPath)) {
+        const parsed = JSON.parse(readFileSync(authPath, 'utf-8'));
+        const entry = parsed?.[providerId];
+        if (entry?.type === 'api_key' && typeof entry.key === 'string' && entry.key) {
+          apiKey = entry.key;
+        }
+      }
+    } catch {
+      // Unreadable store means the provider call fails with its own error.
+    }
+  }
 
   const ai = await importPiAi();
   const models = ai.createModels();

@@ -750,7 +750,6 @@ function makeRequest(fixture: ParityFixture, researcherMode: boolean): ResearchR
     language: fixture.language === 'ar' ? 'ar' : 'en',
     llm_provider: 'openai',
     model_name: 'test-model',
-    api_keys: { openai: 'test-key' },
     search_provider: 'duckduckgo',
     embedding_enabled: false,
     plan: fixture.plan,

@@ -1,7 +1,7 @@
 export type SearchDepth = 'quick' | 'deep' | 'storm';
 export type SearchPerspective = 'balanced' | 'technical' | 'market' | 'critical' | 'storm';
-export type LLMProvider = 'gemini' | 'openai' | 'anthropic' | 'groq' | 'deepseek' | 'openrouter' | 'mistral' | 'ollama';
-export type EmbeddingProvider = 'gemini' | 'openai' | 'ollama' | 'none';
+export type LLMProvider = 'google' | 'openai' | 'anthropic' | 'groq' | 'deepseek' | 'openrouter' | 'mistral' | 'ollama';
+export type EmbeddingProvider = 'google' | 'openai' | 'ollama' | 'none';
 
 export interface ModelOption {
   id: string;
@@ -278,12 +278,8 @@ export interface ResearchRequest {
   search_provider?: 'duckduckgo' | 'tavily' | 'serper';
   llm_provider?: LLMProvider;
   model_name?: string;
-  api_keys?: Record<string, string>;
-  ollama_endpoint?: string;
   embedding_provider?: EmbeddingProvider;
   embedding_model?: string;
-  embedding_api_key?: string;
-  embedding_endpoint?: string;
   embedding_enabled?: boolean;
   /** Opt-in: attach the vendored pi ecosystem research tools (pi-web-access
    * + rpiv-todo) to the agent's tool loop. Defaults to false so existing
