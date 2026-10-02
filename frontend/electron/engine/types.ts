@@ -306,6 +306,12 @@ export interface SearchResultItem {
   title: string;
   url: string;
   snippet: string;
+  /**
+   * The search provider that actually resolved this hit (Track C, SPEC #155:
+   * observed, never assumed). Optional so older serialized items still
+   * conform; Track E retention builds on this field.
+   */
+  searchProvider?: string;
 }
 
 export interface WideResearchRequest extends ResearchRequest {

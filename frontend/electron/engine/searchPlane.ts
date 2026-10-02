@@ -1,38 +1,55 @@
 /**
- * searchPlane.ts — LENS's primary retrieval plane (ADR-0010 phase 5, #109).
+ * searchPlane.ts — LENS's primary retrieval plane (Track C, SPEC #155).
  *
- * The primary-plane boundary decision (recorded in ADR-0013) locks
- * pi-web-access as the primary search plane: engine search resolves through
- * this adapter, which drives the vendored DuckDuckGo provider behind the
- * engine's existing `searchFn` seam. The seam contract
- * (`(query, provider, apiKeys, maxResults, signal) => SearchResultItem[]`)
- * is preserved — the delegated loop and researchers need no structural change.
+ * Pi owns the search MECHANISM: engine search resolves through the upgraded
+ * extension surface (`search()` in `web-access/gemini-search.ts`, loaded
+ * through the package bridge's jiti loader) with explicit provider
+ * selection. The extension owns routing + fallback chains, recency/domain
+ * handling, and provider transports. LENS owns the policy: the bounded
+ * concurrency gate + ledger (D5 — no unledgered retrieval), per-call key
+ * provisioning (config-seam file-fresh read → serialized env override),
+ * the DDG-last outer fallback, and attribution ({title, url, snippet} +
+ * resolving provider; provider-side answer drafts are IGNORED, never
+ * evidence).
  *
- * Boundary clause (non-negotiable, D5): every vendored-plane retrieval is
- * **ledgered** — admitted through the plane's bounded concurrency gate and
- * counted in the plane ledger (exposed for tests and telemetry) — so no
- * pi-web-access retrieval bypasses LENS's controls.
+ * Keyed credentials resolve per call (caller key, else the LENS
+ * `web-search.json` under `agentDir`), never from ambient process state.
+ * The extension's own file tier is pinned to the LENS agent directory via
+ * `PI_CODING_AGENT_DIR` (set at server startup) so it can never read the
+ * operator's real `~/.pi` — isolation, not convenience.
  *
- * Failure semantics (post-contract, ticket #110):
- *  - Keyed providers (Tavily/Serper keys present) keep the native path — no
- *    regression for keyed users until the config seam ticket (#112) lands.
- *  - The vendored DDG module unavailable (jiti failure, vendored entry
- *    missing) or the vendored provider errors → the caller's keyed provider
- *    if keys are present, else the error propagates (no plane↔native
- *    re-entry cycle; caller aborts propagate).
+ * The seam contract (`primarySearchPlane(query, provider, apiKeys,
+ * maxResults, signal) => SearchResultItem[]`) is preserved — the delegated
+ * loop and researchers need no structural change.
+ *
+ * Failure semantics (Track C):
+ *  - Explicit keyed selection without keys (or a keyed failure) degrades to
+ *    the keyless DDG plane through the extension chain — observed fallback,
+ *    never silent and never terminal, unless the fallback itself fails.
+ *  - A DDG failure propagates terminally (no re-entry cycle; caller aborts
+ *    propagate as AbortError, queue saturation propagates by name).
  */
 
 import * as path from 'node:path';
-import { MultiSearchProvider } from './search';
 import { SearchResultItem } from './types';
-import { hasProvisionedKey, readProvisionedKey, redactKeyMaterial } from './configSeam';
+import { readProvisionedKey, redactKeyMaterial } from './configSeam';
+import { resolveAgentDir } from './agentSessionHost';
 
-/** Resolver shape the vendored DDG module is adapted to. */
-type PlaneResolver = (
+/** Unified extension search entry (web-access/gemini-search.ts). */
+type ExtensionSearchFn = (
   query: string,
-  maxResults: number,
-  signal?: AbortSignal
-) => Promise<SearchResultItem[]>;
+  options?: {
+    provider?: string;
+    numResults?: number;
+    recencyFilter?: 'day' | 'week' | 'month' | 'year';
+    domainFilter?: string[];
+    signal?: AbortSignal;
+  }
+) => Promise<{
+  answer?: string;
+  results?: Array<{ title?: string; url?: string; snippet?: string }>;
+  provider?: string;
+}>;
 
 /** Vendored copy root — mirrors piPackages' VENDOR_ROOT layout. */
 const VENDOR_ROOT = path.join(__dirname, '..', 'vendor', 'pi');
@@ -123,7 +140,7 @@ class PlaneGate {
 
 const gate = new PlaneGate();
 
-let cachedResolver: PlaneResolver | null = null;
+let cachedExtensionSearch: ExtensionSearchFn | null = null;
 
 /** Plane ledger snapshot: proves (and surfaces) every retrieval admission. */
 export function searchPlaneLedgerSnapshot(): { active: number; ledgered: number } {
@@ -132,9 +149,7 @@ export function searchPlaneLedgerSnapshot(): { active: number; ledgered: number 
 
 /** Resets the adapter cache and ledger counters (test seam). */
 export function resetSearchPlane(): void {
-  cachedResolver = null;
-  cachedKeyed = null;
-  keyedOverride = null;
+  cachedExtensionSearch = null;
   gate.reset();
 }
 
@@ -146,10 +161,6 @@ export function resetSearchPlane(): void {
  * duration of one call only; the process-wide fetch stays untouched.
  */
 export const __testSeams = {
-  /** Overrides the vendored keyed search modules (offline keyed-path tests). */
-  setKeyedOverride(override: { tavily?: KeyedSearchFn; serper?: KeyedSearchFn } | null): void {
-    keyedOverride = override;
-  },
   async searchWithDuckDuckGo(
     query: string,
     options?: {
@@ -187,95 +198,60 @@ export const __testSeams = {
 };
 
 /**
- * Loads the vendored DuckDuckGo module through the package bridge's jiti
- * loader. The vendored module calls global `fetch`, which stays late-bound —
- * the parity harness swaps `globalThis.fetch`, so fixtures cover this plane
- * without any special injection.
+ * Loads the unified extension search entry (`search()` in
+ * `web-access/gemini-search.ts`) through the package bridge's jiti loader.
+ * The vendored modules call global `fetch`, which stays late-bound — the
+ * parity harness swaps `globalThis.fetch`, so fixtures cover this plane
+ * without any special injection. Loud on failure: without the mechanism the
+ * plane cannot serve, and callers must see why.
  */
-async function loadPlaneResolver(): Promise<PlaneResolver> {
-  if (cachedResolver) return cachedResolver;
+async function loadExtensionSearch(): Promise<ExtensionSearchFn> {
+  if (cachedExtensionSearch) return cachedExtensionSearch;
   const { getJitiLoader } = await import('./piPackages');
   const loader = await getJitiLoader();
   if (!loader) throw new Error('jiti loader unavailable');
-  const entryPath = path.join(VENDOR_ROOT, 'web-access', 'duckduckgo.ts');
-  const mod = (await loader(entryPath)) as {
-    searchWithDuckDuckGo?: (
-      query: string,
-      options?: { numResults?: number; signal?: AbortSignal }
-    ) => Promise<{ results?: Array<{ title: string; url: string; snippet: string }> }>;
+  const mod = (await loader(path.join(VENDOR_ROOT, 'web-access', 'gemini-search.ts'))) as {
+    search?: unknown;
   };
-  const search = mod?.searchWithDuckDuckGo;
-  if (typeof search !== 'function') {
-    throw new Error('vendored DDG module exposes no searchWithDuckDuckGo');
+  if (typeof mod?.search !== 'function') {
+    throw new Error('vendored web-access graph exposes no unified search()');
   }
-  cachedResolver = async (query, maxResults, signal) => {
-    const response = await search(query, { numResults: maxResults, signal });
-    const results = response.results ?? [];
-    return results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet }));
-  };
-  return cachedResolver;
+  cachedExtensionSearch = mod.search as ExtensionSearchFn;
+  return cachedExtensionSearch;
 }
-
-/** Serves one query through the vendored plane under the concurrency gate.
- * Cancellation propagates as AbortError — never a successful empty result. */
-async function serveThroughPlane(
-  query: string,
-  maxResults: number,
-  signal?: AbortSignal
-): Promise<SearchResultItem[]> {
-  if (signal?.aborted) throw abortError();
-  await gate.acquire(signal);
-  try {
-    gate.ledgered += 1;
-    if (signal?.aborted) throw abortError();
-    const resolver = await loadPlaneResolver();
-    return await resolver(query, maxResults, signal);
-  } finally {
-    gate.release();
-  }
-}
-
-/** Vendored keyed-provider module cache (config is read once per module). */
-interface KeyedSearchResponse {
-  results?: Array<{ title?: string; url?: string; content?: string }>;
-  organic?: Array<{ title?: string; link?: string; snippet?: string }>;
-}
-type KeyedSearchFn = (
-  query: string,
-  options?: { numResults?: number; signal?: AbortSignal }
-) => Promise<KeyedSearchResponse>;
-let cachedKeyed: { tavily?: KeyedSearchFn; serper?: KeyedSearchFn } | null = null;
 
 /**
- * Test seam: overrides the vendored keyed search modules (offline keyed-path
- * tests). Pass `null` to clear. Reset alongside `resetSearchPlane`.
+ * Maps a LENS search-provider id onto the extension selection. CLOSED map —
+ * the extension coerces unknown strings to `"auto"` (full-chain fan-out that
+ * deliberately excludes DDG and can resolve via ambient keys LENS never
+ * provisioned), so unknown ids must never pass through verbatim. Known plane
+ * ids pass through; the legacy `google` id means the Google index (Serper —
+ * the extension has no `google` id, without the alias it would silently
+ * become `auto`); explicit `auto` selects the extension chain deliberately.
+ * Anything else is a misconfiguration: warn once per process and serve the
+ * deterministic keyless chain.
  */
-let keyedOverride: { tavily?: KeyedSearchFn; serper?: KeyedSearchFn } | null = null;
+const EXPLICIT_SELECTIONS = new Set(['duckduckgo', 'tavily', 'serper']);
+const warnedUnknownProviders = new Set<string>();
 
-async function loadKeyedSearch(): Promise<{ tavily?: KeyedSearchFn; serper?: KeyedSearchFn }> {
-  if (keyedOverride) return keyedOverride;
-  if (cachedKeyed) return cachedKeyed;
-  const piPackages = await import('./piPackages');
-  const loader = await piPackages.getJitiLoader();
-  if (!loader) throw new Error('jiti loader unavailable');
-  const tavilyMod = (await loader(path.join(VENDOR_ROOT, 'web-access', 'tavily.ts'))) as {
-    searchWithTavily?: unknown;
-  };
-  const serperMod = (await loader(path.join(VENDOR_ROOT, 'web-access', 'serper.ts'))) as {
-    searchWithSerper?: unknown;
-  };
-  const keyed: { tavily?: KeyedSearchFn; serper?: KeyedSearchFn } = {};
-  if (typeof tavilyMod?.searchWithTavily === 'function') {
-    keyed.tavily = tavilyMod.searchWithTavily as KeyedSearchFn;
+function mapProviderSelection(provider: string): string {
+  const id = (provider || '').trim().toLowerCase();
+  if (id === 'google') return 'serper';
+  if (id === 'auto') return 'auto';
+  if (EXPLICIT_SELECTIONS.has(id)) return id;
+  if (!id) return 'duckduckgo';
+  if (!warnedUnknownProviders.has(id)) {
+    warnedUnknownProviders.add(id);
+    console.warn(`[searchPlane] unknown search provider "${id}" — serving the keyless chain instead.`);
   }
-  if (typeof serperMod?.searchWithSerper === 'function') {
-    keyed.serper = serperMod.searchWithSerper as KeyedSearchFn;
-  }
-  if (!keyed.tavily && !keyed.serper) {
-    throw new Error('vendored keyed search modules expose no search functions');
-  }
-  cachedKeyed = keyed;
-  return keyed;
+  return 'duckduckgo';
+}
+
+/** Key families LENS provisions per call (caller key, else config-seam file). */
+function keyFamilyOf(selection: string): { provider: 'tavily' | 'serper'; env: string } | null {
+  if (selection === 'tavily') return { provider: 'tavily', env: 'TAVILY_API_KEY' };
+  if (selection === 'serper') return { provider: 'serper', env: 'SERPER_API_KEY' };
+  return null;
 }
 
 /** Serializes the one-call env override: `process.env` is process-global,
@@ -303,38 +279,107 @@ async function withKeyedEnv<T>(envName: string, key: string, run: () => Promise<
   }
 }
 
-/** Serves one query through the vendored KEYED providers under the same gate
- * and ledger as the keyless plane (D5: no unledgered retrieval). The caller's
- * key rides a serialized one-call env override — never logged, never leaked. */
-async function serveThroughKeyedPlane(
-  provider: 'tavily' | 'serper',
-  key: string,
+function isTerminalPlaneError(err: unknown, signal?: AbortSignal): boolean {
+  // A cancelled caller must never degrade into a fallback retrieval: the
+  // vendor surfaces aborts heterogeneously (DOMException AbortError from
+  // fetch, plain "Aborted" errors, TimeoutError from AbortSignal.timeout),
+  // so test the signal first, then the name, then the message.
+  if (signal?.aborted) return true;
+  if (err instanceof DOMException && err.name === 'AbortError') return true;
+  if (err instanceof Error && /abort/i.test(err.name)) return true;
+  if (err instanceof Error && /abort|timed out|timeout/i.test(err.message)) return true;
+  if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') return true;
+  return false;
+}
+
+export interface ExtensionSearchOptions {
+  provider?: string;
+  numResults?: number;
+  recencyFilter?: 'day' | 'week' | 'month' | 'year';
+  domainFilter?: string[];
+  signal?: AbortSignal;
+  apiKeys?: Record<string, string>;
+  /**
+   * Override the LENS-owned agent directory for key provisioning
+   * (config-seam file read). Production callers omit it — the app-data
+   * default holds. Tests pass a temp dir for isolation.
+   */
+  agentDir?: string;
+}
+
+export interface ExtensionSearchOutcome {
+  results: SearchResultItem[];
+  /** The provider that actually resolved — observed, never assumed. */
+  provider: string;
+}
+
+/**
+ * Runs one query through the extension search mechanism under the LENS gate.
+ * Provider answers are IGNORED (provider-side drafts are never evidence);
+ * results map to `{title, url, snippet}` with the resolving provider
+ * attached for telemetry/provenance. Non-terminal failures on a non-DDG
+ * selection degrade once to the keyless DDG chain; anything else propagates.
+ */
+export async function searchViaExtension(
   query: string,
-  maxResults: number,
-  signal?: AbortSignal
-): Promise<SearchResultItem[]> {
+  options?: ExtensionSearchOptions
+): Promise<ExtensionSearchOutcome> {
+  const signal = options?.signal;
   if (signal?.aborted) throw abortError();
-  const keyed = await loadKeyedSearch();
-  const run: KeyedSearchFn | undefined = provider === 'tavily' ? keyed.tavily : keyed.serper;
-  if (typeof run !== 'function') throw new Error(`vendored ${provider} search unavailable`);
-  const envName = provider === 'tavily' ? 'TAVILY_API_KEY' : 'SERPER_API_KEY';
+  const cleanQuery = query.trim();
+  const selection = mapProviderSelection(options?.provider ?? 'duckduckgo');
+  if (!cleanQuery) return { results: [], provider: selection };
+
+  const family = keyFamilyOf(selection);
+  const callerKey = family ? options?.apiKeys?.[family.provider] : undefined;
+  const key =
+    callerKey ??
+    (family ? readProvisionedKey(family.provider, options?.agentDir) : undefined);
+
   await gate.acquire(signal);
   try {
     gate.ledgered += 1;
     if (signal?.aborted) throw abortError();
-    const response = await withKeyedEnv(envName, key, () => run(query, { numResults: maxResults, signal }));
-    if (provider === 'tavily') {
-      return (response.results ?? []).map((r) => ({
-        title: r.title || r.url || '',
-        url: r.url || '',
-        snippet: r.content || '',
-      })).filter((r) => r.url);
+    const search = await loadExtensionSearch();
+    const run = (): Promise<Awaited<ReturnType<ExtensionSearchFn>>> =>
+      search(cleanQuery, {
+        provider: selection,
+        numResults: options?.numResults ?? 8,
+        ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
+        ...(options?.domainFilter ? { domainFilter: options.domainFilter } : {}),
+        ...(signal ? { signal } : {}),
+      });
+    let out: Awaited<ReturnType<ExtensionSearchFn>>;
+    try {
+      out = family && key ? await withKeyedEnv(family.env, key, run) : await run();
+    } catch (err) {
+      if (isTerminalPlaneError(err, signal)) throw err;
+      if (selection === 'duckduckgo') throw err;
+      // Observed fallback (never silent, never terminal unless the fallback
+      // fails too): the keyless DDG chain serves the query instead.
+      console.warn(
+        `[searchPlane] extension ${selection} failed — falling back to the keyless chain:`,
+        redactKeyMaterial(err, key ?? '')
+      );
+      const fallback = await loadExtensionSearch();
+      out = await fallback(cleanQuery, {
+        provider: 'duckduckgo',
+        numResults: options?.numResults ?? 8,
+        ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
+        ...(options?.domainFilter ? { domainFilter: options.domainFilter } : {}),
+        ...(signal ? { signal } : {}),
+      });
     }
-    return (response.organic ?? []).map((r) => ({
-      title: r.title || r.link || '',
-      url: r.link || '',
-      snippet: r.snippet || '',
-    })).filter((r) => r.url);
+    const resolved = typeof out?.provider === 'string' && out.provider ? out.provider : selection;
+    return {
+      results: (out?.results ?? []).map((r) => ({
+        title: String(r?.title ?? ''),
+        url: String(r?.url ?? ''),
+        snippet: String(r?.snippet ?? ''),
+        searchProvider: resolved,
+      })),
+      provider: resolved,
+    };
   } finally {
     gate.release();
   }
@@ -343,6 +388,13 @@ async function serveThroughKeyedPlane(
 /**
  * The primary search plane. Signature-compatible with
  * `MultiSearchProvider.search`, so it slots behind the engine's search seam.
+ *
+ * Default-selection decision (Track C, SPEC #155): an unset provider serves
+ * the explicit keyless DDG chain — deterministic, single-transport, no
+ * ambient-key participation. The extension `auto` chain is available via
+ * explicit selection (Track B threads the setting) but is never the
+ * implicit default: auto fans out across ambient-keyed providers with
+ * per-provider deadlines before reaching anything keyless.
  */
 export async function primarySearchPlane(
   query: string,
@@ -357,41 +409,19 @@ export async function primarySearchPlane(
   const cleanQuery = query.trim();
   if (!cleanQuery) return [];
 
-  const keys = apiKeys || {};
-
-  // Keyed providers (post-#112): served through the vendored keyed providers
-  // (D2 contract complete). The caller's key rides as a one-call env override;
-  // absent a caller key, a config-seam-provisioned key is used. A keyed
-  // failure degrades to the keyless plane (native semantic); the keyless path
-  // never re-enters the keyed path (terminal, no cycle).
-  if (provider === 'tavily' && (keys.tavily || hasProvisionedKey('tavily'))) {
-    const key = keys.tavily || readProvisionedKey('tavily');
-    if (key) {
-      try {
-        return await serveThroughKeyedPlane('tavily', key, cleanQuery, maxResults, signal);
-      } catch (err) {
-        if (signal?.aborted) throw err;
-        if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') throw err;
-        // Redacted warn (no-leak clause): never echoes key material.
-        console.warn('[searchPlane] vendored tavily failed — falling back to the keyless plane:', redactKeyMaterial(err, key));
-      }
-    }
-  }
-  if ((provider === 'serper' || provider === 'google') && (keys.serper || hasProvisionedKey('serper'))) {
-    const key = keys.serper || readProvisionedKey('serper');
-    if (key) {
-      try {
-        return await serveThroughKeyedPlane('serper', key, cleanQuery, maxResults, signal);
-      } catch (err) {
-        if (signal?.aborted) throw err;
-        if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') throw err;
-        console.warn('[searchPlane] vendored serper failed — falling back to the keyless plane:', redactKeyMaterial(err, key));
-      }
-    }
-  }
-
-  // DDG keyless (or keyed-failure fallback): the vendored keyless plane.
-  // Terminal in both directions — a keyless failure with no other key
-  // propagates; it NEVER re-enters the keyed or native path (no cycle).
-  return serveThroughPlane(cleanQuery, maxResults, signal);
+  // Keyed providers (post-#112, Track C mechanism): served through the
+  // extension chain with the caller's key or a config-seam-provisioned key.
+  // A keyed failure degrades to the keyless chain inside searchViaExtension
+  // (observed fallback); the keyless path never re-enters the keyed path
+  // (terminal, no cycle). Items keep their resolving-provider attribution
+  // (Track E provenance) — callers that serialize items tolerate the extra
+  // optional field.
+  const out = await searchViaExtension(cleanQuery, {
+    provider,
+    numResults: maxResults,
+    signal,
+    ...(apiKeys ? { apiKeys } : {}),
+    agentDir: resolveAgentDir(),
+  });
+  return out.results;
 }

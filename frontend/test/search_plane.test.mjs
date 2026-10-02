@@ -98,27 +98,34 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     );
   });
 
-  it('serves a keyed provider through the vendored keyed module with a one-call key override (D2, #112)', async () => {
-    const seenKeys = [];
-    let originalTavily = null;
-    __testSeams.setKeyedOverride({
-      tavily: async (_q, options) => {
-        // The key rides the env override for exactly this call.
-        seenKeys.push(process.env.TAVILY_API_KEY);
-        assert.equal(options.numResults, 3);
-        return { results: [{ title: 'keyed', url: 'https://keyed.example/', content: 's' }] };
-      },
+  it('serves a keyed provider through the extension chain with a one-call key override (D2, #112; Track C mechanism)', async () => {
+    // Track C: no module stub — the real extension Tavily module runs against
+    // a stubbed transport. The key rides the env override for exactly this
+    // call (LENS file-fresh read → env, never logged).
+    const seenAuth = [];
+    globalThis.fetch = (async (url, init) => {
+      if (String(url).includes('api.tavily.com')) {
+        seenAuth.push(init?.headers?.Authorization);
+        return new Response(
+          JSON.stringify({
+            answer: '',
+            results: [{ url: 'https://keyed.example/', title: 'keyed', raw_content: 's' }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      return new Response(DDG_ONE_RESULT, { status: 200 });
     });
     try {
       const results = await primarySearchPlane('keyed query', 'tavily', { tavily: 'k-test' }, 3);
       assert.equal(results[0].url, 'https://keyed.example/');
       // Narrow assertions only: a failing assertion must never render the
       // key value into CI output (no-leak clause extends to test logs).
-      assert.equal(seenKeys.length, 1, 'the caller key was visible once');
-      assert.ok(seenKeys[0] === 'k-test', 'the caller key matched the override');
+      assert.equal(seenAuth.length, 1, 'the caller key authorized exactly one call');
+      assert.ok(seenAuth[0] === 'Bearer k-test', 'the caller key matched the override');
       assert.equal(process.env.TAVILY_API_KEY, undefined, 'key override restored after the call (no leak)');
     } finally {
-      __testSeams.setKeyedOverride(null);
+      globalThis.fetch = realFetch;
     }
   });
 
@@ -130,16 +137,23 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     const observed = [];
     let inFlight = 0;
     let maxConcurrent = 0;
-    __testSeams.setKeyedOverride({
-      tavily: async () => {
-        inFlight += 1;
-        maxConcurrent = Math.max(maxConcurrent, inFlight);
-        observed.push(process.env.TAVILY_API_KEY);
-        await new Promise((r) => setTimeout(r, 20));
-        observed.push(process.env.TAVILY_API_KEY);
-        inFlight -= 1;
-        return { results: [{ title: 'k', url: 'https://keyed.example/', content: 's' }] };
-      },
+    globalThis.fetch = (async (url, init) => {
+      if (!String(url).includes('api.tavily.com')) {
+        return new Response(DDG_ONE_RESULT, { status: 200 });
+      }
+      inFlight += 1;
+      maxConcurrent = Math.max(maxConcurrent, inFlight);
+      observed.push(init?.headers?.Authorization);
+      await new Promise((r) => setTimeout(r, 20));
+      observed.push(init?.headers?.Authorization);
+      inFlight -= 1;
+      return new Response(
+        JSON.stringify({
+          answer: '',
+          results: [{ url: 'https://keyed.example/', title: 'k', raw_content: 's' }],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
     });
     try {
       const results = await Promise.all([
@@ -149,29 +163,33 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
       assert.equal(results.length, 2);
       assert.equal(maxConcurrent, 1, 'keyed environment overrides must be serialized');
       for (const seen of observed) {
-        assert.ok(seen === 'key-A' || seen === 'key-B', 'no crossed or leaked key observed');
+        assert.ok(seen === 'Bearer key-A' || seen === 'Bearer key-B', 'no crossed or leaked key observed');
       }
-      assert.ok(observed.includes('key-A') && observed.includes('key-B'), 'both keys served their own calls');
+      assert.ok(observed.includes('Bearer key-A') && observed.includes('Bearer key-B'), 'both keys served their own calls');
       assert.equal(process.env.TAVILY_API_KEY, undefined, 'env clean after both calls');
     } finally {
-      __testSeams.setKeyedOverride(null);
+      globalThis.fetch = realFetch;
     }
   });
 
   it('degrades a keyed failure to the keyless plane; keyless never re-enters the keyed path (terminal)', async () => {
+    // Track C: the real extension Tavily module fails (401) against the
+    // stubbed transport; the LENS outer fallback serves the keyless chain.
     let tavilyCalls = 0;
-    __testSeams.setKeyedOverride({
-      tavily: async () => { tavilyCalls++; throw new Error('Tavily API error 401: down'); },
+    globalThis.fetch = (async (url) => {
+      if (String(url).includes('api.tavily.com')) {
+        tavilyCalls++;
+        return new Response('Tavily API error 401: down', { status: 401 });
+      }
+      return new Response(DDG_ONE_RESULT, { status: 200 });
     });
     try {
-      globalThis.fetch = (async () =>
-        new Response(DDG_ONE_RESULT, { status: 200 }));
       const results = await primarySearchPlane('fallback query', 'tavily', { tavily: 'k-test' }, 3);
       assert.equal(tavilyCalls, 1, 'keyed provider attempted once');
       assert.ok(results.length > 0, 'keyless plane served the query after the keyed failure');
       assert.equal(process.env.TAVILY_API_KEY, undefined, 'no env leak on the failure path');
     } finally {
-      __testSeams.setKeyedOverride(null);
+      globalThis.fetch = realFetch;
     }
   });
 
