@@ -18,7 +18,7 @@ import {
 } from './agenticSearch';
 import { createAgenticResearchSession } from './agenticSessionBootstrap';
 import { AgenticTranscriptStore } from './agenticTranscript';
-import { primarySearchPlane } from './searchPlane';
+import { searchViaExtension } from './searchPlane';
 import { primaryScrapePlane } from './scrapePlane';
 import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
 import { DiscoverService } from './discover';
@@ -316,15 +316,23 @@ export async function startAgenticSearchSession(
     // file, never the wire; absent means the explicit keyless chain
     // (Track C decision), never implicit auto.
     searchProvider: request.search_provider ?? DEFAULT_AGENTIC_SEARCH_PROVIDER,
-    search: async (query, providerOverride) => {
-      const hits = await primarySearchPlane(
-        query,
-        providerOverride ?? DEFAULT_AGENTIC_SEARCH_PROVIDER
-      );
-      return hits.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
+    // Track D (SPEC #155): the full per-call contract rides the third
+    // argument into the extension mechanism. The env-pinned LENS agentDir
+    // (server-startup pin) scopes file provisioning, so no agentDir threads
+    // through here — the plane resolves keys exactly as Deep Research does.
+    search: async (query, providerOverride, searchOpts) => {
+      const out = await searchViaExtension(query, {
+        provider: providerOverride ?? DEFAULT_AGENTIC_SEARCH_PROVIDER,
+        numResults: searchOpts?.numResults ?? 8,
+        ...(searchOpts?.recencyFilter ? { recencyFilter: searchOpts.recencyFilter } : {}),
+        ...(searchOpts?.domainFilter ? { domainFilter: searchOpts.domainFilter } : {}),
+      });
+      return out.results.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
     },
-    fetchPage: async (url) => {
-      const page = await primaryScrapePlane(url);
+    // Track D: the fetch mode threads into the vendored extraction
+    // (readable/raw); answer never arrives (tool-layer refusal above).
+    fetchPage: async (url, fetchOpts) => {
+      const page = await primaryScrapePlane(url, 8000, undefined, fetchOpts?.mode);
       return page.content ? { url: page.url, title: page.title, text: page.content } : null;
     },
   });

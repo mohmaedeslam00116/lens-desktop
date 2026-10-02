@@ -32,11 +32,28 @@ import {
 import type { AgenticTranscriptStore } from './agenticTranscript';
 import { isAnswerModeFetchCall, ANSWER_MODE_UNSUPPORTED_MESSAGE } from './piPackages';
 
-/** Result of one web_search call. */
 export interface AgenticSearchHit {
   url: string;
   title: string;
   snippet: string;
+}
+
+/**
+ * Per-call search scoping (Track D, SPEC #155): the model-facing `web_search`
+ * contract carries these through to the plane. All optional — absent means
+ * the surface/threaded defaults. Fewer-param injects stay assignable.
+ */
+export interface AgenticSearchCallOptions {
+  numResults?: number;
+  recencyFilter?: 'day' | 'week' | 'month' | 'year';
+  domainFilter?: string[];
+}
+
+/** Per-call fetch mode (Track D): `readable` (default) or `raw`, threaded
+ * into the vendored extraction. `answer` never appears here — the tool-layer
+ * guard refuses it before dispatch. */
+export interface AgenticFetchCallOptions {
+  mode?: 'readable' | 'raw';
 }
 
 /** The mutable state one Turn-Group accumulates; the runner reads it at terminals. */
@@ -62,12 +79,12 @@ export interface AgenticToolOutcome {
 export interface AgenticToolContext {
   sessionId: string;
   /** Ledgered page retrieval for fetch_content (injectable for tests). */
-  fetchPage: (url: string) => Promise<{ url: string; title: string; text: string } | null>;
+  fetchPage: (url: string, options?: AgenticFetchCallOptions) => Promise<{ url: string; title: string; text: string } | null>;
   /** Search provider for web_search (injectable for tests; plane-backed in production).
-   * The optional second argument carries the retrieval selection (Track B):
-   * single-arg injects keep working (fewer params is assignable), and the
-   * handler forwards `searchProvider` when the inject accepts it. */
-  search: (query: string, provider?: string) => Promise<AgenticSearchHit[]>;
+   * The second argument carries the retrieval selection (Track B) and the
+   * third the per-call scoping (Track D); fewer-param injects keep working,
+   * and the handler always forwards what the call carried. */
+  search: (query: string, provider?: string, options?: AgenticSearchCallOptions) => Promise<AgenticSearchHit[]>;
   /** The retrieval selection threaded from the start request (Track B,
    * SPEC #155) — forwarded into the search call, never the DDG default. */
   searchProvider?: string;
@@ -96,63 +113,202 @@ function admitSource(context: AgenticToolContext, item: SourceItem): void {
 }
 
 /**
+ * Session-scoped stored tool content (Track D, SPEC #155): every `web_search`
+ * and `source_check` stores its slices under a `responseId` the result text
+ * names, and `get_search_content` pages it back. LENS-owned (a module map —
+ * never the vendored store, never ambient files), bounded per session, reset
+ * with the run. Store reads consume no budget and touch no ledger: they
+ * retrieve nothing new.
+ */
+export interface StoredSearchHit {
+  url: string;
+  title: string;
+  snippet: string;
+  content?: string;
+}
+
+export interface StoredSearchSlice {
+  query: string;
+  hits: StoredSearchHit[];
+}
+
+interface StoredToolEntry {
+  kind: 'search' | 'check';
+  label: string;
+  queries: string[];
+  text: string;
+  hits: StoredSearchHit[];
+  slices: StoredSearchSlice[];
+}
+
+const storedBySession = new Map<string, { counter: number; entries: Map<string, StoredToolEntry> }>();
+
+/** Bounds (pinned by the Track D contract suite — change with the tests). */
+export const AGENTIC_TOOL_BOUNDS = {
+  maxQueriesPerCall: 4,
+  maxIncludePages: 5,
+  maxFetchUrls: 10,
+  maxCheckPages: 5,
+  numResultsMin: 1,
+  numResultsMax: 20,
+  webSearchDefaultResults: 8,
+  sourceCheckDefaultResults: 5,
+  artifactExcerptChars: 600,
+  toolResultCharCap: 12000,
+  getContentDefaultLimit: 4000,
+  getContentMaxLimit: 16000,
+  findWindowChars: 200,
+  maxFindWindows: 5,
+  maxStoredTextChars: 65536,
+  maxStoredPerSession: 20,
+} as const;
+
+function storedScope(sessionId: string): { counter: number; entries: Map<string, StoredToolEntry> } {
+  let scope = storedBySession.get(sessionId);
+  if (!scope) {
+    scope = { counter: 0, entries: new Map() };
+    storedBySession.set(sessionId, scope);
+  }
+  return scope;
+}
+
+function storeToolContent(
+  sessionId: string,
+  kind: 'search' | 'check',
+  label: string,
+  queries: string[],
+  text: string,
+  hits: StoredSearchHit[],
+  slices: StoredSearchSlice[]
+): string {
+  const scope = storedScope(sessionId);
+  scope.counter += 1;
+  const id = `${kind === 'check' ? 'sc' : 'ws'}-${scope.counter}`;
+  const capped =
+    text.length > AGENTIC_TOOL_BOUNDS.maxStoredTextChars
+      ? text.slice(0, AGENTIC_TOOL_BOUNDS.maxStoredTextChars) + '\n…(stored text truncated)'
+      : text;
+  scope.entries.set(id, { kind, label, queries, text: capped, hits, slices });
+  while (scope.entries.size > AGENTIC_TOOL_BOUNDS.maxStoredPerSession) {
+    const oldest = scope.entries.keys().next();
+    if (oldest.done) break;
+    scope.entries.delete(oldest.value);
+  }
+  return id;
+}
+
+/** Drops a session's stored tool content (run start; test seam). */
+export function resetAgenticStoredContent(sessionId: string): void {
+  storedBySession.delete(sessionId);
+}
+
+/** Clamps a caller numResults into [1, 20], defaulting on garbage. */
+function clampNumResults(raw: unknown, fallback: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
+  return Math.min(
+    AGENTIC_TOOL_BOUNDS.numResultsMax,
+    Math.max(AGENTIC_TOOL_BOUNDS.numResultsMin, Math.floor(raw))
+  );
+}
+
+const RECENCY_VALUES = ['day', 'week', 'month', 'year'] as const;
+
+/** Non-empty trimmed string list from a query/queries pair. */
+function normalizeQueryList(args: Record<string, any>): string[] {
+  const raw: unknown[] = Array.isArray(args.queries)
+    ? args.queries
+    : args.query !== undefined
+      ? [args.query]
+      : [];
+  return raw
+    .filter((q): q is string => typeof q === 'string')
+    .map((q) => q.trim())
+    .filter(Boolean);
+}
+
+/** Bounds tool-result text; the store (not the model text) holds the full body. */
+function capResultText(text: string): string {
+  if (text.length <= AGENTIC_TOOL_BOUNDS.toolResultCharCap) return text;
+  return (
+    text.slice(0, AGENTIC_TOOL_BOUNDS.toolResultCharCap) +
+    `\n…(result truncated at ${AGENTIC_TOOL_BOUNDS.toolResultCharCap} chars; full body retrievable via get_search_content)`
+  );
+}
+
+/**
  * Build the LENS-wrapped research tool surface for one Turn-Group. This is
  * the enforcement point (ADR-0014 decision 4): every retrieval inside these
  * wrappers is ledgered and budget-capped; hooks carry no policy.
  */
 export function createAgenticToolSurface(context: AgenticToolContext): LensToolSurface {
-  const fetchPage = async (url: string): Promise<{ url: string; title: string; text: string } | null> => {
-    if (context.signal?.aborted) return null;
-    if (context.state.fetchesUsed >= context.maxFetches) {
-      context.emit({
-        type: 'budget_exhausted',
-        sessionId: context.sessionId,
-        state: 'budget_exhausted',
-        message: `Retrieval budget exhausted (cap ${context.maxFetches}). | استُنفدت ميزانية الاسترجاع (الحد ${context.maxFetches}).`,
-      });
-      return null;
-    }
-    context.state.fetchesUsed += 1;
-    const entry = await claimAndShare(context.sessionId, url, async () => {
-      const page = await context.fetchPage(url);
-      // Normalize to the ledger's ScrapedPageLike shape (content, not text).
-      return page ? { url: page.url, title: page.title, content: page.text } : null;
-    });
-    if (!entry) return null;
-    const page = entry.page;
-    const text = typeof page.content === 'string' ? page.content : '';
-    const item: SourceItem = {
-      url: page.url,
-      title: page.title ?? page.url,
-      domain: page.domain ?? safeHost(page.url),
-      snippet: text.slice(0, 200),
-      credibilityScore: page.credibilityScore ?? 0.5,
-      passage: text,
-    };
-    const existing = context.state.sources.find((s) => s.url === item.url);
-    if (existing) {
-      // Evidence preservation (ADR-0013 boundary clause): a URL first
-      // admitted as a search snippet GAINS the full fetched passage when the
-      // same URL is later fetched — the content is never silently dropped by
-      // the admission dedupe.
-      if (!existing.passage && item.passage) existing.passage = item.passage;
-      if (!existing.domain && item.domain) existing.domain = item.domain;
-    } else {
-      admitSource(context, item);
-    }
-    return { url: page.url, title: page.title ?? page.url, text };
-  };
-
   const definitions = [
     {
       name: 'web_search',
-      description: 'Search the web for evidence on a query. Returns titles, URLs, and snippets.',
-      parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+      description:
+        'Search the web for evidence. Prefer `queries` (2-4 varied angles) over a single `query`. Returns titles, URLs, snippets, and a responseId for full stored retrieval via get_search_content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Single search query. Prefer `queries` with varied angles for research.' },
+          queries: { type: 'array', items: { type: 'string' }, description: 'Multiple queries searched in one call (max 4 served; remainder noted, resubmit separately).' },
+          provider: { type: 'string', description: 'Per-call retrieval selection (duckduckgo, tavily, serper, auto). Omit for the session default.' },
+          numResults: { type: 'integer', minimum: 1, maximum: 20, description: 'Results per query (default 8, max 20).' },
+          recencyFilter: { type: 'string', enum: ['day', 'week', 'month', 'year'], description: 'Filter by recency. Unknown values are refused, never ignored.' },
+          domainFilter: { type: 'array', items: { type: 'string' }, description: 'Limit to domains (prefix with - to exclude).' },
+          includeContent: { type: 'boolean', description: 'Fetch full page text for top hits through the ledgered, budget-capped fetcher (max 5 pages).' },
+        },
+        required: [],
+      },
     },
     {
       name: 'fetch_content',
-      description: "Fetch one page's full readable text by URL (ledgered, budget-capped).",
-      parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+      description: "Fetch pages' full text by URL (ledgered, budget-capped). readable (default) serves cleaned article text, raw serves unprocessed source. answer mode is refused — synthesis belongs to the research agent.",
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Single URL to fetch.' },
+          urls: { type: 'array', items: { type: 'string' }, description: 'Multiple URLs, served in order (max 10 per call; remainder noted).' },
+          mode: { type: 'string', enum: ['readable', 'raw'], description: "Fetch mode. 'answer' is refused (see error guidance)." },
+          prompt: { type: 'string', description: 'UNSUPPORTED in LENS — any call carrying it is refused (no video-analysis mechanism).' },
+          timestamp: { type: 'string', description: 'UNSUPPORTED in LENS — any call carrying it is refused (no video-frame mechanism).' },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'source_check',
+      description: 'Gather web sources for a claim and return a bounded machine-readable artifact with exact passage citations for manual review. No verdict is ever inferred — the artifact is evidence, not a judgment.',
+      parameters: {
+        type: 'object',
+        properties: {
+          claim: { type: 'string', description: 'The assertion to gather web sources for (required).' },
+          queries: { type: 'array', items: { type: 'string' }, description: 'Search queries (default: the claim; max 4 served).' },
+          numResults: { type: 'integer', minimum: 1, maximum: 20, description: 'Results per query (default 5, max 20).' },
+          fetchContent: { type: 'boolean', description: 'Fetch up to 5 result pages for exact passage extraction (default false; fetches ride the run budget).' },
+          recencyFilter: { type: 'string', enum: ['day', 'week', 'month', 'year'], description: 'Filter by recency. Unknown values are refused, never ignored.' },
+          domainFilter: { type: 'array', items: { type: 'string' }, description: 'Limit to domains (prefix with - to exclude).' },
+          provider: { type: 'string', description: 'Per-call retrieval selection. Omit for the session default.' },
+        },
+        required: ['claim'],
+      },
+    },
+    {
+      name: 'get_search_content',
+      description: 'Retrieve bounded pages of stored web_search/source_check results by responseId, or find passages within them. Store reads consume no budget and touch no ledger — they retrieve nothing new.',
+      parameters: {
+        type: 'object',
+        properties: {
+          responseId: { type: 'string', description: 'The responseId from a web_search or source_check call in this session (required).' },
+          queryIndex: { type: 'integer', minimum: 0, description: 'Select the stored slice for the query at this index.' },
+          url: { type: 'string', description: "Return the stored content for this URL (must belong to the entry)." },
+          urlIndex: { type: 'integer', minimum: 0, description: 'Select the stored hit at this index.' },
+          offset: { type: 'integer', minimum: 0, description: 'Character offset into the stored text (default 0). Ignored with findText.' },
+          limit: { type: 'integer', minimum: 1, maximum: 16000, description: 'Max stored characters to return (default 4000). Ignored with findText.' },
+          findText: { type: 'string', description: 'Locate passages containing this text (up to 5 windows).' },
+          findMode: { type: 'string', enum: ['exact', 'case-insensitive'], description: 'Matching mode for findText (default case-insensitive). Requires findText; fuzzy is unsupported.' },
+        },
+        required: ['responseId'],
+      },
     },
   ];
 
@@ -168,38 +324,16 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
           return { success: false, error: ANSWER_MODE_UNSUPPORTED_MESSAGE };
         }
         if (call.name === 'web_search') {
-          const query = String(call.arguments?.query ?? '').trim();
-          if (!query) return { success: false, error: 'web_search requires a query.' };
-          // Track B (SPEC #155): forward the threaded retrieval selection —
-          // the setting reaches the plane instead of dying at the default.
-          const hits = await context.search(query, context.searchProvider);
-          for (const hit of hits) {
-            admitSource(context, {
-              url: hit.url,
-              title: hit.title,
-              domain: safeHost(hit.url),
-              snippet: hit.snippet,
-              credibilityScore: 0.5,
-            });
-          }
-          const body = hits
-            .map((h, i) => `[${i + 1}] ${h.title} — ${h.url}\n${h.snippet}`)
-            .join('\n\n');
-          return { success: true, result: body || 'No results.' };
+          return await handleWebSearch(context, call.arguments ?? {});
         }
         if (call.name === 'fetch_content') {
-          const url = String(call.arguments?.url ?? '').trim();
-          if (!url) return { success: false, error: 'fetch_content requires a URL.' };
-          const page = await fetchPage(url);
-          if (!page) {
-            return {
-              success: false,
-              error: context.signal?.aborted
-                ? 'fetch aborted.'
-                : `could not fetch ${url} (budget or retrieval failure).`,
-            };
-          }
-          return { success: true, result: page.text };
+          return await handleFetchContent(context, call.arguments ?? {});
+        }
+        if (call.name === 'source_check') {
+          return await handleSourceCheck(context, call.arguments ?? {});
+        }
+        if (call.name === 'get_search_content') {
+          return handleGetSearchContent(context, call.arguments ?? {});
         }
         return { success: false, error: `unknown tool "${call.name}".` };
       } catch (error: any) {
@@ -207,6 +341,418 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
       }
     },
   };
+}
+
+/**
+ * `web_search` (Track D): full-contract retrieval. Queries fan out through
+ * the threaded selection with per-call scoping; hits merge (dedupe by URL),
+ * admit as sources, and store under a responseId for `get_search_content`.
+ * `includeContent` fetches top pages through the ledgered, budget-capped
+ * fetcher — shortfalls are reported, never silent.
+ */
+async function handleWebSearch(
+  context: AgenticToolContext,
+  args: Record<string, any>
+): Promise<AgenticToolOutcome> {
+  const queryList = normalizeQueryList(args);
+  if (queryList.length === 0) {
+    return { success: false, error: 'web_search requires a query or queries.' };
+  }
+  if (args.recencyFilter !== undefined && !(RECENCY_VALUES as readonly string[]).includes(args.recencyFilter)) {
+    return {
+      success: false,
+      error: `web_search recencyFilter must be one of day|week|month|year — got ${JSON.stringify(args.recencyFilter)}. Refused rather than silently serving unscoped results.`,
+    };
+  }
+  if (args.domainFilter !== undefined && !Array.isArray(args.domainFilter)) {
+    return { success: false, error: 'web_search domainFilter must be an array of domain strings.' };
+  }
+  const domainFilter = Array.isArray(args.domainFilter)
+    ? args.domainFilter.filter((d): d is string => typeof d === 'string').map((d) => d.trim()).filter(Boolean)
+    : undefined;
+  const num = clampNumResults(args.numResults, AGENTIC_TOOL_BOUNDS.webSearchDefaultResults);
+  const provider =
+    typeof args.provider === 'string' && args.provider.trim()
+      ? args.provider.trim()
+      : context.searchProvider;
+  const served = queryList.slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
+  const notes: string[] = [];
+  if (queryList.length > served.length) {
+    notes.push(
+      `${served.length} of ${queryList.length} queries served (cap ${AGENTIC_TOOL_BOUNDS.maxQueriesPerCall}); resubmit the remainder separately.`
+    );
+  }
+  const includeContent = args.includeContent === true;
+
+  const slices: StoredSearchSlice[] = [];
+  for (const q of served) {
+    const hits = await context.search(q, provider, {
+      numResults: num,
+      ...(args.recencyFilter !== undefined ? { recencyFilter: args.recencyFilter } : {}),
+      ...(domainFilter ? { domainFilter } : {}),
+    });
+    slices.push({
+      query: q,
+      hits: hits.map((h) => ({ url: h.url, title: h.title, snippet: h.snippet })),
+    });
+  }
+
+  const merged = new Map<string, StoredSearchHit>();
+  for (const slice of slices) {
+    for (const hit of slice.hits) {
+      if (!merged.has(hit.url)) merged.set(hit.url, { ...hit });
+    }
+  }
+  for (const hit of merged.values()) {
+    admitSource(context, {
+      url: hit.url,
+      title: hit.title,
+      domain: safeHost(hit.url),
+      snippet: hit.snippet,
+      credibilityScore: 0.5,
+    });
+  }
+
+  if (includeContent) {
+    const targets = [...merged.values()].slice(0, AGENTIC_TOOL_BOUNDS.maxIncludePages);
+    let servedPages = 0;
+    for (const hit of targets) {
+      const page = await fetchPageForSurface(context, hit.url, {});
+      if (page) {
+        servedPages += 1;
+        hit.content = page.text;
+      }
+    }
+    if (servedPages < targets.length) {
+      notes.push(
+        `content fetched for ${servedPages} of ${targets.length} pages (budget cap ${context.maxFetches}); excerpts below cover only fetched pages.`
+      );
+    }
+  }
+
+  const lines: string[] = [];
+  slices.forEach((slice, qi) => {
+    lines.push(`Query ${qi + 1}/${slices.length}: ${slice.query}`);
+    slice.hits.forEach((h, i) => {
+      lines.push(`[${qi + 1}.${i + 1}] ${h.title} — ${h.url}\n${h.snippet}`);
+      if (h.content) lines.push(`Full text (excerpt): ${h.content.slice(0, 300)}`);
+    });
+  });
+  if (merged.size === 0) lines.push('No results.');
+  for (const note of notes) lines.push(`Note: ${note}`);
+  const body = lines.join('\n\n');
+  const responseId = storeToolContent(context.sessionId, 'search', served.join(' | '), served, body, [...merged.values()], slices);
+  return { success: true, result: capResultText(`${body}\n\nresponseId: ${responseId} (retrieve full stored content via get_search_content)`) };
+}
+
+/**
+ * Shared ledgered fetch for the surface internals (Track D): budget gate,
+ * `budget_exhausted` emission, `claimAndShare` admission, and passage
+ * back-fill live here once — `fetch_content`, `includeContent`, and
+ * `source_check` all ride it, so admission, dedupe, and the cap stay
+ * single-sourced (ADR-0014 decision 4).
+ */
+const fetchPageForSurface = async (
+  context: AgenticToolContext,
+  url: string,
+  options: AgenticFetchCallOptions
+): Promise<{ url: string; title: string; text: string } | null> => {
+  if (context.signal?.aborted) return null;
+  if (context.state.fetchesUsed >= context.maxFetches) {
+    context.emit({
+      type: 'budget_exhausted',
+      sessionId: context.sessionId,
+      state: 'budget_exhausted',
+      message: `Retrieval budget exhausted (cap ${context.maxFetches}). | استُنفدت ميزانية الاسترجاع (الحد ${context.maxFetches}).`,
+    });
+    return null;
+  }
+  context.state.fetchesUsed += 1;
+  const mode = options.mode;
+  const entry = await claimAndShare(context.sessionId, url, async () => {
+    const page = await context.fetchPage(url, mode ? { mode } : undefined);
+    // Normalize to the ledger's ScrapedPageLike shape (content, not text).
+    return page ? { url: page.url, title: page.title, content: page.text } : null;
+  });
+  if (!entry) return null;
+  const page = entry.page;
+  const text = typeof page.content === 'string' ? page.content : '';
+  const item: SourceItem = {
+    url: page.url,
+    title: page.title ?? page.url,
+    domain: page.domain ?? safeHost(page.url),
+    snippet: text.slice(0, 200),
+    credibilityScore: page.credibilityScore ?? 0.5,
+    passage: text,
+  };
+  const existing = context.state.sources.find((s) => s.url === item.url);
+  if (existing) {
+    // Evidence preservation (ADR-0013 boundary clause): a URL first
+    // admitted as a search snippet GAINS the full fetched passage when the
+    // same URL is later fetched — the content is never silently dropped by
+    // the admission dedupe.
+    if (!existing.passage && item.passage) existing.passage = item.passage;
+    if (!existing.domain && item.domain) existing.domain = item.domain;
+  } else {
+    admitSource(context, item);
+  }
+  return { url: page.url, title: page.title ?? page.url, text };
+};
+
+const VIDEO_AND_ADVANCED_FETCH_FIELDS = ['prompt', 'timestamp', 'frames', 'model', 'auth', 'proxy', 'answerModel', 'forceClone'] as const;
+
+/**
+ * `fetch_content` (Track D): url/urls with readable/raw modes. Unsupported
+ * mechanism fields (video analysis, proxy/auth profiles, model overrides)
+ * are refused loudly — the headless engine has no browser, no ffmpeg, no
+ * remote-hosted providers. Multi-URL calls serve in order within the run
+ * budget; per-URL failures report inline, and total failure is an explicit
+ * failure (never an empty success).
+ */
+async function handleFetchContent(
+  context: AgenticToolContext,
+  args: Record<string, any>
+): Promise<AgenticToolOutcome> {
+  const mode = args.mode ?? 'readable';
+  if (mode !== 'readable' && mode !== 'raw') {
+    return {
+      success: false,
+      error: `fetch_content mode must be 'readable' or 'raw' — got ${JSON.stringify(mode)}. (answer mode is refused: ${ANSWER_MODE_UNSUPPORTED_MESSAGE})`,
+    };
+  }
+  const unsupported = VIDEO_AND_ADVANCED_FETCH_FIELDS.filter((f) => args[f] !== undefined);
+  if (unsupported.length > 0) {
+    return {
+      success: false,
+      error: `fetch_content option(s) unsupported in LENS: ${unsupported.join(', ')} — LENS serves readable/raw extraction only (no video analysis, no proxy/auth profiles, no model overrides).`,
+    };
+  }
+  const rawList: unknown[] = Array.isArray(args.urls) ? args.urls : args.url !== undefined ? [args.url] : [];
+  const urlList = rawList.filter((u): u is string => typeof u === 'string').map((u) => u.trim()).filter(Boolean);
+  if (urlList.length === 0) {
+    return { success: false, error: 'fetch_content requires a url or urls.' };
+  }
+  const served = urlList.slice(0, AGENTIC_TOOL_BOUNDS.maxFetchUrls);
+  const notes: string[] = [];
+  if (urlList.length > served.length) {
+    notes.push(`${served.length} of ${urlList.length} URLs served (cap ${AGENTIC_TOOL_BOUNDS.maxFetchUrls}); resubmit the remainder separately.`);
+  }
+  const sections: string[] = [];
+  let servedCount = 0;
+  for (const url of served) {
+    const page = await fetchPageForSurface(context, url, { mode });
+    if (page) {
+      servedCount += 1;
+      sections.push(`## ${page.url}\n${page.title}\n\n${page.text}`);
+    } else {
+      sections.push(
+        `## ${url}\ncould not fetch ${url} (${context.signal?.aborted ? 'aborted' : 'budget or retrieval failure'}).`
+      );
+    }
+  }
+  for (const note of notes) sections.push(`Note: ${note}`);
+  if (servedCount === 0) {
+    return { success: false, error: sections.join('\n\n') };
+  }
+  return { success: true, result: capResultText(sections.join('\n\n')) };
+}
+
+/**
+ * `source_check` (Track D): claim-evidence artifact WITHOUT semantic
+ * inference. Searches the claim (or the given queries), optionally fetches
+ * top pages for exact passages, admits everything as evidence, and stores
+ * the artifact for `get_search_content`. The MODEL judges support — the tool
+ * never emits supported/contradicted/verdict labels.
+ */
+async function handleSourceCheck(
+  context: AgenticToolContext,
+  args: Record<string, any>
+): Promise<AgenticToolOutcome> {
+  const claim = typeof args.claim === 'string' ? args.claim.trim() : '';
+  if (!claim) {
+    return { success: false, error: 'source_check requires a claim.' };
+  }
+  if (args.recencyFilter !== undefined && !(RECENCY_VALUES as readonly string[]).includes(args.recencyFilter)) {
+    return {
+      success: false,
+      error: `source_check recencyFilter must be one of day|week|month|year — got ${JSON.stringify(args.recencyFilter)}. Refused rather than silently serving unscoped results.`,
+    };
+  }
+  if (args.domainFilter !== undefined && !Array.isArray(args.domainFilter)) {
+    return { success: false, error: 'source_check domainFilter must be an array of domain strings.' };
+  }
+  const domainFilter = Array.isArray(args.domainFilter)
+    ? args.domainFilter.filter((d): d is string => typeof d === 'string').map((d) => d.trim()).filter(Boolean)
+    : undefined;
+  const requested = normalizeQueryList({ queries: args.queries });
+  const queryList = (requested.length > 0 ? requested : [claim]).slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
+  const num = clampNumResults(args.numResults, AGENTIC_TOOL_BOUNDS.sourceCheckDefaultResults);
+  const provider =
+    typeof args.provider === 'string' && args.provider.trim()
+      ? args.provider.trim()
+      : context.searchProvider;
+  const wantContent = args.fetchContent === true;
+
+  const merged = new Map<string, StoredSearchHit>();
+  for (const q of queryList) {
+    const hits = await context.search(q, provider, {
+      numResults: num,
+      ...(args.recencyFilter !== undefined ? { recencyFilter: args.recencyFilter } : {}),
+      ...(domainFilter ? { domainFilter } : {}),
+    });
+    for (const h of hits) {
+      if (!merged.has(h.url)) merged.set(h.url, { url: h.url, title: h.title, snippet: h.snippet });
+    }
+  }
+  for (const hit of merged.values()) {
+    admitSource(context, {
+      url: hit.url,
+      title: hit.title,
+      domain: safeHost(hit.url),
+      snippet: hit.snippet,
+      credibilityScore: 0.5,
+    });
+  }
+
+  const notes: string[] = [];
+  const targets = wantContent ? [...merged.values()].slice(0, AGENTIC_TOOL_BOUNDS.maxCheckPages) : [];
+  let fetchedPages = 0;
+  for (const hit of targets) {
+    const page = await fetchPageForSurface(context, hit.url, {});
+    if (page) {
+      fetchedPages += 1;
+      hit.content = page.text;
+    }
+  }
+  if (wantContent && fetchedPages < targets.length) {
+    notes.push(
+      `passages extracted for ${fetchedPages} of ${targets.length} pages (budget cap ${context.maxFetches}).`
+    );
+  }
+  if (!wantContent && merged.size > 0) {
+    notes.push('passages not extracted (fetchContent false); re-run with fetchContent true for exact citations.');
+  }
+
+  const lines: string[] = [
+    `Claim: ${claim}`,
+    `Queries (${queryList.length}): ${queryList.join(' | ')}`,
+    `Sources (${merged.size}):`,
+  ];
+  let rank = 0;
+  for (const hit of merged.values()) {
+    rank += 1;
+    lines.push(`[${rank}] ${hit.title} — ${hit.url}\nSnippet: ${hit.snippet}`);
+    lines.push(hit.content ? `Passage: ${hit.content.slice(0, AGENTIC_TOOL_BOUNDS.artifactExcerptChars)}` : 'Passage: (not extracted)');
+  }
+  if (merged.size === 0) lines.push('(no sources found)');
+  for (const note of notes) lines.push(`Note: ${note}`);
+  const body = lines.join('\n\n');
+  const slices: StoredSearchSlice[] = queryList.map((q) => ({ query: q, hits: [] }));
+  const responseId = storeToolContent(context.sessionId, 'check', claim, queryList, body, [...merged.values()], slices);
+  return { success: true, result: capResultText(`${body}\n\nresponseId: ${responseId} (retrieve full stored content via get_search_content)`) };
+}
+
+/**
+ * `get_search_content` (Track D): bounded paging over the session's stored
+ * tool content. Unknown ids, dangling findMode, out-of-range selectors, and
+ * fuzzy matching are refusals — a store read must never invent content.
+ * Reads consume no budget and touch no ledger.
+ */
+function handleGetSearchContent(
+  context: AgenticToolContext,
+  args: Record<string, any>
+): AgenticToolOutcome {
+  const responseId = typeof args.responseId === 'string' ? args.responseId : '';
+  if (!responseId) {
+    return { success: false, error: 'get_search_content requires a responseId.' };
+  }
+  // Shape errors precede the store lookup: a malformed call is refused for
+  // its shape regardless of whether the id exists.
+  if (args.findMode !== undefined && args.findText === undefined) {
+    return { success: false, error: 'get_search_content findMode requires findText; provide findText or omit findMode.' };
+  }
+  if (args.findMode !== undefined && !['exact', 'case-insensitive'].includes(args.findMode)) {
+    return {
+      success: false,
+      error: `get_search_content findMode must be 'exact' or 'case-insensitive' — fuzzy matching is unsupported in LENS.`,
+    };
+  }
+  const entry = storedBySession.get(context.sessionId)?.entries.get(responseId);
+  if (!entry) {
+    return {
+      success: false,
+      error: `get_search_content: unknown responseId ${JSON.stringify(responseId)} for this session. Use a responseId returned by web_search or source_check in the same run.`,
+    };
+  }
+
+  let target: { label: string; text: string };
+  if (args.url !== undefined || args.urlIndex !== undefined) {
+    let hit: StoredSearchHit | undefined;
+    if (args.url !== undefined) {
+      if (typeof args.url !== 'string') {
+        return { success: false, error: 'get_search_content url must be a string.' };
+      }
+      hit = entry.hits.find((h) => h.url === args.url);
+      if (!hit) {
+        return { success: false, error: `get_search_content: url ${JSON.stringify(args.url)} is not part of responseId ${JSON.stringify(responseId)}.` };
+      }
+    } else {
+      const i = args.urlIndex;
+      if (typeof i !== 'number' || !Number.isInteger(i) || i < 0 || i >= entry.hits.length) {
+        return { success: false, error: `get_search_content: urlIndex out of range (0-${entry.hits.length - 1}) for responseId ${JSON.stringify(responseId)}.` };
+      }
+      hit = entry.hits[i];
+    }
+    target = { label: hit.url, text: hit.content ?? hit.snippet };
+  } else if (args.queryIndex !== undefined) {
+    const i = args.queryIndex;
+    if (typeof i !== 'number' || !Number.isInteger(i) || i < 0 || i >= entry.slices.length) {
+      return { success: false, error: `get_search_content: queryIndex out of range (0-${entry.slices.length - 1}) for responseId ${JSON.stringify(responseId)}.` };
+    }
+    const slice = entry.slices[i];
+    target = {
+      label: `query ${i}: ${slice.query}`,
+      text: slice.hits.map((h, hi) => `[${hi}] ${h.title} — ${h.url}\n${h.content ?? h.snippet}`).join('\n\n') || '(no hits)',
+    };
+  } else {
+    target = { label: responseId, text: entry.text };
+  }
+
+  if (args.findText !== undefined) {
+    if (typeof args.findText !== 'string' || !args.findText) {
+      return { success: false, error: 'get_search_content findText must be a non-empty string.' };
+    }
+    const needle = args.findMode === 'exact' ? args.findText : args.findText.toLowerCase();
+    const haystack = args.findMode === 'exact' ? target.text : target.text.toLowerCase();
+    const windows: string[] = [];
+    let from = 0;
+    while (windows.length < AGENTIC_TOOL_BOUNDS.maxFindWindows) {
+      const at = haystack.indexOf(needle, from);
+      if (at < 0) break;
+      const start = Math.max(0, at - AGENTIC_TOOL_BOUNDS.findWindowChars);
+      const end = Math.min(target.text.length, at + needle.length + AGENTIC_TOOL_BOUNDS.findWindowChars);
+      windows.push(`…${target.text.slice(start, end)}…`);
+      from = at + needle.length;
+    }
+    if (windows.length === 0) {
+      return { success: true, result: `No matches for ${JSON.stringify(args.findText)} in ${target.label} (${target.text.length} chars searched).` };
+    }
+    return { success: true, result: windows.join('\n\n---\n\n') };
+  }
+
+  const offset = args.offset ?? 0;
+  const limit = args.limit ?? AGENTIC_TOOL_BOUNDS.getContentDefaultLimit;
+  if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
+    return { success: false, error: 'get_search_content offset must be a non-negative integer.' };
+  }
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0 || limit > AGENTIC_TOOL_BOUNDS.getContentMaxLimit) {
+    return { success: false, error: `get_search_content limit must be an integer 1-${AGENTIC_TOOL_BOUNDS.getContentMaxLimit}.` };
+  }
+  const slice = target.text.slice(offset, offset + limit);
+  const suffix = offset + limit < target.text.length
+    ? `\n…(${target.text.length - offset - limit} more chars; re-run with offset ${offset + limit})`
+    : '';
+  return { success: true, result: slice + suffix };
 }
 
 function safeHost(url: string): string {
@@ -288,6 +834,9 @@ export async function runAgenticSearch(session: any, options: AgenticRunOptions)
   const abort = new AbortController();
   let terminal: AgenticRunResult['terminal'] = 'error';
   resetFetchLedger(sessionId);
+  // Track D: a run starts from an empty stored-content registry — a
+  // responseId from a previous run must never resolve in this one.
+  resetAgenticStoredContent(sessionId);
 
   // Bridge first: runtime events are visible from the very first instant.
   // Every emission also mirrors report chunks into the draft, so the
