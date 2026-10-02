@@ -22,6 +22,8 @@ import {
   ExpansionOptions,
   QueryExpansionTelemetry
 } from './queryExpansion';
+import type { EmbeddingProvider } from './types';
+import { resolveOllamaEndpoint } from './piOllama';
 
 export { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord, WeightedTerm };
 export { fuseRankings };
@@ -38,17 +40,79 @@ export {
   EmbeddingCacheOptions
 };
 
-export type EmbeddingProvider = 'gemini' | 'openai' | 'ollama' | 'none';
+export type { EmbeddingProvider } from './types';
 
 export interface EmbeddingConfig {
   enabled?: boolean;
   provider: EmbeddingProvider;
   model: string;
-  apiKey?: string;
-  endpoint?: string;
   timeoutMs?: number;
   disableCache?: boolean;
   cache?: EmbeddingCache;
+  /**
+   * Override the LENS-owned agent directory for Pi resolution (auth +
+   * Ollama overlay). Production callers never pass it — the app-data
+   * default holds. Test harnesses pass a per-process temp dir so suites
+   * never share (and pollute) the real credential file.
+   */
+  agentDir?: string;
+}
+
+/**
+ * Canonicalize an embedding provider id to the Pi vocabulary (`google`,
+ * never legacy LENS `gemini`). Stored settings from before P3 may still say
+ * `gemini` — the boundary tolerates it exactly once, here, and nowhere else.
+ */
+export function canonicalEmbeddingProvider(provider: string): string {
+  const norm = (provider || '').toLowerCase().trim();
+  return norm === 'gemini' ? 'google' : norm;
+}
+
+/**
+ * Default embedding model per Pi provider id (legacy `gemini` canonicalized).
+ * Single-sourced so callers never re-derive it with their own mapping.
+ */
+export function defaultEmbeddingModel(provider: string): string {
+  const norm = canonicalEmbeddingProvider(provider);
+  if (norm === 'openai') return 'text-embedding-3-small';
+  if (norm === 'ollama') return 'nomic-embed-text';
+  return 'text-embedding-004';
+}
+
+/**
+ * Resolve the embedding credential exclusively from Pi truth (tracer P3):
+ * Pi's file-backed `auth.json` under the agent directory first, then Pi's
+ * own ambient env union (`GEMINI_API_KEY` / `OPENAI_API_KEY`, plus the legacy
+ * `GOOGLE_API_KEY` alias). Requests never carry keys — the envelope holds
+ * provider/model/endpoint only. Ollama and `none` carry no key (always '').
+ */
+export function resolveEmbeddingApiKey(provider: string, agentDir?: string): string {
+  const norm = canonicalEmbeddingProvider(provider);
+  if (norm === 'ollama' || norm === 'none' || !norm) return '';
+  const piId = norm; // 'google' | 'openai' — Pi's own credential namespace
+  try {
+    // Compiled to CJS: resolve the agent dir through the host seam without a
+    // static import (embeddings sits beneath the seam's import closure).
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const host = require('./agentSessionHost') as { resolveAgentDir?: () => string };
+    const { join } = require('path') as typeof import('path');
+    const { readFileSync, existsSync } = require('fs') as typeof import('fs');
+    const dir = agentDir ?? host.resolveAgentDir?.() ?? join(require('os').homedir(), '.lens', 'pi-agent');
+    const authPath = join(dir, 'auth.json');
+    if (existsSync(authPath)) {
+      const parsed = JSON.parse(readFileSync(authPath, 'utf-8'));
+      const entry = parsed?.[piId];
+      if (entry?.type === 'api_key' && typeof entry.key === 'string' && entry.key.trim()) {
+        return entry.key.trim();
+      }
+    }
+  } catch {
+    // Unreadable store falls through to ambient env, then to ''.
+  }
+  const env = (globalThis as any)?.process?.env as Record<string, string | undefined> | undefined;
+  if (piId === 'openai') return (env?.OPENAI_API_KEY ?? '').trim();
+  if (piId === 'google') return (env?.GEMINI_API_KEY || env?.GOOGLE_API_KEY || '').trim();
+  return '';
 }
 
 export interface ChunkRecord {
@@ -660,32 +724,49 @@ export function wrapWithCache(
 
 /**
  * Creates an embedding model instance according to provider configuration.
+ * The credential resolves from Pi truth (`auth.json` / Pi ambient env) —
+ * never from the request envelope (tracer P3). A missing cloud key throws a
+ * Pi-actionable error; callers degrade to the lexical fallback.
  */
 export function createEmbeddingModel(config: EmbeddingConfig): BaseEmbedding {
-  const provider = (config.provider || 'none').toLowerCase().trim();
+  const provider = canonicalEmbeddingProvider(config.provider || 'none');
   let modelInstance: BaseEmbedding;
 
   switch (provider) {
-    case 'gemini':
+    case 'google': {
+      const apiKey = resolveEmbeddingApiKey('google', config.agentDir);
+      if (!apiKey) {
+        throw new Error(
+          'No API key configured for "google" embeddings in Pi auth. Open Settings → paste your Google key, then retry. | لا يوجد مفتاح API لتضمينات "google" في Pi. افتح الإعدادات ← أضف المفتاح ثم أعد المحاولة.'
+        );
+      }
       modelInstance = new GeminiEmbedding({
-        apiKey: config.apiKey || '',
+        apiKey,
         model: config.model || 'text-embedding-004',
-        endpoint: config.endpoint,
         timeoutMs: config.timeoutMs
       });
       break;
-    case 'openai':
+    }
+    case 'openai': {
+      const apiKey = resolveEmbeddingApiKey('openai', config.agentDir);
+      if (!apiKey) {
+        throw new Error(
+          'No API key configured for "openai" embeddings in Pi auth. Open Settings → paste your OpenAI key, then retry. | لا يوجد مفتاح API لتضمينات "openai" في Pi. افتح الإعدادات ← أضف المفتاح ثم أعد المحاولة.'
+        );
+      }
       modelInstance = new OpenAIEmbedding({
-        apiKey: config.apiKey || '',
+        apiKey,
         model: config.model || 'text-embedding-3-small',
-        baseURL: config.endpoint,
         timeoutMs: config.timeoutMs
       });
       break;
+    }
     case 'ollama':
+      // P4: the endpoint is Pi truth (`models.json` overlay, else the local
+      // default) — never a per-request value.
       modelInstance = new OllamaEmbedding({
         model: config.model || 'nomic-embed-text',
-        endpoint: config.endpoint || 'http://localhost:11434',
+        endpoint: resolveOllamaEndpoint(config.agentDir),
         timeoutMs: config.timeoutMs
       });
       break;
@@ -701,20 +782,23 @@ export function createEmbeddingModel(config: EmbeddingConfig): BaseEmbedding {
 }
 
 /**
- * Dynamic discovery for embedding models.
- * Filters exclusively for embedding-capable models and guarantees no chat models are included.
+ * Keyless embedding model listing (tracer P3): the provider decides the
+ * list, never a per-key fetch. Ollama probes the local server live;
+ * cloud providers attempt live discovery with the Pi-stored key and fall
+ * back to the static defaults without one — the old per-request-key catalog
+ * fetcher is deleted, and no key material ever travels the query string.
  */
 export async function fetchEmbeddingModels(
   provider: string,
-  apiKey?: string,
-  endpoint?: string
+  agentDir?: string
 ): Promise<ModelOption[]> {
-  const norm = (provider || '').toLowerCase().trim();
+  const norm = canonicalEmbeddingProvider(provider);
 
-  // 1. Ollama (local)
+  // 1. Ollama (local): the endpoint is Pi truth (overlay, else default).
   if (norm === 'ollama') {
+    const endpoint = resolveOllamaEndpoint(agentDir);
     try {
-      const url = `${(endpoint || 'http://localhost:11434').replace(/\/$/, '')}/api/tags`;
+      const url = `${endpoint.replace(/\/$/, '')}/api/tags`;
       const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
       if (!res.ok) return getDefaultEmbeddingModels('ollama');
 
@@ -748,15 +832,15 @@ export async function fetchEmbeddingModels(
     }
   }
 
-  // Cloud providers require API key
-  if (!apiKey || !apiKey.trim()) {
+  // Cloud providers: live discovery only with the Pi-stored key, else the
+  // static defaults. Keyless by contract — the key never arrives per request.
+  const key = resolveEmbeddingApiKey(norm, agentDir);
+  if (!key) {
     return getDefaultEmbeddingModels(norm);
   }
 
-  const key = apiKey.trim();
-
-  // 2. Google Gemini
-  if (norm === 'gemini' || norm === 'google') {
+  // 2. Google
+  if (norm === 'google') {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -783,9 +867,9 @@ export async function fetchEmbeddingModels(
         });
       }
 
-      return discovered.length > 0 ? discovered : getDefaultEmbeddingModels('gemini');
+      return discovered.length > 0 ? discovered : getDefaultEmbeddingModels('google');
     } catch {
-      return getDefaultEmbeddingModels('gemini');
+      return getDefaultEmbeddingModels('google');
     }
   }
 
@@ -828,8 +912,8 @@ export async function fetchEmbeddingModels(
  * Sensible default embedding model catalog when API discovery is offline or not yet keyed.
  */
 export function getDefaultEmbeddingModels(provider: string): ModelOption[] {
-  const norm = provider.toLowerCase().trim();
-  if (norm === 'gemini' || norm === 'google') {
+  const norm = canonicalEmbeddingProvider(provider);
+  if (norm === 'google') {
     return [
       { id: 'text-embedding-004', name: 'text-embedding-004', context: '768 dimensions', tags: ['Recommended', 'Gemini'], recommended: true }
     ];

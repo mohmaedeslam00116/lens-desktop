@@ -28,7 +28,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = (props) => {
     { id: 'settings', title: ar ? 'إعدادات النماذج والمفاتيح' : 'Model and API settings', icon: Settings, action: props.onOpenSettings },
     { id: 'language', title: ar ? 'Switch to English' : 'التحويل للعربية', icon: Globe, action: props.onToggleLanguage },
     ...(props.hasActiveReport ? (['pdf', 'docx', 'markdown'] as const).map(format => ({ id: format, title: `${ar ? 'تصدير التقرير' : 'Export report'} · ${format.toUpperCase()}`, icon: Download, action: () => props.onExport(format) })) : []),
-    ...(['gemini', 'openai', 'anthropic', 'deepseek', 'groq', 'ollama', 'openrouter'] as LLMProvider[]).map(provider => ({
+    ...(['google', 'openai', 'anthropic', 'deepseek', 'groq', 'ollama', 'openrouter'] as LLMProvider[]).map(provider => ({
       id: provider, title: `${ar ? 'استخدام' : 'Use'} ${provider}`, icon: Cpu,
       action: () => props.onUpdateSettings({ ...props.settings, llm_provider: provider, model_name: '', custom_model_name: '' }),
     })),

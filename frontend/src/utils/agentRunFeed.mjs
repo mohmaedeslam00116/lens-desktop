@@ -53,10 +53,22 @@ export function initialAgentRunState(sessionId) {
   };
 }
 
-const TERMINALS = new Set(['finished', 'cancelled', 'budget_exhausted', 'error']);
+/**
+ * Run terminals for the agentic feed. `budget_exhausted` is deliberately
+ * ABSENT: the engine emits it mid-run from inside the fetch wrapper (the run
+ * continues into its answer and explicit terminal), so treating it as final
+ * would freeze the feed and drop the run's real ending. Only the runner's
+ * explicit terminals freeze the run.
+ */
+const TERMINALS = new Set(['finished', 'cancelled', 'error']);
+
+/** True once the run has reached its explicit terminal. */
+export function isAgentRunTerminal(phase) {
+  return TERMINALS.has(phase);
+}
 
 function isTerminal(phase) {
-  return TERMINALS.has(phase);
+  return isAgentRunTerminal(phase);
 }
 
 function sameSession(state, sessionId) {
@@ -211,9 +223,16 @@ export function reduceAgentRun(state, action) {
       return { ...base, lastEvent: event.type };
     }
 
+    case 'budget_exhausted': {
+      // Mid-run retrieval warning — the run continues. Record it without
+      // touching the phase, so the feed never freezes on a warning and the
+      // explicit terminal still lands.
+      if (base.phase === 'idle') return base;
+      return { ...base, lastEvent: event.type };
+    }
+
     case 'finished':
     case 'cancelled':
-    case 'budget_exhausted':
     case 'error': {
       // Cancel keeps the evidence admitted so far — explicit terminal, never
       // silence, never a reset.

@@ -267,7 +267,12 @@ export function mapAgentSessionEvent(event: any, sessionId: string): SessionEven
         },
       };
 
-    case 'auto_retry_start':
+    case 'auto_retry_start': {
+      // pi-coding-agent 0.85.1 names the cause `errorMessage` (older shapes
+      // carried `error`): read both, so neither a runtime upgrade nor a
+      // downgrade renders a bare "null" where the provider cause belongs.
+      const cause = event.errorMessage ?? event.error;
+      const causeText = cause === undefined || cause === null ? 'unknown error' : jsonSafe(cause);
       return {
         handled: true,
         event: {
@@ -276,11 +281,28 @@ export function mapAgentSessionEvent(event: any, sessionId: string): SessionEven
           step: 'retry',
           message: `Provider error — retrying (attempt ${jsonSafe(event.attempt)}/${
             event.maxAttempts === undefined ? '?' : jsonSafe(event.maxAttempts)
-          }): ${jsonSafe(event.error)}`,
+          }): ${causeText}`,
         },
       };
+    }
 
-    case 'auto_retry_end':
+    case 'auto_retry_end': {
+      // The runtime reports the outcome as `{ success, finalError }` (older
+      // shapes carried `willRetry`): a failed retry loop must surface the
+      // final provider error, never a bare "finished".
+      if (event.success === false) {
+        const final = event.finalError ?? event.error ?? event.errorMessage;
+        const finalText = final === undefined || final === null ? 'unknown error' : jsonSafe(final);
+        return {
+          handled: true,
+          event: {
+            type: 'status',
+            sessionId,
+            step: 'retry',
+            message: `Retry failed: ${finalText}`,
+          },
+        };
+      }
       return {
         handled: true,
         event: {
@@ -290,12 +312,23 @@ export function mapAgentSessionEvent(event: any, sessionId: string): SessionEven
           message: event.willRetry === true ? 'Retry scheduled.' : 'Retry loop finished.',
         },
       };
+    }
 
-    case 'summarization_retry_scheduled':
+    case 'summarization_retry_scheduled': {
+      const cause = event.errorMessage ?? event.error;
       return {
         handled: true,
-        event: { type: 'status', sessionId, step: 'retry', message: 'Summarization retry scheduled.' },
+        event: {
+          type: 'status',
+          sessionId,
+          step: 'retry',
+          message:
+            cause === undefined || cause === null
+              ? 'Summarization retry scheduled.'
+              : `Summarization retry scheduled: ${jsonSafe(cause)}.`,
+        },
       };
+    }
 
     case 'summarization_retry_attempt_start':
       return {
@@ -304,7 +337,9 @@ export function mapAgentSessionEvent(event: any, sessionId: string): SessionEven
           type: 'status',
           sessionId,
           step: 'retry',
-          message: `Summarization retry attempt ${jsonSafe(event.attempt)} started.`,
+          // The attempt events carry a `source` label, not an attempt number
+          // — either way the line names what it can, never "null".
+          message: `Summarization retry attempt ${jsonSafe(event.attempt ?? event.source ?? '?')} started.`,
         },
       };
 
@@ -315,7 +350,7 @@ export function mapAgentSessionEvent(event: any, sessionId: string): SessionEven
           type: 'status',
           sessionId,
           step: 'retry',
-          message: `Summarization retry attempt ${jsonSafe(event.attempt)} finished.`,
+          message: `Summarization retry attempt ${jsonSafe(event.attempt ?? event.source ?? '?')} finished.`,
         },
       };
 

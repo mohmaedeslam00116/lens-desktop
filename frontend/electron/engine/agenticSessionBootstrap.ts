@@ -3,10 +3,8 @@ import type { LensToolSurface } from './agentSessionHost';
 /**
  * The agentic session bootstrap (ticket #142, ADR-0014): builds ONE hosted
  * Pi AgentSession through the single #140 construction seam with the
- * LENS-wrapped tool surface registered at construction. Request-level
- * provider keys ride as non-persisted runtime overrides — the seam stays the
- * single point that owns the key surface (keys never touch the engine's
- * logs, telemetry, or responses).
+ * LENS-wrapped tool surface registered at construction. Pi owns auth
+ * (tracer P2): callers pass Pi provider/model ids only — never keys.
  *
  * Kept as its own module so the HTTP layer never imports the host seam
  * statically: the pi runtime loads lazily on the first agentic start, and
@@ -15,13 +13,16 @@ import type { LensToolSurface } from './agentSessionHost';
 export async function createAgenticResearchSession(
   sessionId: string,
   tools: LensToolSurface,
-  auth?: { provider?: string; apiKey?: string }
+  auth?: { provider?: string; modelName?: string }
 ): Promise<any> {
   const { createResearchSession } = await import('./agentSessionHost');
-  const providerOverrides: Record<string, string> = {};
-  if (auth?.provider && auth.apiKey) {
-    providerOverrides[auth.provider] = auth.apiKey;
-  }
-  const hosted = await createResearchSession({ sessionId, providerOverrides }, tools);
+  const hosted = await createResearchSession(
+    {
+      sessionId,
+      ...(auth?.provider ? { provider: auth.provider } : {}),
+      ...(auth?.modelName ? { modelName: auth.modelName } : {}),
+    },
+    tools
+  );
   return hosted.session;
 }

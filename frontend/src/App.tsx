@@ -47,26 +47,65 @@ const WS_BASE = ENGINE_ENDPOINT.wsBaseUrl;
 
 const DEFAULT_SETTINGS: ApiSettings = {
   search_provider: 'duckduckgo',
-  llm_provider: 'gemini',
+  llm_provider: 'google',
   model_name: '',
   ollama_endpoint: 'http://localhost:11434',
   embedding: {
     enabled: true,
-    provider: 'gemini',
+    provider: 'google',
     model_name: 'text-embedding-004',
-    use_chat_key: true,
-    endpoint: 'http://localhost:11434'
   },
   keys: {
-    openai: '',
-    gemini: '',
-    anthropic: '',
-    groq: '',
-    deepseek: '',
     tavily: '',
     serper: '',
   }
 };
+
+// P2 one-time migration: plaintext chat keys (`openai`, `gemini`, …) leave
+// localStorage for Pi's `auth.json`, and the LENS `gemini` id becomes the Pi
+// `google` id. P3 extends it: embedding `api_key`/`use_chat_key` plaintext is
+// scrubbed and the legacy embedding `gemini` provider becomes `google`.
+// Runs once per stored settings payload; after it, `keys` holds only search
+// keys and both provider fields speak Pi ids.
+const CHAT_KEY_FIELDS = ['openai', 'gemini', 'google', 'anthropic', 'groq', 'deepseek', 'openrouter', 'mistral'] as const;
+function migrateLegacySettings(parsed: any): { settings: ApiSettings; chatKeys: Array<{ provider: string; apiKey: string }> } {
+  const chatKeys: Array<{ provider: string; apiKey: string }> = [];
+  const rawKeys = (parsed?.keys ?? {}) as Record<string, unknown>;
+  for (const field of CHAT_KEY_FIELDS) {
+    const value = rawKeys[field];
+    if (typeof value === 'string' && value.trim()) {
+      const piProvider = field === 'gemini' ? 'google' : field;
+      chatKeys.push({ provider: piProvider, apiKey: value.trim() });
+    }
+  }
+  const rawProvider = typeof parsed?.llm_provider === 'string' ? parsed.llm_provider : 'google';
+  const llm_provider = (rawProvider === 'gemini' ? 'google' : rawProvider) as ApiSettings['llm_provider'];
+  const rawEmbedding = (parsed?.embedding ?? {}) as Record<string, unknown>;
+  const rawEmbedProvider = typeof rawEmbedding.provider === 'string' ? rawEmbedding.provider : 'google';
+  const embedProvider = (rawEmbedProvider === 'gemini' ? 'google' : rawEmbedProvider) as NonNullable<ApiSettings['embedding']>['provider'];
+  const settings: ApiSettings = {
+    search_provider: parsed?.search_provider ?? 'duckduckgo',
+    llm_provider,
+    model_name: typeof parsed?.model_name === 'string' ? parsed.model_name : '',
+    ...(typeof parsed?.custom_model_name === 'string' ? { custom_model_name: parsed.custom_model_name } : {}),
+    ollama_endpoint: typeof parsed?.ollama_endpoint === 'string' ? parsed.ollama_endpoint : 'http://localhost:11434',
+    ...(parsed?.embedding
+      ? {
+          embedding: {
+            enabled: rawEmbedding.enabled !== false,
+            provider: embedProvider,
+            model_name: typeof rawEmbedding.model_name === 'string' ? rawEmbedding.model_name : 'text-embedding-004',
+            ...(typeof rawEmbedding.custom_model_name === 'string' ? { custom_model_name: rawEmbedding.custom_model_name } : {}),
+          },
+        }
+      : {}),
+    keys: {
+      ...(typeof rawKeys.tavily === 'string' ? { tavily: rawKeys.tavily } : {}),
+      ...(typeof rawKeys.serper === 'string' ? { serper: rawKeys.serper } : {}),
+    },
+  };
+  return { settings, chatKeys };
+}
 
 /**
  * Operator-facing explanation of an unreachable engine.
@@ -235,7 +274,8 @@ export function App() {
     }
   }, [theme]);
 
-  // Load history & settings
+  // Load history & settings (P2: one-time chat-keys → Pi `auth.json`
+  // migration; after it localStorage holds no chat-key plaintext).
   useEffect(() => {
     try {
       const savedHistory = localStorage.getItem('deep_research_history');
@@ -245,17 +285,56 @@ export function App() {
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
         if (!parsed.embedding) {
-          const provider = (parsed.llm_provider === 'openai' ? 'openai' : parsed.llm_provider === 'ollama' ? 'ollama' : 'gemini');
-          const defaultModel = provider === 'gemini' ? 'text-embedding-004' : provider === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text';
+          const provider = (parsed.llm_provider === 'openai' ? 'openai' : parsed.llm_provider === 'ollama' ? 'ollama' : 'google');
+          const defaultModel = provider === 'google' ? 'text-embedding-004' : provider === 'openai' ? 'text-embedding-3-small' : 'nomic-embed-text';
           parsed.embedding = {
             enabled: true,
             provider,
             model_name: defaultModel,
-            use_chat_key: true,
-            endpoint: parsed.ollama_endpoint || 'http://localhost:11434'
           };
         }
-        setSettings(parsed);
+        const { settings: migrated, chatKeys } = migrateLegacySettings(parsed);
+        setSettings(migrated);
+        // Persist the slimmed shape immediately so plaintext never lingers,
+        // then push any legacy keys into Pi (fire-and-forget: Settings Save
+        // retries the write; a failed migration never blocks boot).
+        try {
+          localStorage.setItem('deep_research_settings', JSON.stringify(migrated));
+        } catch { /* Preferences are optional. */ }
+        if (chatKeys.length > 0 && API_BASE) {
+          for (const { provider, apiKey } of chatKeys) {
+            fetch(`${API_BASE}/api/pi/auth`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ provider, apiKey }),
+            }).catch(() => { /* engine unreachable: Save retries */ });
+          }
+          if (migrated.llm_provider) {
+            fetch(`${API_BASE}/api/pi/defaults`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ provider: migrated.llm_provider, model: migrated.model_name || undefined }),
+            }).catch(() => { /* engine unreachable: Save retries */ });
+          }
+        }
+        // P4 one-time migration: the local Ollama endpoint persists into Pi's
+        // `models.json` overlay (fire-and-forget; Settings Save re-syncs on
+        // every change). Skipped when Pi already holds one — the file wins.
+        if (API_BASE && (migrated.ollama_endpoint || '').trim()) {
+          const endpoint = migrated.ollama_endpoint.trim();
+          fetch(`${API_BASE}/api/pi/ollama`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((status) => {
+              if (status && !status.endpoint) {
+                fetch(`${API_BASE}/api/pi/ollama`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ endpoint }),
+                }).catch(() => { /* engine unreachable: Save retries */ });
+              }
+            })
+            .catch(() => { /* engine unreachable: Save retries */ });
+        }
       }
     } catch (e) {
       console.error('Error reading storage:', e);
@@ -338,11 +417,9 @@ export function App() {
     const trimmed = searchQuery.trim();
     if (!trimmed || isSearching) return;
 
-    const activeKey = (settings.keys[settings.llm_provider as keyof typeof settings.keys] || '').trim();
-    if (settings.llm_provider !== 'ollama' && !activeKey) {
-      setIsSettingsOpen(true);
-      return;
-    }
+    // P2: auth lives in Pi (`auth.json`) — the renderer no longer gates on a
+    // local key. The engine's admission guard (Pi standing) rejects keyless
+    // runs with a bilingual 422; here we just start.
 
     setResearchError('');
     setCurrentQuery(trimmed);
@@ -351,8 +428,28 @@ export function App() {
     setActiveReport(null);
     setConversationProjection(null);
     setCurrentStatus(language === 'ar' ? 'بدء التشغيل الأجنتي...' : 'Starting the agentic run...');
+    // A new agent run starts from a clean workspace — the same complete reset
+    // a fresh research run gets. Anything left over (streamed report text,
+    // admitted sources, thoughts, telemetry) would bleed the previous run
+    // into this one, including into the new run's saved report fallback.
+    setThoughts([]);
+    setSubqueries([]);
+    setVisitedSources([]);
+    setReflections([]);
+    setGraphNodes([]);
+    setWideTelemetry(null);
+    wideTelemetryRef.current = null;
+    setWideExpansionHistory([]);
+    wideExpansionHistoryRef.current = [];
+    setLiveReport('');
+    liveReportRef.current = '';
     setAgents([]);
     setAgentEventCount(0);
+    // The previous agent socket must not outlive the run it belonged to: its
+    // late close/error must never settle this run's state (the onclose guard
+    // below enforces the same ownership).
+    agentWsRef.current?.close();
+    agentWsRef.current = null;
     // The feed seeds session-less (null) and SELF-SEEDS from the accept
     // payload's real session id — seeding with a literal empty id would make
     // the reducer reject every subsequent real event as another session's.
@@ -367,8 +464,11 @@ export function App() {
         body: JSON.stringify({
           question: trimmed,
           provider: settings.llm_provider,
-          api_key: activeKey || undefined,
-          ollama_endpoint: settings.llm_provider === 'ollama' ? settings.ollama_endpoint : undefined,
+          // The user's chosen working model (Settings test proves this one
+          // answers): the session resolves it inside the requested provider
+          // instead of wandering to ambient auth's pick. Pi files own auth
+          // and the Ollama endpoint — the body carries Pi ids only.
+          model_name: settings.custom_model_name || settings.model_name || undefined,
         }),
         signal: controller.signal,
       });
@@ -441,7 +541,12 @@ export function App() {
             }
             agentAbortControllersRef.current.delete(sessionId);
             ws.close();
-          } else if (payload.type === 'error' || payload.type === 'cancelled' || payload.type === 'budget_exhausted') {
+          } else if (payload.type === 'budget_exhausted') {
+            // Mid-run retrieval warning — the run continues into its answer
+            // and explicit terminal. Never close the stream, never clear the
+            // searching state: the terminal below owns the run's ending.
+            if (payload.message) setCurrentStatus(String(payload.message));
+          } else if (payload.type === 'error' || payload.type === 'cancelled') {
             setCurrentStatus(String(payload.message ?? ''));
             setIsSearching(false);
             agentAbortControllersRef.current.delete(sessionId);
@@ -450,6 +555,10 @@ export function App() {
         } catch { /* A malformed event never breaks the run. */ }
       };
       ws.onclose = () => {
+        // Ownership guard: a superseded socket (a newer run replaced it, or
+        // New Research tore it down) must never settle another run's state.
+        if (agentWsRef.current !== ws) return;
+        agentWsRef.current = null;
         agentAbortControllersRef.current.delete(sessionId);
         setIsSearching(false);
         // Explicit-terminal law: a close without a prior terminal event is
@@ -459,7 +568,6 @@ export function App() {
             ? reduceAgentRun(prev, { type: 'error', sessionId, message: 'The agentic event stream closed unexpectedly. | أُغلق تدفق الأحداث فجأة.' })
             : prev
         );
-        if (agentWsRef.current === ws) agentWsRef.current = null;
       };
       ws.onerror = () => {
         setResearchError(language === 'ar' ? 'تعذر الاتصال بتدفق الأحداث.' : 'Could not reach the event stream.');
@@ -498,7 +606,29 @@ export function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId }),
-    }).catch(() => { /* The local terminal already shows; the engine confirms on the stream. */ });
+    }).then(async (response) => {
+      if (response.ok) return; // The engine confirms with the `cancelled` terminal on the stream.
+      let alreadyFinished = false;
+      try {
+        alreadyFinished = (await response.json())?.already_finished === true;
+      } catch { /* A non-JSON rejection still settles below. */ }
+      if (alreadyFinished) return; // Terminal race: the run just ended; its terminal is in flight.
+      // No live run server-side and no recent terminal: the feed for this
+      // session will never hear anything — settle locally instead of hanging
+      // in the searching state. The reducer ignores this for sessions that
+      // already reached their own terminal.
+      agentAbortControllersRef.current.delete(sessionId);
+      setIsSearching(false);
+      setAgentRunFeed((prev) =>
+        prev ? reduceAgentRun(prev, { type: 'error', sessionId, message: 'The agentic run is no longer live on the engine. | لم يعد التشغيل الأجنتي حيًا على المحرك.' }) : prev
+      );
+      agentWsRef.current?.close();
+    }).catch(() => {
+      // The cancel never reached the engine. Say so visibly instead of
+      // leaving the stop control spinning; the stream's own close handler
+      // still owns the feed's terminal either way.
+      setResearchError(language === 'ar' ? 'تعذّر إرسال الإلغاء إلى المحرك.' : 'Could not reach the engine to cancel.');
+    });
   };
 
   const handleStartResearch = async (searchQuery: string) => {
@@ -506,11 +636,8 @@ export function App() {
 
     const sessionGeneration = sessionGenerationRef.current;
 
-    const activeKey = (settings.keys[settings.llm_provider as keyof typeof settings.keys] || '').trim();
-    if (settings.llm_provider !== 'ollama' && !activeKey) {
-      setIsSettingsOpen(true);
-      return;
-    }
+    // P2: auth lives in Pi — no local key gate. The engine admits/rejects on
+    // Pi standing.
 
     const trimmed = searchQuery.trim();
     setResearchError('');
@@ -572,14 +699,10 @@ export function App() {
           search_provider: settings.search_provider,
           llm_provider: settings.llm_provider,
           model_name: settings.custom_model_name || settings.model_name || undefined,
-          api_keys: settings.keys,
-          ollama_endpoint: settings.ollama_endpoint,
           embedding_provider: settings.embedding?.provider,
           embedding_model: settings.embedding?.custom_model_name || settings.embedding?.model_name,
-          embedding_api_key: settings.embedding?.use_chat_key !== false
-            ? (settings.keys[settings.embedding?.provider as keyof typeof settings.keys] || settings.embedding?.api_key)
-            : settings.embedding?.api_key,
-          embedding_endpoint: settings.embedding?.endpoint || settings.ollama_endpoint,
+          // P3/P4: embedding credentials and the Ollama endpoint resolve from
+          // Pi truth in the engine — the envelope carries Pi ids only.
           embedding_enabled: settings.embedding?.enabled,
         })),
       });
@@ -1070,6 +1193,7 @@ export function App() {
             wideTelemetry={resolvedTelemetry.wideTelemetry}
             wideExpansionHistory={resolvedTelemetry.wideExpansionHistory}
             agentRunFeed={agentRunFeed}
+            conversationProjection={conversationProjection}
             onStartAgentRun={handleStartAgentRun}
             onStartDeepResearch={handleStartResearch}
             onSteerAgentRun={handleSteerAgentRun}
@@ -1095,7 +1219,15 @@ export function App() {
               setWideExpansionHistory(report.wideExpansionHistory || []);
               setProposedPlan(null);
               setIsPlanModalOpen(false);
-              setConversationProjection(null);
+              // Replaying a saved run restores its persisted conversation too —
+              // the inspector's conversation tab replays what happened.
+              try {
+                const rawConversations = localStorage.getItem('lens-agentic-conversations');
+                const conversations = rawConversations ? JSON.parse(rawConversations) : {};
+                setConversationProjection(conversations[report.id] ?? null);
+              } catch {
+                setConversationProjection(null);
+              }
             }}
             onOpenSettings={() => setIsSettingsOpen(true)}
             onExport={handleExport}
@@ -1109,6 +1241,7 @@ export function App() {
               handleStartResearch(topicQuery);
             }}
             language={language}
+            apiBase={API_BASE}
           />
         )}
 
@@ -1176,6 +1309,7 @@ export function App() {
         settings={settings}
         onSave={saveSettings}
         language={language}
+        apiBase={API_BASE}
       />
 
       <CommandPalette

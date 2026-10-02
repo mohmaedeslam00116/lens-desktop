@@ -20,9 +20,11 @@ import { Language, DiscoverArticle } from '../../types';
 interface DiscoverViewProps {
   onSelectTopic: (topicQuery: string) => void;
   language: Language;
+  /** Resolved engine base URL from the preload bridge; null when the engine failed to start (no guessed port). */
+  apiBase: string | null;
 }
 
-export const DiscoverView: React.FC<DiscoverViewProps> = ({ onSelectTopic, language }) => {
+export const DiscoverView: React.FC<DiscoverViewProps> = ({ onSelectTopic, language, apiBase }) => {
   const isArabic = language === 'ar';
 
   const topics = [
@@ -43,9 +45,14 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ onSelectTopic, langu
   const fetchLiveNews = useCallback(async (topicId: string, customQuery?: string) => {
     setLoading(true);
     setError(null);
+    if (!apiBase) {
+      setLoading(false);
+      setError(isArabic ? 'محرك البحث غير متاح' : 'Research engine unavailable');
+      return;
+    }
     try {
       const qParam = customQuery && customQuery.trim() ? `&q=${encodeURIComponent(customQuery.trim())}` : '';
-      const res = await fetch(`http://127.0.0.1:8000/api/discover?topic=${topicId}&language=${language}${qParam}`);
+      const res = await fetch(`${apiBase}/api/discover?topic=${topicId}&language=${language}${qParam}`);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
@@ -57,7 +64,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ onSelectTopic, langu
     } finally {
       setLoading(false);
     }
-  }, [language, isArabic]);
+  }, [language, isArabic, apiBase]);
 
   useEffect(() => {
     fetchLiveNews(activeTopic, searchFilter);

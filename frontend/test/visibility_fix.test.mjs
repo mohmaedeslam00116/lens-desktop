@@ -136,30 +136,63 @@ describe('Stream idle watchdog (visibility fix, ticket #119)', () => {
   });
 });
 
-describe('Provider admission guard (visibility fix, ticket #119)', () => {
-  it('cloud provider without a key is rejected with a bilingual message', () => {
-    const msg = providerAdmissionGuard({ llm_provider: 'openai', api_keys: {} });
+describe('Provider admission guard (visibility fix, ticket #119; P2 Pi-owned auth)', () => {
+  it('a Pi-unconfigured provider is rejected with a bilingual message', async () => {
+    const { __testSeams: authSeams } = await import('../dist-electron/engine/piAuth.js');
+    await authSeams.savePiChatKey('mistral', '', undefined).catch(() => {});
+    const msg = await providerAdmissionGuard({ llm_provider: 'mistral' });
     assert.match(msg || '', /No API key configured/);
     assert.match(msg || '', /مفتاح API/);
   });
 
-  it('cloud provider with a key passes', () => {
-    assert.equal(providerAdmissionGuard({ llm_provider: 'openai', api_keys: { openai: 'sk-test' } }), null);
+  it('a Pi-configured provider passes', async () => {
+    const { __testSeams: authSeams } = await import('../dist-electron/engine/piAuth.js');
+    await authSeams.savePiChatKey('mistral', 'test-key-sentinel', undefined);
+    try {
+      assert.equal(await providerAdmissionGuard({ llm_provider: 'mistral' }), null);
+    } finally {
+      await authSeams.savePiChatKey('mistral', '', undefined).catch(() => {});
+    }
   });
 
-  it('empty-string key is treated as missing', () => {
-    const msg = providerAdmissionGuard({ llm_provider: 'gemini', api_keys: { gemini: '   ' } });
-    assert.match(msg || '', /No API key configured/);
+  it('the LENS `gemini` id is rejected as an unknown Pi provider', async () => {
+    const msg = await providerAdmissionGuard({ llm_provider: 'gemini' });
+    assert.match(msg || '', /Pi id is "google"/);
   });
 
-  it('ollama without an endpoint is rejected; with an endpoint it passes', () => {
-    const missing = providerAdmissionGuard({ llm_provider: 'ollama' });
-    assert.match(missing || '', /Ollama/);
-    assert.equal(providerAdmissionGuard({ llm_provider: 'ollama', ollama_endpoint: 'http://127.0.0.1:11434' }), null);
+  it('ollama without a persisted overlay is rejected; with one it passes', async () => {
+    const { __testSeams: ollamaSeams } = await import('../dist-electron/engine/piOllama.js');
+    const { __testSeams: hostSeams } = await import('../dist-electron/engine/agentSessionHost.js');
+    const { existsSync, readFileSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    // Backup/restore the shared default overlay so the test never destroys a
+    // real user configuration.
+    const agentDir = hostSeams.host.resolveAgentDir();
+    const modelsPath = join(agentDir, 'models.json');
+    const hadFile = existsSync(modelsPath);
+    const backup = hadFile ? readFileSync(modelsPath, 'utf-8') : null;
+    try {
+      ollamaSeams.clearOllamaEndpoint(undefined);
+      const missing = await providerAdmissionGuard({ llm_provider: 'ollama' });
+      assert.match(missing || '', /Ollama/);
+
+      ollamaSeams.writeOllamaOverlay('http://127.0.0.1:1', [{ id: 'probe-model', name: 'probe-model' }], undefined);
+      assert.equal(await providerAdmissionGuard({ llm_provider: 'ollama' }), null);
+    } finally {
+      try {
+        if (backup === null) {
+          if (existsSync(modelsPath)) rmSync(modelsPath);
+        } else {
+          writeFileSync(modelsPath, backup, 'utf-8');
+        }
+      } catch {
+        // Best-effort restore; the assertions already ran.
+      }
+    }
   });
 
-  it('unknown provider ids are not blocked (engine fails with its own precise error)', () => {
-    assert.equal(providerAdmissionGuard({ llm_provider: 'acme-odd-provider' }), null);
+  it('unknown provider ids are not blocked (engine fails with its own precise error)', async () => {
+    assert.equal(await providerAdmissionGuard({ llm_provider: 'acme-odd-provider' }), null);
   });
 });
 

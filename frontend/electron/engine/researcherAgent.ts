@@ -274,57 +274,48 @@ export async function runRehostedResearcher(
   };
 
   // Construction through the #140 seam (ADR-0014): research-tools-only,
-  // LENS-owned discovery, keys as non-persisted runtime overrides. The
-  // runtime session id is the RESEARCHER's unique id — the parent fans out
+  // LENS-owned discovery, Pi file-backed auth (tracer P2 — requests carry Pi
+  // ids only, never keys). The runtime session id is the RESEARCHER's unique id — the parent fans out
   // concurrently, and the runner's one-live-run-per-session contract must
   // never reject a sibling researcher. Evidence still flows through the
   // PARENT session's ledger (claimAndShare below keys on `sessionId`), so
   // cross-researcher dedupe and the parent's budget semantics are intact.
-  const providerOverrides: Record<string, string> = {};
-  const provider = request.llm_provider || 'gemini';
-  const apiKey = (request.api_keys || {})[provider] || (request.api_keys || {})[provider === 'gemini' ? 'google' : ''] || '';
-  if (apiKey) providerOverrides[provider] = apiKey;
-  // Compression lease (#92): the vendored plane reads its proxy from the
-  // process environment (HTTP(S)_PROXY / ALL_PROXY), so the parent-scoped
-  // lease is injected for the researcher's execution and restored after —
-  // a concurrent fan-out lane must never inherit another's proxy.
-  const proxyUrl = options.compressionProxyUrl ?? options.proxyBaseUrl;
-  const proxyEnv: Record<string, string | undefined> = proxyUrl
-    ? { HTTPS_PROXY: proxyUrl, https_proxy: proxyUrl, HTTP_PROXY: proxyUrl, http_proxy: proxyUrl }
-    : {};
-  const previousEnv: Record<string, string | undefined> = {};
-  for (const key of Object.keys(proxyEnv)) previousEnv[key] = process.env[key];
+  const provider = request.llm_provider || 'google';
+  // Compression lease (#92): the parent holds the lease for the whole
+  // fan-out and passes its URL on the construction brief
+  // (`compressionProxyUrl` / `proxyBaseUrl`, asserted by the compression
+  // routing tests). Deliberately NOTHING here touches `process.env`:
+  // the environment is process-global, so per-researcher set/restore around
+  // a concurrent fan-out clobbers siblings (a finisher's restore deletes the
+  // vars while others still run), and nothing on the retrieval or model path
+  // consumes HTTP(S)_PROXY env vars anyway — compression travels per-request
+  // in URL-prefix mode (piAdapter), not via the environment. Wiring the
+  // re-hosted session transport into the proxy is seam work for later, not a
+  // per-lane env hack.
 
-  try {
-    if (proxyUrl) Object.assign(process.env, proxyEnv);
-    const hosted = await createResearchSession(
-      {
-        sessionId: options.researcherId,
-        providerOverrides,
-        ...(options.agentDir ? { agentDir: options.agentDir } : {}),
-      },
-      surface
-    );
-    if (decorateSession) decorateSession(hosted.session, brief);
-
-    const outcome = await runAgenticSearch(hosted.session, {
+  const hosted = await createResearchSession(
+    {
       sessionId: options.researcherId,
-      question: brief,
-      state,
-      emit: emitToParent,
-      ...(signal ? { signal } : {}),
-    });
-    // A window error is a researcher FAULT, not a run terminal: throw so the
-    // caller's containment records it (researchersFailed, delegated
-    // fallback) — never silence, never a stream-closing terminal.
-    if (outcome.terminal === 'error') {
-      throw new Error(windowErrorMessage || `researcher window for facet "${options.facet}" failed`);
-    }
-  } finally {
-    for (const key of Object.keys(previousEnv)) {
-      if (previousEnv[key] === undefined) delete process.env[key];
-      else process.env[key] = previousEnv[key];
-    }
+      provider,
+      ...(options.agentDir ? { agentDir: options.agentDir } : {}),
+      ...(request.model_name ? { modelName: request.model_name } : {}),
+    },
+    surface
+  );
+  if (decorateSession) decorateSession(hosted.session, brief);
+
+  const outcome = await runAgenticSearch(hosted.session, {
+    sessionId: options.researcherId,
+    question: brief,
+    state,
+    emit: emitToParent,
+    ...(signal ? { signal } : {}),
+  });
+  // A window error is a researcher FAULT, not a run terminal: throw so the
+  // caller's containment records it (researchersFailed, delegated
+  // fallback) — never silence, never a stream-closing terminal.
+  if (outcome.terminal === 'error') {
+    throw new Error(windowErrorMessage || `researcher window for facet "${options.facet}" failed`);
   }
 
   return {

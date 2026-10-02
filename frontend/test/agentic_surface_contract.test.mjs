@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 
 /**
@@ -162,10 +162,15 @@ describe('AGENTIC_ROUTES — the named surface is served', () => {
   it('start rejects a keyless run with 422 — the guard answers, not 404', async () => {
     const { port } = await startEmbeddedServer(0, {});
     try {
+      // Pi owns auth: ensure the probe provider holds no stored key, then a
+      // keyless start must 422 on Pi standing (never 404).
+      const engineRoot = fileURLToPath(new URL('../dist-electron/engine/', import.meta.url));
+      const { __testSeams: authSeams } = await import(pathToFileURL(join(engineRoot, 'piAuth.js')).href);
+      await authSeams.savePiChatKey('mistral', '', undefined).catch(() => {});
       const response = await fetch(`http://127.0.0.1:${port}/api/agent/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'gemini' }),
+        body: JSON.stringify({ provider: 'mistral', question: 'keyless probe' }),
       });
       assert.equal(response.status, 422, 'a named route must serve its guard, never 404');
       const body = await response.json();
@@ -177,14 +182,36 @@ describe('AGENTIC_ROUTES — the named surface is served', () => {
 
   it('start admits a run, streams over /ws/agent/:id, and cancel terminates it explicitly', { timeout: 40000 }, async () => {
     const { port } = await startEmbeddedServer(0, {});
+    // Tracer P4: admission reads the persisted overlay — back up and restore
+    // the shared default file so the test never destroys user configuration.
+    const { __testSeams: ollamaSeams } = await importEngine('piOllama.js');
+    const { existsSync, readFileSync, writeFileSync, rmSync } = await import('node:fs');
+    const modelsPath = join(host.resolveAgentDir(), 'models.json');
+    const backup = existsSync(modelsPath) ? readFileSync(modelsPath, 'utf-8') : null;
+    let restoreDone = false;
+    const restore = () => {
+      if (restoreDone) return;
+      restoreDone = true;
+      try {
+        if (backup === null) {
+          if (existsSync(modelsPath)) rmSync(modelsPath);
+        } else {
+          writeFileSync(modelsPath, backup, 'utf-8');
+        }
+      } catch {
+        // Best-effort restore; the assertions already ran.
+      }
+    };
     try {
-      // A deterministically unreachable provider (discard port): the run can
-      // never complete on its own, so a delivered terminal can only come from
-      // the cancel route — the terminal assertion stays causal.
+      // A deterministically unreachable provider (discard port, hand-written
+      // overlay): the run can never complete on its own, so a delivered
+      // terminal can only come from the cancel route — the terminal
+      // assertion stays causal. The body carries Pi ids only.
+      ollamaSeams.writeOllamaOverlay('http://127.0.0.1:1', [{ id: 'ws-probe-model', name: 'ws-probe-model' }], undefined);
       const startResponse = await fetch(`http://127.0.0.1:${port}/api/agent/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: 'ws probe', provider: 'ollama', ollama_endpoint: 'http://127.0.0.1:1' }),
+        body: JSON.stringify({ question: 'ws probe', provider: 'ollama', model_name: 'ws-probe-model' }),
       });
       assert.equal(startResponse.status, 200, 'an admitted run is accepted with its session handle');
       const { session_id: sessionId, session_url: sessionUrl } = await startResponse.json();
@@ -240,6 +267,7 @@ describe('AGENTIC_ROUTES — the named surface is served', () => {
       ws1.close();
       ws2.close();
     } finally {
+      restore();
       await stopEmbeddedServer();
     }
   });

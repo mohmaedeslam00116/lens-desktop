@@ -10,7 +10,7 @@ import { BoundedScraperPool } from './scraperPool';
 import { ScrapedPage } from './scraper';
 import { CandidateChunk, admitStratifiedEvidence } from './admission';
 import { chunkStructuredDocument } from './chunker';
-import { createEmbeddingModel, rankSourcePassages } from './embeddings';
+import { createEmbeddingModel, defaultEmbeddingModel, rankSourcePassages } from './embeddings';
 import { HierarchicalSynthesis } from './synthesis';
 import { SkillActivationManager } from './skills';
 
@@ -177,7 +177,9 @@ export class WideResearchAgent {
     const language = request.language || 'en';
     const ar = isArabic(language);
     const provider = request.search_provider || 'duckduckgo';
-    const apiKeys = request.api_keys || {};
+    // P2: chat keys are gone from the envelope; search keys resolve from the
+    // provisioned store (web-search.json) inside the plane — pass empty.
+    const apiKeys: Record<string, string> = {};
     const milestones = plan.milestones.filter(milestone => milestone.query.trim());
     if (milestones.length === 0) {
       throw new Error('Wide Research requires at least one approved plan milestone.');
@@ -405,21 +407,16 @@ export class WideResearchAgent {
   ): Promise<CandidateChunk[]> {
     if (this.dependencies.rankPassages) return this.dependencies.rankPassages(sources, milestones);
     const embeddingProvider = request.embedding_provider;
-    const apiKey = request.embedding_api_key || request.api_keys?.[embeddingProvider || ''];
-    if (request.embedding_enabled !== false && embeddingProvider && embeddingProvider !== 'none' && apiKey) {
+    // P3: no key inspection — the factory resolves Pi-stored auth and throws
+    // when unconfigured, caught below into the lexical fallback.
+    if (request.embedding_enabled !== false && embeddingProvider && embeddingProvider !== 'none') {
       try {
         const ranked = await rankSourcePassages(
           sources,
           [request.query, ...milestones.map(milestone => milestone.query)],
           createEmbeddingModel({
             provider: embeddingProvider,
-            model: request.embedding_model || (embeddingProvider === 'gemini'
-              ? 'text-embedding-004'
-              : embeddingProvider === 'openai'
-                ? 'text-embedding-3-small'
-                : 'nomic-embed-text'),
-            apiKey,
-            endpoint: request.embedding_endpoint || request.ollama_endpoint,
+            model: request.embedding_model || defaultEmbeddingModel(embeddingProvider),
           }),
           { maxTotalPassages: 32, maxPerSource: 2, maxContextChars: 20000 },
         );
@@ -453,10 +450,8 @@ export class WideResearchAgent {
       depth: 'storm',
       llmOptions: {
         messages: [],
-        provider: input.request.llm_provider || 'gemini',
+        provider: input.request.llm_provider || 'google',
         model: input.request.model_name,
-        apiKey: input.request.api_keys?.[input.request.llm_provider || 'gemini'],
-        endpoint: input.request.ollama_endpoint,
       },
       activeSkillsContext: this.activationManager?.getPromptContext(),
     }).synthesize();

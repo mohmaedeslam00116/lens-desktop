@@ -7,9 +7,10 @@
  * plane's fetch ledger, and terminates into LENS's evidence contracts: the
  * streamed answer lands as report chunks, every admitted page lands as a
  * source, and the run ends with an explicit terminal LiveEvent (`finished`,
- * `cancelled`, `budget_exhausted`, or `error`) carrying what was already
- * admitted. The Event Faithfulness law holds: a run is never seen stopping
- * silently.
+ * `cancelled`, or `error`) carrying what was already admitted. A
+ * `budget_exhausted` emission from inside the fetch wrapper is a mid-run
+ * retrieval warning, never a terminal — the run continues into its answer.
+ * The Event Faithfulness law holds: a run is never seen stopping silently.
  *
  * Enforcement stays in the tools (ADR-0014 decision 4): `createAgenticToolSurface`
  * builds the LENS-wrapped `web_search`/`fetch_content` tools whose retrieval
@@ -225,7 +226,10 @@ export interface AgenticRunOptions {
 }
 
 export interface AgenticRunResult {
-  terminal: 'finished' | 'cancelled' | 'budget_exhausted' | 'error';
+  /** The runner's explicit run terminals. `budget_exhausted` is emitted by
+   * the tool surface mid-run and is NOT a run terminal — it never appears
+   * here. */
+  terminal: 'finished' | 'cancelled' | 'error';
   report: string;
   sources: SourceItem[];
   /** The persisted conversation projection on `finished` (#144); null otherwise. */
@@ -239,23 +243,21 @@ const activeRuns = new Map<
 >();
 
 /**
- * Start-time admission guard for Agentic Search: without a usable provider
- * the run can only hang, so it is rejected with a bilingual, user-actionable
- * message before any loop starts. Mirrors the Deep Research guard on
- * `/api/research/start` (ticket #119) at the agentic surface.
+ * Start-time admission guard for Agentic Search (tracer P4: deleted).
+ *
+ * RETIRED: the sync request-key inspection (`apiKey`/`ollamaEndpoint` off the
+ * body) was a parallel auth path. Admission now reads Pi truth through the
+ * async server guards (`providerAdmissionGuardForAgent` → `auth.json` /
+ * `models.json`), which reject bilingually with 422. Kept as a documented
+ * stub so legacy call-sites fail loudly instead of silently.
  */
-export function agenticAdmissionGuard(body: { provider?: string; apiKey?: string; ollamaEndpoint?: string } | undefined): string | null {
-  const provider = (body?.provider || 'gemini').trim().toLowerCase();
-  if (provider === 'ollama') {
-    if (!(body?.ollamaEndpoint || '').trim()) {
-      return 'No Ollama endpoint configured. Open Settings → add your Ollama server URL, then retry. | لم يتم إعداد خادم Ollama. افتح الإعدادات ← أضف عنوان الخادم ثم أعد المحاولة.';
-    }
-    return null;
-  }
-  if (!(body?.apiKey || '').trim()) {
-    return `No API key configured for "${provider}". Open Settings → paste your ${provider} key, then retry. | لا يوجد مفتاح API للمزود "${provider}". افتح الإعدادات ← أضف المفتاح ثم أعد المحاولة.`;
-  }
-  return null;
+export function agenticAdmissionGuard(
+  _body: { provider?: string; apiKey?: string; ollamaEndpoint?: string } | undefined
+): string | null {
+  void _body;
+  throw new Error(
+    '[agenticSearch] agenticAdmissionGuard retired (tracer P4): admission reads Pi truth via providerAdmissionGuardForAgent.'
+  );
 }
 
 /**
