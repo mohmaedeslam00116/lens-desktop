@@ -10,6 +10,7 @@ import { createEmbeddingModel, defaultEmbeddingModel, rankSourcePassages, fallba
 import { auditEvidenceCoverage, generateAdaptiveHopPlan, formatAuditReflections } from './evidenceCoverage';
 import { SkillActivationManager, CompactionShield } from './skills';
 import { CitationGroundingContract } from './synthesis';
+import { resolveRecencyForQuery } from './freshness';
 
 export class DeepResearchAgent {
   private sessionId: string;
@@ -77,7 +78,9 @@ export class DeepResearchAgent {
           title: scraped.title,
           domain: scraped.domain,
           snippet: scraped.content.slice(0, 160),
-          credibility: scraped.credibilityScore
+          credibility: scraped.credibilityScore,
+          // Track E retention: the date rides the event where supplied.
+          ...(scraped.publishedAt ? { publishedAt: scraped.publishedAt } : {}),
         });
 
         this.emitEvent({
@@ -300,6 +303,13 @@ Return ONLY a valid JSON array of strings, for example:
     const isAr = language === 'ar';
     const initialSourceCap = depth === 'quick' ? 4 : depth === 'storm' ? 12 : 8;
 
+    // Track E freshness (SPEC #155): a freshness-seeking objective applies
+    // its intent recency provider-side on every delegated search — one
+    // resolution, one channel. Timeless objectives resolve undefined and
+    // ride the plane exactly as before (no silent scoping).
+    const queryRecency = resolveRecencyForQuery(query);
+    const planeOpts = queryRecency ? { recencyFilter: queryRecency } : undefined;
+
     for (let i = 0; i < activeSubqueries.length; i++) {
       if (signal?.aborted) return;
       const subq = activeSubqueries[i];
@@ -318,7 +328,7 @@ Return ONLY a valid JSON array of strings, for example:
 
       let searchHits: any[] = [];
       try {
-        searchHits = await primarySearchPlane(subq, searchProvider, undefined, 6, signal);
+        searchHits = await primarySearchPlane(subq, searchProvider, undefined, 6, signal, undefined, planeOpts);
       } catch (err) {
         if (signal?.aborted) return;
         console.warn(`[Agent] Search failed for subquery "${subq}":`, err);
@@ -419,7 +429,7 @@ Return ONLY a valid JSON array of strings, for example:
 
         let hopHits: any[] = [];
         try {
-          hopHits = await primarySearchPlane(targetQ, searchProvider, undefined, 3, signal);
+          hopHits = await primarySearchPlane(targetQ, searchProvider, undefined, 3, signal, undefined, planeOpts);
         } catch (err) {
           if (signal?.aborted) return;
           console.warn(`[Agent] Search failed for adaptive query "${targetQ}":`, err);
@@ -639,6 +649,8 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
       domain: s.domain,
       snippet: s.content.slice(0, 160),
       credibilityScore: s.credibilityScore,
+      // Track E retention: admitted sources carry dates where supplied.
+      ...(s.publishedAt ? { publishedAt: s.publishedAt } : {}),
       // Per-facet provenance (ADR-0010 phase 2, #89): present on researcher
       // subagent findings; undefined for legacy-loop retrievals.
       ...(s.milestoneId ? { milestoneId: s.milestoneId } : {}),

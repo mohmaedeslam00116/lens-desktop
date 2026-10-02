@@ -250,7 +250,13 @@ export async function runRehostedResearcher(
     emit: emitToParent,
     search: async (query) => {
       const hits = await primarySearchPlane(query);
-      return hits.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
+      return hits.map((hit) => ({
+        url: hit.url,
+        title: hit.title,
+        snippet: hit.snippet,
+        // Track E retention: provider dates flow into the surface store.
+        ...(hit.publishedAt ? { publishedAt: hit.publishedAt } : {}),
+      }));
     },
     fetchPage: async (url) => {
       const page = await primaryScrapePlane(url);

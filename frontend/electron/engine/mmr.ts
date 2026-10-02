@@ -8,6 +8,7 @@
 
 import { computeSimilarity } from './embeddings';
 import { tokenizeBilingual } from './bm25';
+import { freshnessMultiplier } from './freshness';
 
 export interface MMRCandidate<T = any> {
   id: string;
@@ -17,6 +18,8 @@ export interface MMRCandidate<T = any> {
   sourceId?: string | number;// Citation identifier (e.g. 1, 2, 3)
   domain?: string;           // Domain name (e.g. "arxiv.org", "wikipedia.org")
   credibilityScore?: number; // Domain authority / credibility multiplier (0.5 to 1.2)
+  /** Provider-supplied publication date (ISO). Absent = unknown, never stale-by-default. */
+  publishedAt?: string;      // Track E (SPEC #155): stale penalization reads this
   metadata?: T;              // Attached metadata (e.g. ChunkRecord)
 }
 
@@ -29,6 +32,10 @@ export interface MMROptions {
   sourceDecay?: number;      // Multiplier per selected chunk from same source. Default: 0.70
   maxContextChars?: number;  // Character budget cap. Default: Infinity
   similarityFn?: (a: MMRCandidate, b: MMRCandidate) => number;
+  /** Track E: freshness-seeking query — stale candidates are penalized. */
+  temporalIntent?: boolean;  // Default: false (raw scores hold; zero drift for timeless paths)
+  /** Reference time for age computation (default: Date.now(); inject for tests). */
+  now?: number;
 }
 
 export interface MMRResult<T = any> {
@@ -113,7 +120,8 @@ export function computeCandidateSimilarity(
  * Maximal Marginal Relevance (MMR) with Source & Domain Diversity Penalties.
  *
  * Selects an optimal subset S of passages from candidate pool C that maximizes:
- * MMR(d) = [ λ * Rel_norm(d) - (1 - λ) * max_{s in S} Sim(d, s) ] * DomainDecay * SourceDecay * Credibility
+ * MMR(d) = [ λ * Rel_norm(d) - (1 - λ) * max_{s in S} Sim(d, s) ] * DomainDecay * SourceDecay * Credibility * Freshness
+ * (Freshness is 1.0 unless temporalIntent is set — Track E, SPEC #155.)
  */
 export function selectPassagesWithMMR<T = any>(
   candidates: MMRCandidate<T>[],
@@ -229,9 +237,18 @@ export function selectPassagesWithMMR<T = any>(
         : 1.0;
       const credMultiplier = Math.max(0.2, Math.min(1.5, rawCred));
 
+      // Track E freshness (SPEC #155): under temporal intent, stale
+      // candidates lose weight and fresh ones keep it; without intent the
+      // multiplier is exactly 1.0 (undated is neutral outside temporal
+      // intent), so timeless ranking is bit-identical to before.
+      const temporal = options.temporalIntent === true;
+      const freshMultiplier = temporal
+        ? freshnessMultiplier(candidate.publishedAt, options.now ?? Date.now(), true)
+        : 1.0;
+
       // Effective selection score
       // Base score calibrated with (1 - lambda) offset to ensure positive weighting before decays
-      const calibratedScore = (mmrCore + (1 - lambda)) * domMultiplier * srcMultiplier * credMultiplier;
+      const calibratedScore = (mmrCore + (1 - lambda)) * domMultiplier * srcMultiplier * credMultiplier * freshMultiplier;
 
       if (calibratedScore > bestScore) {
         bestScore = calibratedScore;

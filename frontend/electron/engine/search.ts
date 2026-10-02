@@ -22,9 +22,18 @@ export class MultiSearchProvider {
     provider: 'duckduckgo' | 'tavily' | 'serper' | 'google' = 'duckduckgo',
     apiKeys?: Record<string, string>,
     maxResults = 8,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /**
+     * Track E per-call retrieval scoping (SPEC #155): provider-side
+     * recency/domain filters. Optional and trailing — existing 5-arg callers
+     * behave exactly as before.
+     */
+    searchOpts?: {
+      recencyFilter?: 'day' | 'week' | 'month' | 'year';
+      domainFilter?: string[];
+    }
   ): Promise<SearchResultItem[]> {
     const { primarySearchPlane } = await import('./searchPlane');
-    return primarySearchPlane(query, provider, apiKeys, maxResults, signal);
+    return primarySearchPlane(query, provider, apiKeys, maxResults, signal, undefined, searchOpts);
   }
 }

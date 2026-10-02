@@ -16,6 +16,7 @@ import {
 import { LLMRequestOptions } from './models';
 import { generate } from './modelGateway';
 import { AdmittedChunk, CandidateChunk } from './admission';
+import { verifyTemporalGrounding as verifyTemporalClaimGrounding, type TemporalGroundingFlag } from './freshness';
 import { CompactionShield } from './skills';
 
 /**
@@ -31,6 +32,8 @@ export interface GroundedExcerpt {
   sourceTitle?: string;       // Page or document title
   sourceDomain: string;       // Domain name e.g. "nature.com"
   score?: number;             // Hybrid relevance score
+  /** Provider-supplied publication date (ISO, Track E retention). */
+  publishedAt?: string;
   admittedReason?: 'quota' | 'residual';
   metadata?: Record<string, any>;
 }
@@ -52,6 +55,8 @@ export interface GroundedExcerptInput {
   sourceDomain?: string;
   domain?: string;
   score?: number;
+  /** Provider-supplied publication date (ISO, Track E retention). */
+  publishedAt?: string;
   admittedReason?: 'quota' | 'residual';
   metadata?: Record<string, any>;
 }
@@ -112,6 +117,8 @@ export interface GroundedReference {
   url: string;
   domain: string;
   snippet: string;
+  /** Provider-supplied publication date (ISO, Track E retention). */
+  publishedAt?: string;
   milestoneId?: string;
   score?: number;
   cited: boolean;
@@ -256,6 +263,8 @@ export class CitationGroundingContract {
     const score = typeof (input as any).score === 'number' ? (input as any).score : undefined;
     const admittedReason = (input as any).admittedReason || 'quota';
     const metadata = (input as any).metadata;
+    // Track E retention: the date rides the excerpt where supplied.
+    const publishedAt = typeof (input as any).publishedAt === 'string' ? (input as any).publishedAt : undefined;
 
     const excerpt: GroundedExcerpt = {
       index: nextIndex,
@@ -267,6 +276,7 @@ export class CitationGroundingContract {
       sourceTitle,
       sourceDomain,
       score,
+      ...(publishedAt ? { publishedAt } : {}),
       admittedReason,
       metadata
     };
@@ -301,6 +311,24 @@ export class CitationGroundingContract {
 
   public getTotalCount(): number {
     return this.excerpts.length;
+  }
+
+  /**
+   * Track E claim-level temporal verification (SPEC #155): every
+   * freshness-seeking sentence in the report must cite at least one fresh
+   * registered excerpt. Sentences backed only by stale/undated excerpts (or
+   * by nothing) are flagged for `source_check` verification BEFORE citation
+   * — advisory (like the evidence auditor): it annotates, never strips.
+   */
+  public verifyTemporalGrounding(report: string, nowMs: number = Date.now()): TemporalGroundingFlag[] {
+    return verifyTemporalClaimGrounding(
+      report,
+      this.excerpts.map((ex) => ({
+        index: ex.index,
+        ...(ex.publishedAt ? { publishedAt: ex.publishedAt } : {}),
+      })),
+      nowMs
+    );
   }
 
   public setRemapRule(hallucinatedIndex: number, targetIndex: number): void {
@@ -978,6 +1006,8 @@ export class HierarchicalSynthesis {
       url: ex.sourceUrl,
       domain: ex.sourceDomain,
       snippet: ex.text.slice(0, 160),
+      // Track E retention: references carry dates where supplied.
+      ...(ex.publishedAt ? { publishedAt: ex.publishedAt } : {}),
       milestoneId: ex.milestoneId,
       score: ex.score,
       cited: finalVerification.citedIndices.includes(ex.index)

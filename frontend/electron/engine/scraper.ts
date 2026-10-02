@@ -4,6 +4,8 @@ export interface ScrapedPage {
   domain: string;
   content: string;
   credibilityScore: number;
+  /** Provider/extraction-supplied publication date (ISO, Track E retention). */
+  publishedAt?: string;
   /** Research-facet provenance (ADR-0010 phase 2, ticket #89): set on pages
    * retrieved by a researcher subagent for its assigned facet. */
   milestoneId?: string;

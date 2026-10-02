@@ -34,6 +34,7 @@ import * as path from 'node:path';
 import { SearchResultItem } from './types';
 import { readProvisionedKey, redactKeyMaterial } from './configSeam';
 import { resolveAgentDir } from './agentSessionHost';
+import { parsePublishedAt } from './freshness';
 
 /** Unified extension search entry (web-access/gemini-search.ts). */
 type ExtensionSearchFn = (
@@ -47,7 +48,7 @@ type ExtensionSearchFn = (
   }
 ) => Promise<{
   answer?: string;
-  results?: Array<{ title?: string; url?: string; snippet?: string }>;
+  results?: Array<{ title?: string; url?: string; snippet?: string; publishedAt?: string; date?: string }>;
   provider?: string;
 }>;
 
@@ -311,6 +312,12 @@ export interface ExtensionSearchOutcome {
   results: SearchResultItem[];
   /** The provider that actually resolved — observed, never assumed. */
   provider: string;
+  /**
+   * The recency actually applied provider-side (Track E echo): the caller
+   * sees what scoping served the results instead of assuming it. Undefined
+   * when no recency rode the call.
+   */
+  recencyFilter?: 'day' | 'week' | 'month' | 'year';
 }
 
 /**
@@ -371,14 +378,23 @@ export async function searchViaExtension(
       });
     }
     const resolved = typeof out?.provider === 'string' && out.provider ? out.provider : selection;
-    return {
-      results: (out?.results ?? []).map((r) => ({
+    // Track E retention: kept where a provider supplies a date (none of the
+    // current vendored providers do — normally absent, never invented).
+    const toItem = (r: { title?: string; url?: string; snippet?: string; publishedAt?: unknown; date?: unknown }): SearchResultItem => {
+      const publishedAt = parsePublishedAt(r?.publishedAt ?? r?.date);
+      return {
         title: String(r?.title ?? ''),
         url: String(r?.url ?? ''),
         snippet: String(r?.snippet ?? ''),
         searchProvider: resolved,
-      })),
+        ...(publishedAt ? { publishedAt } : {}),
+      };
+    };
+    return {
+      results: (out?.results ?? []).map(toItem),
       provider: resolved,
+      // Track E echo: report the recency that actually rode the call.
+      ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
     };
   } finally {
     gate.release();
@@ -413,7 +429,16 @@ export async function primarySearchPlane(
    * default holds. Tests pass a temp dir so a real operator key file can
    * never steer the test onto the live network.
    */
-  agentDir?: string
+  agentDir?: string,
+  /**
+   * Track E per-call retrieval scoping (SPEC #155): provider-side
+   * recency/domain filters. Optional and trailing — existing 6-arg callers
+   * behave exactly as before (no silent scoping when absent).
+   */
+  searchOpts?: {
+    recencyFilter?: 'day' | 'week' | 'month' | 'year';
+    domainFilter?: string[];
+  }
 ): Promise<SearchResultItem[]> {
   // Cancellation propagates (caller-abort contract) — checked before the
   // empty-query short-circuit so an aborted caller never sees a fake success.
@@ -433,6 +458,8 @@ export async function primarySearchPlane(
     numResults: maxResults,
     signal,
     ...(apiKeys ? { apiKeys } : {}),
+    ...(searchOpts?.recencyFilter ? { recencyFilter: searchOpts.recencyFilter } : {}),
+    ...(searchOpts?.domainFilter ? { domainFilter: searchOpts.domainFilter } : {}),
     agentDir: agentDir ?? resolveAgentDir(),
   });
   return out.results;

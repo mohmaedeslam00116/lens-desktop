@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Engine (SPEC #155 Track E — freshness semantics, #160)**: bilingual
+  (AR/EN) temporal-intent detection with urgency-mapped provider recency
+  (`breaking`/`today` → day, `latest`/`current` → week,
+  `announcement`/`recent` → month, explicit years → year); timeless
+  queries ride unscoped, exactly as before. `web_search`/`source_check`
+  auto-apply the intent recency provider-side (reported, never silent;
+  explicit selections always win), temporal `source_check` claims fan out
+  date-aware variants (claim + year anchor + latest tail) for
+  freshness-first verification before citation, and `publishedAt` is
+  retained on admitted sources, stored artifacts, ranking candidates, and
+  citation references wherever providers supply it (absent means unknown,
+  never stale). Ranking penalizes stale evidence under temporal intent in
+  the real MMR seam (proven: a stale high-rank result loses to a fresh
+  official source), and `CitationGroundingContract.verifyTemporalGrounding`
+  flags temporal sentences backed only by stale/undated excerpts for
+  `source_check` re-verification — advisory, never stripping.
+
 ## [1.5.0] - 2026-10-02
 
 **The Pi-Only Backend** — Pi becomes the sole backend for providers,

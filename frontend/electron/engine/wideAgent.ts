@@ -6,6 +6,7 @@ import {
   WideResearchTelemetry,
 } from './types';
 import { MultiSearchProvider } from './search';
+import { resolveRecencyForQuery } from './freshness';
 import { BoundedScraperPool } from './scraperPool';
 import { ScrapedPage } from './scraper';
 import { CandidateChunk, admitStratifiedEvidence } from './admission';
@@ -65,7 +66,16 @@ export interface WideResearchAgentDependencies {
     apiKeys: Record<string, string>,
     maxResults: number,
     signal?: AbortSignal,
-  ) => Promise<Array<{ url: string; title: string; snippet: string }>>;
+    /**
+     * Track E per-call retrieval scoping (SPEC #155): provider-side
+     * recency/domain filters. Optional and trailing — existing 5-arg
+     * injects stay assignable and behave exactly as before.
+     */
+    searchOpts?: {
+      recencyFilter?: 'day' | 'week' | 'month' | 'year';
+      domainFilter?: string[];
+    },
+  ) => Promise<Array<{ url: string; title: string; snippet: string; publishedAt?: string }>>;
   createPool?: () => Pool;
   rankPassages?: (sources: ScrapedPage[], milestones: PlanMilestone[]) => Promise<CandidateChunk[]>;
   admitEvidence?: (
@@ -189,8 +199,8 @@ export class WideResearchAgent {
       await this.activationManager.preActivateSkills(plan.suggestedSkills, this.emitEvent, { language });
     }
 
-    const search = this.dependencies.search || ((query, searchProvider, keys, maxResults, sig) =>
-      MultiSearchProvider.search(query, searchProvider, keys, maxResults, sig));
+    const search = this.dependencies.search || ((query, searchProvider, keys, maxResults, sig, searchOpts) =>
+      MultiSearchProvider.search(query, searchProvider, keys, maxResults, sig, searchOpts));
     const pool = this.dependencies.createPool?.() || new BoundedScraperPool();
     const discovered = new Map<string, { milestoneId: string; title: string }>();
     const pagesByUrl = new Map<string, ScrapedPage>();
@@ -326,6 +336,8 @@ export class WideResearchAgent {
       domain: reference.domain || '',
       snippet: reference.snippet,
       credibilityScore: pagesByUrl.get(reference.url)?.credibilityScore ?? 0,
+      // Track E retention: admitted sources carry dates where supplied.
+      ...(pagesByUrl.get(reference.url)?.publishedAt ? { publishedAt: pagesByUrl.get(reference.url)!.publishedAt! } : {}),
       citationIndex: reference.index,
       isCited: reference.cited,
     }));
@@ -378,7 +390,18 @@ export class WideResearchAgent {
       const suffix = Math.floor(searchIndex / input.milestones.length);
       const query = suffix === 0 ? milestone.query : `${milestone.query} evidence ${suffix + 1}`;
       try {
-        const hits = await input.search(query, input.provider, input.apiKeys, 25, input.signal);
+        // Track E freshness (SPEC #155): a freshness-seeking milestone
+        // applies its intent recency provider-side; timeless milestones ride
+        // unscoped, exactly as before.
+        const milestoneRecency = resolveRecencyForQuery(milestone.query);
+        const hits = await input.search(
+          query,
+          input.provider,
+          input.apiKeys,
+          25,
+          input.signal,
+          milestoneRecency ? { recencyFilter: milestoneRecency } : undefined
+        );
         if (input.signal?.aborted) return;
         input.onSearch();
         for (const hit of hits) {

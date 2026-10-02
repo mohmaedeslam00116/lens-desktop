@@ -35,6 +35,8 @@ interface ScrapedPageLike {
   domain?: string;
   content?: string;
   credibilityScore?: number;
+  /** Track E retention: flows through claimAndShare untouched. */
+  publishedAt?: string;
 }
 
 interface Ledger {

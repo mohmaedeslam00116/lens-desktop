@@ -49,6 +49,8 @@ interface VendoredExtractResult {
   content: string;
   error: string | null;
   status?: number;
+  /** Forward-compatible: retained when the vendored extraction ever emits it. */
+  publishedAt?: string;
 }
 
 type VendoredExtractFn = (
@@ -213,6 +215,9 @@ function toScrapedPage(url: string, result: VendoredExtractResult): ScrapedPage 
     domain,
     content: content || `Extracted summary from ${domain}`,
     credibilityScore,
+    // Track E retention: kept where the extraction supplies a date (it
+    // currently does not — absent means unknown, never invented).
+    ...(result.publishedAt ? { publishedAt: result.publishedAt } : {}),
   };
 }
 
