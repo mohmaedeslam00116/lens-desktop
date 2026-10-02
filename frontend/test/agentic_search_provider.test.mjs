@@ -87,15 +87,18 @@ describe('Agentic tool surface forwards its search provider (Track B threading)'
       maxFetches: 5,
       emit: () => {},
       searchProvider: 'tavily',
-      search: async (query, provider) => {
-        seen.push([query, provider]);
+      search: async (query, provider, opts) => {
+        seen.push([query, provider, opts]);
         return [{ url: 'https://forward.example/1', title: 'Forwarded', snippet: 'S' }];
       },
       fetchPage: async (url) => ({ url, title: url, text: 'body' }),
     });
     const outcome = await surface.handler({ name: 'web_search', arguments: { query: 'tokamak' } });
     assert.equal(outcome.success, true);
-    assert.deepEqual(seen, [['tokamak', 'tavily']], 'the setting reaches the search call, not the DDG default');
+    assert.equal(seen.length, 1, 'one plane call for one query');
+    assert.equal(seen[0][0], 'tokamak', 'the query reaches the search call');
+    assert.equal(seen[0][1], 'tavily', 'the setting reaches the search call, not the DDG default');
+    assert.equal(seen[0][2]?.numResults, 8, 'the plane default rides the call');
   });
 
   it('a surface without a configured provider calls search unscoped (plane default holds)', async () => {
@@ -106,14 +109,17 @@ describe('Agentic tool surface forwards its search provider (Track B threading)'
       state: { sources: [], reportChunks: [], fetchesUsed: 0 },
       maxFetches: 5,
       emit: () => {},
-      search: async (query, provider) => {
-        seen.push([query, provider]);
+      search: async (query, provider, opts) => {
+        seen.push([query, provider, opts]);
         return [];
       },
       fetchPage: async () => null,
     });
     await surface.handler({ name: 'web_search', arguments: { query: 'q' } });
-    assert.deepEqual(seen, [['q', undefined]], 'no provider configured means no scoping argument');
+    assert.equal(seen.length, 1, 'one plane call for one query');
+    assert.equal(seen[0][0], 'q');
+    assert.equal(seen[0][1], undefined, 'no provider configured means no scoping argument');
+    assert.equal(seen[0][2]?.numResults, 8, 'the plane default still rides the call');
   });
 
   it('keyed selection without keys degrades to the keyless chain through the real plane', async () => {
@@ -136,8 +142,8 @@ describe('Agentic tool surface forwards its search provider (Track B threading)'
       // forwarded provider — exactly what startAgenticSearchSession builds
       // (closure trusts only its param; the temp agentDir keeps file
       // provisioning keyless).
-      search: async (query, provider) =>
-        (await primarySearchPlane(query, provider ?? 'duckduckgo', undefined, 3, undefined, agentDir)).map((h) => ({
+      search: async (query, provider, opts) =>
+        (await primarySearchPlane(query, provider ?? 'duckduckgo', undefined, opts?.numResults ?? 3, undefined, agentDir)).map((h) => ({
           url: h.url,
           title: h.title,
           snippet: h.snippet,

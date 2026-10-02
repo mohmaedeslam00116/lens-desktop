@@ -54,7 +54,7 @@ interface VendoredExtractResult {
 type VendoredExtractFn = (
   url: string,
   signal?: AbortSignal,
-  options?: { timeoutMs?: number; lookup?: (hostname: string) => Promise<LookupResult> }
+  options?: { timeoutMs?: number; lookup?: (hostname: string) => Promise<LookupResult>; mode?: 'readable' | 'raw' }
 ) => Promise<VendoredExtractResult>;
 
 let cachedExtract: VendoredExtractFn | null = null;
@@ -227,7 +227,14 @@ function toScrapedPage(url: string, result: VendoredExtractResult): ScrapedPage 
 export async function primaryScrapePlane(
   url: string,
   timeoutMs = 8000,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /**
+   * Extraction mode (Track D, SPEC #155): `readable` (default) serves the
+   * cleaned article text, `raw` serves the unprocessed source. Threaded into
+   * the vendored `extractContent`; `answer` never reaches this plane (the
+   * tool-layer guard refuses it — synthesis stays Parent-owned).
+   */
+  mode?: 'readable' | 'raw'
 ): Promise<ScrapedPage> {
   if (signal?.aborted) throw abortError();
   await gate.acquire(signal);
@@ -237,6 +244,7 @@ export async function primaryScrapePlane(
     const extractContent = await loadExtractContent();
     const result = await extractContent(url, signal, {
       timeoutMs,
+      ...(mode ? { mode } : {}),
       // Plain Node DNS resolution (A/AAAA via the platform resolver); keeps
       // vendored SSRF validation ON while allowing offline fixture hostnames
       // to be intercepted in tests.

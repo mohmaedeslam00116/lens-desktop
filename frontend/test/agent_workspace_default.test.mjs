@@ -514,7 +514,24 @@ describe('Agentic Search carries the retrieval selection (Track B - SPEC #155)',
     assert.doesNotMatch(server, /primarySearchPlane\(query\)/, 'the bare DDG-default call is gone from the agentic path');
     const surface = await readSrc('../electron/engine/agenticSearch.ts');
     assert.match(surface, /searchProvider\?: string/, 'the tool context carries the threaded selection');
-    assert.match(surface, /context\.search\(query, context\.searchProvider\)/, 'the handler forwards the selection');
+    assert.match(surface, /context\.search\(q, provider, callOpts\)/, 'the handler forwards selection plus per-call scoping');
+    assert.match(surface, /resolveSearchScoping/, 'one shared validator owns recency/domain/provider (no duplicated scoping)');
+  });
+});
+
+describe('Agentic tools honor the full contract (Track D - SPEC #155)', () => {
+  it('the surface serves exactly the allow-listed research tools with full schemas', async () => {
+    const surface = await readSrc('../electron/engine/agenticSearch.ts');
+    for (const tool of ['web_search', 'fetch_content', 'source_check', 'get_search_content']) {
+      assert.match(surface, new RegExp(`name: '${tool}'`), `${tool} is served`);
+    }
+    assert.match(surface, /queries/, 'plural-query fan-out is in the schema');
+    assert.match(surface, /recencyFilter/, 'recency scoping is in the schema');
+    assert.match(surface, /domainFilter/, 'domain scoping is in the schema');
+    assert.match(surface, /includeContent/, 'content inclusion is in the schema');
+    assert.match(surface, /responseId/, 'stored-content retrieval is in the schema');
+    assert.match(surface, /ANSWER_MODE_UNSUPPORTED_MESSAGE/, 'the answer-mode refusal survives the rewrite');
+    assert.match(surface, /resetAgenticStoredContent/, 'the stored-content registry resets with the run');
   });
 });
 

@@ -52,7 +52,13 @@ function resolveElectronApp(): { getPath(name: string): string } | null {
   }
 }
 
-/** The research tools a LENS session may be granted; pi's todo joins them. */
+/** The research tools a LENS session may be granted; pi's todo joins them.
+ * Track D (SPEC #155): the four web names are served on BOTH retrieval
+ * paths — the researcher path via the captured extension tools
+ * (piResearchTools) and the agentic path via the LENS-wrapped equivalents
+ * (createAgenticToolSurface, same names, full upstream-compatible contracts,
+ * LENS-owned budget/ledger/SSRF). No allow-listed name is unserved on either
+ * path; `todo` is researcher-side only (session task state, not retrieval). */
 export const RESEARCH_TOOL_ALLOW_LIST = [
   'web_search',
   'source_check',
