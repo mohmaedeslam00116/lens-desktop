@@ -395,13 +395,25 @@ export async function searchViaExtension(
  * explicit selection (Track B threads the setting) but is never the
  * implicit default: auto fans out across ambient-keyed providers with
  * per-provider deadlines before reaching anything keyless.
+ *
+ * The provider id space is OPEN (Track B): known plane ids, the legacy
+ * `google` alias, and explicit `auto` are honored; anything else is caught
+ * into the keyless chain by the closed map below. Typed `string` so threaded
+ * request values need no cast.
  */
 export async function primarySearchPlane(
   query: string,
-  provider: 'duckduckgo' | 'tavily' | 'serper' | 'google' = 'duckduckgo',
+  provider: string = 'duckduckgo',
   apiKeys?: Record<string, string>,
   maxResults = 8,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /**
+   * Override the LENS-owned agent directory for key provisioning
+   * (config-seam file read). Production callers omit it — the app-data
+   * default holds. Tests pass a temp dir so a real operator key file can
+   * never steer the test onto the live network.
+   */
+  agentDir?: string
 ): Promise<SearchResultItem[]> {
   // Cancellation propagates (caller-abort contract) — checked before the
   // empty-query short-circuit so an aborted caller never sees a fake success.
@@ -421,7 +433,7 @@ export async function primarySearchPlane(
     numResults: maxResults,
     signal,
     ...(apiKeys ? { apiKeys } : {}),
-    agentDir: resolveAgentDir(),
+    agentDir: agentDir ?? resolveAgentDir(),
   });
   return out.results;
 }

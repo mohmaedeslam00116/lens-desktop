@@ -132,18 +132,36 @@ export const AGENTIC_ROUTES = ['/api/agent/start', '/api/agent/steer', '/api/age
 
 /** The agentic-run request shape: one question, one admission surface.
  * Pi ids only — auth and the Ollama endpoint resolve from Pi's files
- * (`auth.json`, `models.json`), never from the request. */
+ * (`auth.json`, `models.json`), never from the request.
+ * `search_provider` is the RETRIEVAL selection (Track B, SPEC #155) — the
+ * open engine id space (`duckduckgo` default, `tavily`/`serper` keyed,
+ * explicit `auto` for the extension chain). `provider` stays the LLM
+ * provider; the two must never be confused. */
 export interface AgenticStartRequest {
   question: string;
   provider?: string;
   max_fetches?: number;
   /** The user's chosen model id (Settings) — resolved inside the requested provider. */
   model_name?: string;
+  search_provider?: string;
 }
 
-/** Server-side admission-time normalization of the start request. */
-function normalizeAgentStartRequest(body: Partial<AgenticStartRequest> | undefined): AgenticStartRequest {
+/** Default retrieval selection for Agentic Search (Track B, SPEC #155): the
+ * explicit keyless chain — never implicit `auto` (Track C decision: auto
+ * fans out across ambient-keyed providers with per-provider deadlines).
+ * Single source of truth for the normalizer, the surface field, and the
+ * plane closure below; the plane keeps its own default as a separate-layer
+ * contract. */
+export const DEFAULT_AGENTIC_SEARCH_PROVIDER = 'duckduckgo';
+
+/** Server-side admission-time normalization of the start request.
+ * Exported for the Track B contract suite. `search_provider` normalizes to
+ * the explicit keyless chain when absent/blank; explicit values pass through
+ * lowercased (the plane's closed map catches unknowns into keyless with a
+ * warning). */
+export function normalizeAgentStartRequest(body: Partial<AgenticStartRequest> | undefined): AgenticStartRequest {
   const provider = typeof body?.provider === 'string' && body.provider.trim() ? body.provider.trim().toLowerCase() : 'google';
+  const rawSearch = typeof body?.search_provider === 'string' ? body.search_provider.trim().toLowerCase() : '';
   return {
     question: String(body?.question ?? '').trim(),
     provider,
@@ -151,6 +169,7 @@ function normalizeAgentStartRequest(body: Partial<AgenticStartRequest> | undefin
       ? Math.floor(body.max_fetches)
       : 12,
     model_name: typeof body?.model_name === 'string' && body.model_name.trim() ? body.model_name.trim() : undefined,
+    search_provider: rawSearch ? rawSearch : DEFAULT_AGENTIC_SEARCH_PROVIDER,
   };
 }
 
@@ -289,8 +308,19 @@ export async function startAgenticSearchSession(
     state,
     maxFetches: request.max_fetches ?? 12,
     emit: (event) => emitAgentEvent(sessionId, event),
-    search: async (query) => {
-      const hits = await primarySearchPlane(query);
+    // Track B (SPEC #155): the user's retrieval selection rides the request
+    // into the surface through ONE channel — request → searchProvider field
+    // → handler arg → closure param → plane. The closure trusts ONLY its
+    // param (never re-reads the request), so there is no second source of
+    // truth to drift. Keyed keys resolve server-side from the LENS agentDir
+    // file, never the wire; absent means the explicit keyless chain
+    // (Track C decision), never implicit auto.
+    searchProvider: request.search_provider ?? DEFAULT_AGENTIC_SEARCH_PROVIDER,
+    search: async (query, providerOverride) => {
+      const hits = await primarySearchPlane(
+        query,
+        providerOverride ?? DEFAULT_AGENTIC_SEARCH_PROVIDER
+      );
       return hits.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
     },
     fetchPage: async (url) => {

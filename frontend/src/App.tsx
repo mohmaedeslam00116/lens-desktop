@@ -469,6 +469,10 @@ export function App() {
           // instead of wandering to ambient auth's pick. Pi files own auth
           // and the Ollama endpoint — the body carries Pi ids only.
           model_name: settings.custom_model_name || settings.model_name || undefined,
+          // Track B (SPEC #155): the retrieval selection rides the agent
+          // start — the engine threads it into the tool surface (Deep
+          // Research already sends this field on its own start path).
+          search_provider: settings.search_provider,
         }),
         signal: controller.signal,
       });

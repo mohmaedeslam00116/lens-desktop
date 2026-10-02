@@ -63,8 +63,14 @@ export interface AgenticToolContext {
   sessionId: string;
   /** Ledgered page retrieval for fetch_content (injectable for tests). */
   fetchPage: (url: string) => Promise<{ url: string; title: string; text: string } | null>;
-  /** Search provider for web_search (injectable for tests; plane-backed in production). */
-  search: (query: string) => Promise<AgenticSearchHit[]>;
+  /** Search provider for web_search (injectable for tests; plane-backed in production).
+   * The optional second argument carries the retrieval selection (Track B):
+   * single-arg injects keep working (fewer params is assignable), and the
+   * handler forwards `searchProvider` when the inject accepts it. */
+  search: (query: string, provider?: string) => Promise<AgenticSearchHit[]>;
+  /** The retrieval selection threaded from the start request (Track B,
+   * SPEC #155) — forwarded into the search call, never the DDG default. */
+  searchProvider?: string;
   maxFetches: number;
   emit: (event: LiveEvent) => void;
   state: AgenticRunState;
@@ -164,7 +170,9 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
         if (call.name === 'web_search') {
           const query = String(call.arguments?.query ?? '').trim();
           if (!query) return { success: false, error: 'web_search requires a query.' };
-          const hits = await context.search(query);
+          // Track B (SPEC #155): forward the threaded retrieval selection —
+          // the setting reaches the plane instead of dying at the default.
+          const hits = await context.search(query, context.searchProvider);
           for (const hit of hits) {
             admitSource(context, {
               url: hit.url,
