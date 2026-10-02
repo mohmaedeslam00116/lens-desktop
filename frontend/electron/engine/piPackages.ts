@@ -7,11 +7,17 @@ import { LLMToolDefinition, ToolCallHandler } from './models';
  * packages behind the engine's tool contract (LLMToolDefinition +
  * ToolCallHandler), running them inside the LENS Electron main process.
  *
- * Loader strategy (verified against the vendored sources):
+ * Loader strategy (verified against the vendored sources, pi-web-access 0.35):
  *  - pi-web-access → its `index.ts` extension registers four tools
  *    (web_search / source_check / fetch_content / get_search_content); the
  *    whole module graph loads through jiti (the packages have no `main`/
  *    `exports` entry, and Node refuses to type-strip under node_modules).
+ *    0.35 loads headless (curator forced off without a UI); dynamic tool
+ *    activation logs that Pi 0.86+ is required, tools stay eager — fine.
+ *    Retrieval planes do NOT route through these captured tools: they call
+ *    the unified `search()` (`web-access/gemini-search.ts`, TUI-free)
+ *    directly so LENS keeps gate/ledger/key-provisioning/fallback control
+ *    (Track C, SPEC #155).
  *  - rpiv-todo     → loaded through its PURE interface only: the layered
  *    modules under `state/` + `tool/` (verbatim vendored) are imported
  *    directly and the `todo` tool is registered by the bridge itself.

@@ -179,14 +179,15 @@ export function readSearchKeysStatus(options?: { piAgentDir?: string }): { tavil
 }
 
 /** Read-side provisioning for the search plane: is the provider provisioned
- * via the config seam or environment? Boolean only — never key material. */
-export function hasProvisionedKey(provider: 'tavily' | 'serper'): boolean {
+ * via the config seam or environment? Boolean only — never key material.
+ * `agentDir` scopes the file read (tests); production callers omit it. */
+export function hasProvisionedKey(provider: 'tavily' | 'serper', agentDir?: string): boolean {
   if (provider === 'tavily') {
     if (process.env.TAVILY_API_KEY) return true;
-    return readSearchKeysStatus().tavily;
+    return readSearchKeysStatus(agentDir ? { piAgentDir: agentDir } : undefined).tavily;
   }
   if (process.env.SERPER_API_KEY) return true;
-  return readSearchKeysStatus().serper;
+  return readSearchKeysStatus(agentDir ? { piAgentDir: agentDir } : undefined).serper;
 }
 
 /** Read-side provisioning for the search plane: resolves the caller's key.
@@ -194,10 +195,11 @@ export function hasProvisionedKey(provider: 'tavily' | 'serper'): boolean {
  * file value survives restarts (the vendored module's own config cache may
  * have memoized an empty config from before the key existed, so the explicit
  * read is what makes file-provisioned keys work in a long-lived process).
- * Returns key material BY DESIGN — the only caller is the plane's one-call
- * env override, which never logs it. */
-export function readProvisionedKey(provider: 'tavily' | 'serper'): string | undefined {
-  const dir = resolveConfigDir();
+ * `agentDir` scopes the file read (tests/production isolation); omitted
+ * means the ambient resolution. Returns key material BY DESIGN — the only
+ * caller is the plane's one-call env override, which never logs it. */
+export function readProvisionedKey(provider: 'tavily' | 'serper', agentDir?: string): string | undefined {
+  const dir = resolveConfigDir(agentDir);
   const file = path.join(dir, 'web-search.json');
   const vendorField = provider === 'tavily' ? 'tavilyApiKey' : 'serperApiKey';
   const envName = provider === 'tavily' ? 'TAVILY_API_KEY' : 'SERPER_API_KEY';

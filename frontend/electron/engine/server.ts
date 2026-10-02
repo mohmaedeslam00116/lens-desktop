@@ -569,6 +569,31 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
     let listening = false;
     let settled = false;
 
+    // Track C isolation (SPEC #155): pin the extension config directory to
+    // the LENS-owned agent dir BEFORE any vendored module loads. The
+    // extension resolves its `web-search.json` once at import
+    // (`PI_CODING_AGENT_DIR` first); without this pin it would read the
+    // operator's real `~/.pi` — ambient config steering LENS retrieval.
+    // Explicit operator overrides are respected; planes additionally scope
+    // per-call keys through the config seam, so this is the floor, not the
+    // mechanism. Lazy dynamic import: server.ts must not statically pull
+    // the session host (cycle: host never imports the server).
+    if (!process.env.PI_CODING_AGENT_DIR) {
+      import('./agentSessionHost')
+        .then((m) => {
+          try {
+            if (!process.env.PI_CODING_AGENT_DIR) {
+              process.env.PI_CODING_AGENT_DIR = m.resolveAgentDir();
+            }
+          } catch {
+            // Isolation best-effort; extension falls back to its own default.
+          }
+        })
+        .catch(() => {
+          // Isolation best-effort; extension falls back to its own default.
+        });
+    }
+
     // Startup failed: the port is not ours. Release the half-built pieces so a
     // retry on another port starts clean, then report the real cause.
     const failStartup = (err: any) => {
