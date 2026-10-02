@@ -35,6 +35,15 @@ describe('Pi search-provider catalog (Track A Pi truth)', () => {
       assert.doesNotMatch(serialized, /apiKey|api_key|tvly-|serper-/, 'no key material travels the route');
 
       for (const provider of body.providers) {
+        // Allowlist shape: the contract is exact keys, so a future secret
+        // field fails closed here instead of slipping through a denylist.
+        assert.deepEqual(
+          Object.keys(provider).sort(),
+          provider.keyField === undefined
+            ? ['badge', 'descAr', 'descEn', 'id', 'name']
+            : ['badge', 'descAr', 'descEn', 'id', 'keyField', 'name'],
+          `${provider.id} exposes exactly the contract keys`
+        );
         assert.equal(typeof provider.id, 'string');
         assert.equal(typeof provider.name, 'string');
         assert.equal(typeof provider.badge, 'string');
@@ -59,9 +68,9 @@ describe('Pi search-provider catalog (Track A Pi truth)', () => {
     try {
       const body = await get(port, '/api/pi/search-providers');
       assert.deepEqual(
-        body.providers.map((p) => p.id),
-        seam.map((p) => p.id),
-        'the route serves the seam verbatim — no renderer-side list can drift'
+        body.providers,
+        seam,
+        'the route serves the seam verbatim — no field can drift'
       );
     } finally {
       await stopEmbeddedServer();

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, Settings, Globe, Download, Cpu, X, Zap } from 'lucide-react';
-import { Language, ApiSettings, LLMProvider } from '../types';
+import { Language, ApiSettings } from '../types';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 
 interface CommandPaletteProps {
@@ -31,7 +31,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = (props) => {
     // Quick-switch shortcuts over the OPEN Pi id spaces (Track A, SPEC #155):
     // these are shortcuts, not a gate — Settings renders the full catalog
     // and both id types accept any engine-known string.
-    ...(['google', 'openai', 'anthropic', 'deepseek', 'groq', 'mistral', 'ollama', 'openrouter'] as LLMProvider[]).map(provider => ({
+    ...(['google', 'openai', 'anthropic', 'deepseek', 'groq', 'mistral', 'ollama', 'openrouter'] as const).map(provider => ({
       id: provider, title: `${ar ? 'استخدام' : 'Use'} ${provider}`, icon: Cpu,
       action: () => props.onUpdateSettings({ ...props.settings, llm_provider: provider, model_name: '', custom_model_name: '' }),
     })),

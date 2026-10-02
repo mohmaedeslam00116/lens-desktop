@@ -20,8 +20,14 @@ import {
   Sparkles,
   Layers
 } from 'lucide-react';
-import { Language, ApiSettings, LLMProvider, EmbeddingProvider, ModelOption } from '../types';
+import { Language, ApiSettings, EmbeddingProvider, ModelOption } from '../types';
 import { version as APP_VERSION } from '../../package.json';
+import {
+  ProviderPills,
+  SearchProviderKeyField,
+  type CatalogProviderEntry as PiCatalogEntry,
+  type CatalogSearchProviderEntry as PiSearchProviderEntry,
+} from './SettingsCatalog';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 
 interface SettingsModalProps {
@@ -100,12 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   // Pi catalog state (tracer P1): providers, models, and auth standing come
   // from the Pi runtime, never from LENS-owned lists or catalog fetchers.
-  interface PiCatalogEntry {
-    id: string;
-    name: string;
-    models: { id: string; name: string }[];
-    auth: { configured: boolean; source: string | null };
-  }
+  // Shapes live in `./SettingsCatalog` (shared with the pure components).
   const [piProviders, setPiProviders] = useState<PiCatalogEntry[]>([]);
   const [isLoadingPi, setIsLoadingPi] = useState(false);
   const [piError, setPiError] = useState('');
@@ -131,15 +132,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   // Eligible search providers from engine truth (Track A, SPEC #155):
   // `GET /api/pi/search-providers` — rendered verbatim, never hardcoded.
-  interface PiSearchProviderEntry {
-    id: string;
-    name: string;
-    badge: string;
-    descEn: string;
-    descAr: string;
-    keyField?: string;
-  }
+  // Shape lives in `./SettingsCatalog` (shared with the pure components).
   const [piSearchProviders, setPiSearchProviders] = useState<PiSearchProviderEntry[]>([]);
+
+  // Engine identity for the footer (Track A, SPEC #155): the readiness
+  // probe names the engine that bound the port — the footer reports app
+  // version + engine identity, never a hardcoded string.
+  const [engineIdentity, setEngineIdentity] = useState<string | null>(null);
 
   /** (Re)load the Pi catalog snapshot plus the persisted Ollama overlay. */
   const refreshPiCatalog = async () => {
@@ -147,6 +146,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setPiProviders([]);
       setPiOllama(null);
       setPiSearchProviders([]);
+      setEngineIdentity(null);
       setIsLoadingPi(false);
       setPiError('Research engine unavailable.');
       return [];
@@ -154,11 +154,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsLoadingPi(true);
     setPiError('');
     try {
-      const [catalogRes, authRes, ollamaRes, searchRes] = await Promise.all([
+      const [catalogRes, authRes, ollamaRes, searchRes, readyRes] = await Promise.all([
         fetch(`${apiBase}/api/pi/providers`),
         fetch(`${apiBase}/api/pi/auth-status`),
         fetch(`${apiBase}/api/pi/ollama`),
         fetch(`${apiBase}/api/pi/search-providers`),
+        fetch(`${apiBase}/`),
       ]);
       if (!catalogRes.ok || !authRes.ok) throw new Error(`Pi catalog answered ${catalogRes.status}/${authRes.status}.`);
       const catalog = await catalogRes.json();
@@ -179,6 +180,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           })(),
         }));
       setPiProviders(entries);
+      try {
+        const ready = readyRes.ok ? await readyRes.json() : null;
+        setEngineIdentity(
+          ready && typeof ready.engine === 'string' && ready.engine ? ready.engine : null
+        );
+      } catch {
+        setEngineIdentity(null);
+      }
       try {
         const search = searchRes.ok ? await searchRes.json() : null;
         setPiSearchProviders(
@@ -212,6 +221,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } catch (err: any) {
       setPiProviders([]);
       setPiSearchProviders([]);
+      setEngineIdentity(null);
       setPiError(err?.message || 'Pi catalog unavailable.');
       return [];
     } finally {
@@ -365,6 +375,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const piEntryFor = (piId: string) => piProviders.find((p) => p.id === piId);
   const currentProviderName = piEntryFor(current.llm_provider)?.name || current.llm_provider;
+  // The selected search catalog entry (Track A): drives the generic key
+  // input below — a missing entry (or keyless provider) renders no input.
+  const selectedSearchProvider =
+    piSearchProviders.find((s) => s.id === current.search_provider) ?? null;
+  // Narrowed once, as a const, so the keyField stays `string` (never a
+  // cast) through the input and the write below.
+  const selectedSearchKeyField = selectedSearchProvider?.keyField ?? null;
 
   const handleTestConnection = async () => {
     setIsTesting(true);
@@ -476,12 +493,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setKeyInputs((prev) => ({ ...prev, [current.llm_provider]: '' }));
       // Settings → web-search.json write-through (ADR-0013 D2/D7, #112): keyed
       // search providers become opt-in via the vendored config the engine reads.
+      // Track A (SPEC #155): the forwarded fields derive from the engine
+      // search catalog (`keyField`), never from two literals — a fourth
+      // keyed provider is typed, rendered, AND saved. When the catalog is
+      // unloaded (engine unreachable at open), fall back to the known
+      // plane fields so a typed key is never dropped silently. The engine
+      // ignores fields its config seam does not know yet (Track C opens it).
       // Fire-and-forget: the local write must not block or fail the settings
       // save; the response carries only a redacted summary — never key material.
+      const searchKeyFields =
+        piSearchProviders.length > 0
+          ? piSearchProviders.flatMap((s) => (s.keyField ? [s.keyField] : []))
+          : ['tavily', 'serper'];
+      const searchKeys: Record<string, string> = {};
+      for (const field of searchKeyFields) {
+        searchKeys[field] = current.keys[field] || '';
+      }
       fetch(`${apiBase}/api/settings/search-keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keys: { tavily: current.keys.tavily || '', serper: current.keys.serper || '' } }),
+        body: JSON.stringify({ keys: searchKeys }),
       }).catch(() => { /* engine unreachable: keys persist in LENS settings only */ });
       setSavedSuccess(true);
       // Refresh Pi truth so pills/standing reflect the save; an Ollama
@@ -553,9 +584,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <div className="settings-brand-footer p-3 border-t border-white/5 text-[11px] text-slate-500 font-mono flex items-center justify-between">
               <span>LENS</span>
-              {/* Track A (SPEC #155): the footer reports the shipped app
-                  version — never a hardcoded one. */}
-              <span className="px-1.5 py-0.5 rounded bg-white/5 text-[10px] text-slate-400">v{APP_VERSION}</span>
+              {/* Track A (SPEC #155): app version + engine identity — never
+                  a hardcoded string. The engine name comes from the readiness
+                  probe; absent/unreachable renders honestly. */}
+              <span className="px-1.5 py-0.5 rounded bg-white/5 text-[10px] text-slate-400">
+                v{APP_VERSION} · {engineIdentity ?? (isArabic ? 'المحرك غير reachable' : 'engine unreachable')}
+              </span>
             </div>
           </div>
 
@@ -602,33 +636,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {/* Provider Pills — the full Pi catalog, named by Pi
                         (Track A, SPEC #155): every catalog entry renders;
                         standing comes from the auth-status snapshot. */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {piProviders.map((entry) => {
-                        const piId = entry.id;
-                        const isSelected = current.llm_provider === piId;
-                        const standing = entry.auth.configured
-                          ? (isArabic ? 'مُعد' : 'Ready')
-                          : (isArabic ? 'يحتاج مفتاحًا' : 'Needs key');
-                        return (
-                          <button
-                            key={piId}
-                            type="button"
-                            onClick={() => {
-                              setCurrent(prev => ({ ...prev, llm_provider: piId as LLMProvider }));
-                              setModelSearch('');
-                            }}
-                            className={`p-2.5 rounded-xl border text-left rtl:text-right transition ${
-                              isSelected 
-                                ? 'bg-accent/10 border-accent/60 text-white font-medium ' 
-                                : 'bg-surface border-white/5 text-slate-300 hover:bg-hover'
-                            }`}
-                          >
-                            <p className="text-xs truncate font-medium">{entry.name}</p>
-                            <p className="text-[10px] text-slate-500 truncate mt-0.5">{standing}</p>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <ProviderPills
+                      entries={piProviders}
+                      selectedId={current.llm_provider}
+                      isArabic={isArabic}
+                      onSelect={(id) => {
+                        setCurrent((prev) => ({ ...prev, llm_provider: id }));
+                        setModelSearch('');
+                      }}
+                    />
                   </div>
 
                   {/* API Key Input Box */}
@@ -1208,7 +1224,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="space-y-2">
                     <label className="text-slate-300 font-medium">{isArabic ? 'محرك البحث النشط' : 'Search Retriever'}</label>
                     {/* Search providers are engine truth (Track A, SPEC #155):
-                        `GET /api/pi/search-providers`, rendered verbatim. */}
+                        `GET /api/pi/search-providers`, rendered verbatim.
+                        An empty catalog with a live engine is an honest
+                        error state, never a silent empty tab. */}
+                    {apiBase && piSearchProviders.length === 0 && !isLoadingPi && (
+                      <p className="text-[11px] text-rose-400" role="alert">
+                        {isArabic ? 'تعذر تحميل كتالوج البحث من المحرك.' : 'Search catalog unavailable from the engine.'}
+                      </p>
+                    )}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                       {piSearchProviders.map((s) => {
                         const isSelected = current.search_provider === s.id;
@@ -1233,23 +1256,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
 
-                  {(() => {
-                    const selected = piSearchProviders.find((s) => s.id === current.search_provider);
-                    if (!selected?.keyField) return null;
-                    const field = selected.keyField as 'tavily' | 'serper';
-                    return (
-                      <div className="p-4 rounded-xl bg-surface border border-white/5 space-y-2">
-                        <label className="text-slate-300 font-medium">{selected.name} API Key</label>
-                        <input
-                          type="password"
-                          value={current.keys[field] || ''}
-                          onChange={(e) => setCurrent(prev => ({ ...prev, keys: { ...prev.keys, [field]: e.target.value } }))}
-                          placeholder={field === 'tavily' ? 'tvly-...' : 'serper-...'}
-                          className="w-full bg-canvas border border-white/10 rounded-xl px-3.5 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:border-accent/50"
-                        />
-                      </div>
-                    );
-                  })()}
+                  {selectedSearchProvider && selectedSearchKeyField && (
+                    <SearchProviderKeyField
+                      entry={selectedSearchProvider}
+                      value={current.keys[selectedSearchKeyField] || ''}
+                      isArabic={isArabic}
+                      onChange={(value) =>
+                        setCurrent((prev) => ({
+                          ...prev,
+                          keys: { ...prev.keys, [selectedSearchKeyField]: value },
+                        }))
+                      }
+                    />
+                  )}
 
                   {/* Research pipeline (ADR-0010 closure): the agency path is
                       the standard research path; the legacy escape hatch was

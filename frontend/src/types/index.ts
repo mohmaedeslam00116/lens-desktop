@@ -287,12 +287,11 @@ export interface ApiSettings {
   ollama_endpoint: string;
   embedding?: EmbeddingSettings;
   // P2: chat keys are gone — Pi's `auth.json` owns them (never localStorage,
-  // never request envelopes). P3: embedding keys are gone too. Only search
-  // keys survive here (provisioned to `web-search.json` via write-through).
-  keys: {
-    tavily?: string;
-    serper?: string;
-  };
+  // never request envelopes). P3: embedding keys are gone too. Search keys
+  // survive here as an OPEN field map (Track A, SPEC #155): the engine
+  // search catalog names the fields (`keyField`); the renderer never closes
+  // the set. Only populated fields travel the write-through.
+  keys: Record<string, string | undefined>;
 }
 
 export interface DiscoverArticle {
