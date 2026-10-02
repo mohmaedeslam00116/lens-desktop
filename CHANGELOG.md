@@ -9,6 +9,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-02
+
+**The Pi-Only Backend** — Pi becomes the sole backend for providers,
+models, endpoints, credentials, catalogs, defaults, and runtime
+resolution (PR #154). Four tracers cut over big-bang with no dual-system
+flags: the LENS provider registry, key inspection, id-translation seams,
+and per-request key/endpoint envelopes are deleted; Settings persists
+keys, endpoints, and defaults into Pi files and renders Pi standing; and
+every request carries Pi ids only. The agent workspace also gains its run
+header and interaction switch, and the mid-run budget signal stops
+freezing the feed.
+
+### Added
+- **Engine (tracer P0 — read-only Pi truth, `piCatalog.ts`)**: the Pi
+  `ModelRuntime` is the single source of truth for providers, models, and
+  auth status. New read-only routes `GET /api/pi/providers` (id/name/
+  models only — never key material) and `GET /api/pi/auth-status`
+  (id + standing), served from an offline runtime under the LENS-owned
+  agent directory, with seam tests pinning the snapshot shape.
+- **Engine (tracer P1 — Settings on Pi truth)**: the new `POST /api/pi/test`
+  probes a provider connection on Pi transport (a typed key arms the probe
+  transiently; absent a key, the stored Pi credential drives it). The
+  native `POST /api/models/test` path is deleted with its last caller, and
+  `/api/models?type=chat` answers 410 pointing at the Pi surface.
+- **Engine (tracer P2 — Pi-owned chat auth + file-backed defaults,
+  `piAuth.ts`)**: `POST /api/pi/auth` persists chat keys through Pi's
+  native `login`/`logout` into `auth.json` (never logged, never
+  serialized), and `GET`/`POST /api/pi/defaults` owns the default
+  provider/model via a file-backed `SettingsManager`. Deleted:
+  `PROVIDER_KEY_FIELD`, `fetchDynamicModels`/`testConnection`, the
+  `gemini`↔`google` translation seams, and the `api_keys`/`api_key`
+  envelopes — requests carry Pi ids only.
+- **Engine (tracer P3 — embeddings on Pi truth)**: embedding credentials
+  resolve from Pi truth (`auth.json`/Pi env) inside the factory; listing
+  and `POST /api/models/test-embedding` are keyless (provider/model only).
+  The provider vocabulary is one (`google`, never legacy `gemini`), and
+  `embedding_api_key`/`use_chat_key`/`endpoint` leave the settings shape.
+- **Engine (tracer P4 — Ollama as a Pi `models.json` overlay,
+  `piOllama.ts`)**: the local server (endpoint + probed models) persists
+  as an ordinary provider entry in the overlay every Pi runtime loads via
+  `modelsPath` — the same native shape Pi's own built-ins use. New
+  `GET`/`POST /api/pi/ollama` (unreachable-but-well-formed still records
+  the base URL with an empty model list + warning: remembered, never
+  invented, never a blocked save). Transient per-construction registration
+  and the `ollama_endpoint`/`embedding_endpoint` envelopes are deleted;
+  admission guards and all transports resolve the endpoint from file truth.
+  Every `ModelRuntime.create` now also passes `modelsPath`, closing a leak
+  where auth runtimes defaulted to the user's real `~/.pi/models.json`.
+- **Renderer (Pi ids only + workspace run header)**: research/agent/followup
+  starts, tests, and listings carry Pi ids only — no keys, no endpoints.
+  Settings saves keys/endpoints/defaults into the Pi files (Ollama
+  diffed, warnings keep the dialog open) and renders Pi standing; a
+  one-time migration pushes legacy localStorage keys/defaults/endpoint
+  into Pi (the file wins when present). The harness gains the agent
+  session header (question, loop, live phase, elapsed clock, yield, stop),
+  the agent/deep-research interaction switch, and per-session reasoning
+  graph nodes in the report view.
+- **Tests**: new `pi_catalog`, `pi_auth`, `pi_embeddings`, `pi_ollama`, and
+  `agentic_budget_terminal` suites (overlay merge-safety, no-invention,
+  file-based admission, Pi-ids-only bodies, shared-store backup/restore);
+  the manifest completeness gate covers them. Suite: 549 → 634, green with
+  both typechecks and the renderer build. Standards + Spec review on
+  PR #154: APPROVE (findings non-blocking); CI green including the
+  packaged runtime smoke test.
+
+### Fixed
+- **Renderer feed (`budget_exhausted` mid-run terminal)**: the engine emits
+  `budget_exhausted` mid-run from inside the fetch wrapper while the run
+  continues into its answer and explicit terminal — the feed treated it as
+  final, freezing the run and dropping its real ending. Only the runner's
+  explicit terminals (`finished`/`cancelled`/`error`) now freeze the run,
+  pinned by the new terminal-predicate tests.
+- **Engine (retired sync admission guard)**: the request-key inspection
+  (`apiKey`/`ollamaEndpoint` off the body) was a parallel auth path.
+  Admission now reads Pi truth through the async server guards (422
+  bilingually); the old export is a documented throwing stub so legacy
+  call-sites fail loudly instead of silently.
+
 ## [1.4.0] - 2026-10-01
 
 **The Agentic LENS** — this release completes the Pi-only Antigravity-style
