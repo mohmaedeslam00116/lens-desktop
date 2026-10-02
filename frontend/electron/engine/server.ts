@@ -756,6 +756,24 @@ export function startEmbeddedServer(port = 8000, options: EmbeddedServerOptions 
           return;
         }
 
+        // Pi search-provider catalog (Track A, SPEC #155): the eligible
+        // search providers are engine truth, not a renderer allowlist. GET
+        // serves exactly what the seam returns — Track C swaps the seam
+        // backend to the upgraded extension surface without touching this
+        // route. Zero key material: entries name the settings key field,
+        // never a secret.
+        if (pathname === '/api/pi/search-providers' && req.method === 'GET') {
+          try {
+            const { getSearchProviderCatalog } = await import('./piSearchProviders');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ providers: getSearchProviderCatalog() }));
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err?.message ?? String(err) }));
+          }
+          return;
+        }
+
         // Embedding models (tracer P3): keyless listing. Ollama probes the
         // persisted Pi endpoint; cloud providers attempt live discovery with
         // the Pi-stored key and fall back to static defaults without one. No
