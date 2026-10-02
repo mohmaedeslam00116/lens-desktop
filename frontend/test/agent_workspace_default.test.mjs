@@ -505,7 +505,12 @@ describe('Agentic Search carries the retrieval selection (Track B - SPEC #155)',
     const server = await readSrc('../electron/engine/server.ts');
     assert.match(server, /search_provider\?: string/, 'the start request carries the retrieval selection');
     assert.match(server, /export function normalizeAgentStartRequest/, 'the normalizer is exported for the contract suite');
+    assert.match(server, /DEFAULT_AGENTIC_SEARCH_PROVIDER = 'duckduckgo'/, 'one constant owns the keyless default');
     assert.match(server, /searchProvider: request\.search_provider/, 'the session threads the selection into the surface');
+    // Single channel: the closure trusts only its param (never re-reads the
+    // request), so no second source of truth can drift.
+    assert.match(server, /providerOverride \?\? DEFAULT_AGENTIC_SEARCH_PROVIDER/, 'the closure trusts only its param');
+    assert.doesNotMatch(server, /providerOverride \?\? request\.search_provider/, 'the dual-channel read is gone');
     assert.doesNotMatch(server, /primarySearchPlane\(query\)/, 'the bare DDG-default call is gone from the agentic path');
     const surface = await readSrc('../electron/engine/agenticSearch.ts');
     assert.match(surface, /searchProvider\?: string/, 'the tool context carries the threaded selection');

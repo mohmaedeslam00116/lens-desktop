@@ -119,6 +119,8 @@ describe('Agentic tool surface forwards its search provider (Track B threading)'
   it('keyed selection without keys degrades to the keyless chain through the real plane', async () => {
     const { createAgenticToolSurface } = await importEngine('agenticSearch.js');
     const { primarySearchPlane } = await importEngine('searchPlane.js');
+    // Scoped temp dir: file provisioning reads here (empty — no keys), so a
+    // real operator key file can never steer this test onto live Tavily.
     const agentDir = mkdtempSync(join(tmpdir(), 'lens-trackb-'));
     delete process.env.TAVILY_API_KEY;
     globalThis.fetch = (async () => new Response(DDG_ONE_RESULT, { status: 200 }));
@@ -131,9 +133,11 @@ describe('Agentic tool surface forwards its search provider (Track B threading)'
       emit: () => {},
       searchProvider: 'tavily',
       // Production wiring: the surface search closes over the plane with the
-      // forwarded provider — exactly what startAgenticSearchSession builds.
+      // forwarded provider — exactly what startAgenticSearchSession builds
+      // (closure trusts only its param; the temp agentDir keeps file
+      // provisioning keyless).
       search: async (query, provider) =>
-        (await primarySearchPlane(query, provider ?? 'duckduckgo', undefined, 3)).map((h) => ({
+        (await primarySearchPlane(query, provider ?? 'duckduckgo', undefined, 3, undefined, agentDir)).map((h) => ({
           url: h.url,
           title: h.title,
           snippet: h.snippet,
@@ -147,6 +151,5 @@ describe('Agentic tool surface forwards its search provider (Track B threading)'
       state.sources.some((s) => s.url === 'https://fallback.example/tokamak'),
       'fallback hits admit as sources'
     );
-    void agentDir;
   });
 });

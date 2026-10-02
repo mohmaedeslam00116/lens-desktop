@@ -406,7 +406,14 @@ export async function primarySearchPlane(
   provider: string = 'duckduckgo',
   apiKeys?: Record<string, string>,
   maxResults = 8,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /**
+   * Override the LENS-owned agent directory for key provisioning
+   * (config-seam file read). Production callers omit it — the app-data
+   * default holds. Tests pass a temp dir so a real operator key file can
+   * never steer the test onto the live network.
+   */
+  agentDir?: string
 ): Promise<SearchResultItem[]> {
   // Cancellation propagates (caller-abort contract) — checked before the
   // empty-query short-circuit so an aborted caller never sees a fake success.
@@ -426,7 +433,7 @@ export async function primarySearchPlane(
     numResults: maxResults,
     signal,
     ...(apiKeys ? { apiKeys } : {}),
-    agentDir: resolveAgentDir(),
+    agentDir: agentDir ?? resolveAgentDir(),
   });
   return out.results;
 }

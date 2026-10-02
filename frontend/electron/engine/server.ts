@@ -146,12 +146,19 @@ export interface AgenticStartRequest {
   search_provider?: string;
 }
 
+/** Default retrieval selection for Agentic Search (Track B, SPEC #155): the
+ * explicit keyless chain — never implicit `auto` (Track C decision: auto
+ * fans out across ambient-keyed providers with per-provider deadlines).
+ * Single source of truth for the normalizer, the surface field, and the
+ * plane closure below; the plane keeps its own default as a separate-layer
+ * contract. */
+export const DEFAULT_AGENTIC_SEARCH_PROVIDER = 'duckduckgo';
+
 /** Server-side admission-time normalization of the start request.
  * Exported for the Track B contract suite. `search_provider` normalizes to
- * the explicit keyless chain when absent/blank (Track C decision: never
- * implicit `auto` — auto fans out across ambient-keyed providers); explicit
- * values pass through lowercased (the plane's closed map catches unknowns
- * into keyless with a warning). */
+ * the explicit keyless chain when absent/blank; explicit values pass through
+ * lowercased (the plane's closed map catches unknowns into keyless with a
+ * warning). */
 export function normalizeAgentStartRequest(body: Partial<AgenticStartRequest> | undefined): AgenticStartRequest {
   const provider = typeof body?.provider === 'string' && body.provider.trim() ? body.provider.trim().toLowerCase() : 'google';
   const rawSearch = typeof body?.search_provider === 'string' ? body.search_provider.trim().toLowerCase() : '';
@@ -162,7 +169,7 @@ export function normalizeAgentStartRequest(body: Partial<AgenticStartRequest> | 
       ? Math.floor(body.max_fetches)
       : 12,
     model_name: typeof body?.model_name === 'string' && body.model_name.trim() ? body.model_name.trim() : undefined,
-    search_provider: rawSearch ? rawSearch : 'duckduckgo',
+    search_provider: rawSearch ? rawSearch : DEFAULT_AGENTIC_SEARCH_PROVIDER,
   };
 }
 
@@ -302,15 +309,17 @@ export async function startAgenticSearchSession(
     maxFetches: request.max_fetches ?? 12,
     emit: (event) => emitAgentEvent(sessionId, event),
     // Track B (SPEC #155): the user's retrieval selection rides the request
-    // into the surface — the forwarded provider reaches the plane (keyed
-    // keys resolve server-side from the LENS agentDir file, never the wire).
-    // Absent means the explicit keyless chain (Track C decision), never
-    // implicit auto.
-    searchProvider: request.search_provider ?? 'duckduckgo',
+    // into the surface through ONE channel — request → searchProvider field
+    // → handler arg → closure param → plane. The closure trusts ONLY its
+    // param (never re-reads the request), so there is no second source of
+    // truth to drift. Keyed keys resolve server-side from the LENS agentDir
+    // file, never the wire; absent means the explicit keyless chain
+    // (Track C decision), never implicit auto.
+    searchProvider: request.search_provider ?? DEFAULT_AGENTIC_SEARCH_PROVIDER,
     search: async (query, providerOverride) => {
       const hits = await primarySearchPlane(
         query,
-        providerOverride ?? request.search_provider ?? 'duckduckgo'
+        providerOverride ?? DEFAULT_AGENTIC_SEARCH_PROVIDER
       );
       return hits.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
     },
