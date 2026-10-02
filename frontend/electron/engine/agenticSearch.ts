@@ -160,6 +160,11 @@ export const AGENTIC_TOOL_BOUNDS = {
   findWindowChars: 200,
   maxFindWindows: 5,
   maxStoredTextChars: 65536,
+  /** Per-hit stored page text (Track D review: entry.text was capped but
+   * hits[].content was not — unbounded vendored pages times 20 entries
+   * could reach hundreds of MB per session). Kept under the max retrievable
+   * page (getContentMaxLimit) so the marker is reachable, never hidden. */
+  maxStoredHitChars: 12000,
   maxStoredPerSession: 20,
 } as const;
 
@@ -188,7 +193,22 @@ function storeToolContent(
     text.length > AGENTIC_TOOL_BOUNDS.maxStoredTextChars
       ? text.slice(0, AGENTIC_TOOL_BOUNDS.maxStoredTextChars) + '\n…(stored text truncated)'
       : text;
-  scope.entries.set(id, { kind, label, queries, text: capped, hits, slices });
+  // Per-hit page text is capped too (Track D review): the entry-text cap
+  // alone still admitted unbounded vendored pages through hits[].content.
+  const cappedHits = hits.map((h) =>
+    h.content && h.content.length > AGENTIC_TOOL_BOUNDS.maxStoredHitChars
+      ? { ...h, content: h.content.slice(0, AGENTIC_TOOL_BOUNDS.maxStoredHitChars) + '\n…(stored page text truncated)' }
+      : h
+  );
+  const cappedSlices = slices.map((s) => ({
+    query: s.query,
+    hits: s.hits.map((h) =>
+      h.content && h.content.length > AGENTIC_TOOL_BOUNDS.maxStoredHitChars
+        ? { ...h, content: h.content.slice(0, AGENTIC_TOOL_BOUNDS.maxStoredHitChars) + '\n…(stored page text truncated)' }
+        : h
+    ),
+  }));
+  scope.entries.set(id, { kind, label, queries, text: capped, hits: cappedHits, slices: cappedSlices });
   while (scope.entries.size > AGENTIC_TOOL_BOUNDS.maxStoredPerSession) {
     const oldest = scope.entries.keys().next();
     if (oldest.done) break;
@@ -233,6 +253,48 @@ function capResultText(text: string): string {
     text.slice(0, AGENTIC_TOOL_BOUNDS.toolResultCharCap) +
     `\n…(result truncated at ${AGENTIC_TOOL_BOUNDS.toolResultCharCap} chars; full body retrievable via get_search_content)`
   );
+}
+
+/**
+ * Shared per-call search validation (Track D): recency/domain shape checks
+ * plus provider resolution, identical for `web_search` and `source_check`.
+ * Unknown recency and non-string domain entries are refused — a scoped call
+ * must never silently degrade into an unscoped one.
+ */
+function resolveSearchScoping(
+  context: AgenticToolContext,
+  args: Record<string, any>,
+  toolName: string,
+  defaultNum: number
+): { error: string } | { num: number; provider?: string; scoping: AgenticSearchCallOptions } {
+  if (args.recencyFilter !== undefined && !(RECENCY_VALUES as readonly string[]).includes(args.recencyFilter)) {
+    return {
+      error: `${toolName} recencyFilter must be one of day|week|month|year — got ${JSON.stringify(args.recencyFilter)}. Refused rather than silently serving unscoped results.`,
+    };
+  }
+  if (args.domainFilter !== undefined) {
+    if (
+      !Array.isArray(args.domainFilter) ||
+      args.domainFilter.some((d) => typeof d !== 'string')
+    ) {
+      return { error: `${toolName} domainFilter must be an array of domain strings.` };
+    }
+  }
+  const domainFilter = Array.isArray(args.domainFilter)
+    ? (args.domainFilter as string[]).map((d) => d.trim()).filter(Boolean)
+    : undefined;
+  return {
+    num: clampNumResults(args.numResults, defaultNum),
+    provider:
+      typeof args.provider === 'string' && args.provider.trim()
+        ? args.provider.trim()
+        : context.searchProvider,
+    scoping: {
+      numResults: clampNumResults(args.numResults, defaultNum),
+      ...(args.recencyFilter !== undefined ? { recencyFilter: args.recencyFilter } : {}),
+      ...(domainFilter ? { domainFilter } : {}),
+    },
+  };
 }
 
 /**
@@ -358,23 +420,9 @@ async function handleWebSearch(
   if (queryList.length === 0) {
     return { success: false, error: 'web_search requires a query or queries.' };
   }
-  if (args.recencyFilter !== undefined && !(RECENCY_VALUES as readonly string[]).includes(args.recencyFilter)) {
-    return {
-      success: false,
-      error: `web_search recencyFilter must be one of day|week|month|year — got ${JSON.stringify(args.recencyFilter)}. Refused rather than silently serving unscoped results.`,
-    };
-  }
-  if (args.domainFilter !== undefined && !Array.isArray(args.domainFilter)) {
-    return { success: false, error: 'web_search domainFilter must be an array of domain strings.' };
-  }
-  const domainFilter = Array.isArray(args.domainFilter)
-    ? args.domainFilter.filter((d): d is string => typeof d === 'string').map((d) => d.trim()).filter(Boolean)
-    : undefined;
-  const num = clampNumResults(args.numResults, AGENTIC_TOOL_BOUNDS.webSearchDefaultResults);
-  const provider =
-    typeof args.provider === 'string' && args.provider.trim()
-      ? args.provider.trim()
-      : context.searchProvider;
+  const scoping = resolveSearchScoping(context, args, 'web_search', AGENTIC_TOOL_BOUNDS.webSearchDefaultResults);
+  if ('error' in scoping) return { success: false, error: scoping.error };
+  const { provider, scoping: callOpts } = scoping;
   const served = queryList.slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
   const notes: string[] = [];
   if (queryList.length > served.length) {
@@ -386,11 +434,8 @@ async function handleWebSearch(
 
   const slices: StoredSearchSlice[] = [];
   for (const q of served) {
-    const hits = await context.search(q, provider, {
-      numResults: num,
-      ...(args.recencyFilter !== undefined ? { recencyFilter: args.recencyFilter } : {}),
-      ...(domainFilter ? { domainFilter } : {}),
-    });
+    // callOpts carries numResults plus only the scoping the call defined.
+    const hits = await context.search(q, provider, callOpts);
     slices.push({
       query: q,
       hits: hits.map((h) => ({ url: h.url, title: h.title, snippet: h.snippet })),
@@ -428,6 +473,15 @@ async function handleWebSearch(
         `content fetched for ${servedPages} of ${targets.length} pages (budget cap ${context.maxFetches}); excerpts below cover only fetched pages.`
       );
     }
+    // Propagate fetched content back into the per-query slices (same
+    // dead-slice rule as source_check): `queryIndex` pages real content.
+    const byUrl = new Map([...merged.values()].map((h) => [h.url, h]));
+    for (const slice of slices) {
+      for (const h of slice.hits) {
+        const full = byUrl.get(h.url);
+        if (full?.content) h.content = full.content;
+      }
+    }
   }
 
   const lines: string[] = [];
@@ -439,10 +493,13 @@ async function handleWebSearch(
     });
   });
   if (merged.size === 0) lines.push('No results.');
-  for (const note of notes) lines.push(`Note: ${note}`);
   const body = lines.join('\n\n');
-  const responseId = storeToolContent(context.sessionId, 'search', served.join(' | '), served, body, [...merged.values()], slices);
-  return { success: true, result: capResultText(`${body}\n\nresponseId: ${responseId} (retrieve full stored content via get_search_content)`) };
+  const storedText = [body, ...notes.map((n) => `Note: ${n}`)].join('\n\n');
+  const responseId = storeToolContent(context.sessionId, 'search', served.join(' | '), served, storedText, [...merged.values()], slices);
+  // Notes and the responseId ride AFTER the cap (Track D review nit): on a
+  // long body the cap must never eat the honesty lines; the store holds all.
+  const tail = [...notes.map((n) => `Note: ${n}`), `responseId: ${responseId} (retrieve full stored content via get_search_content)`];
+  return { success: true, result: `${capResultText(body)}\n\n${tail.join('\n\n')}` };
 }
 
 /**
@@ -572,36 +629,27 @@ async function handleSourceCheck(
   if (!claim) {
     return { success: false, error: 'source_check requires a claim.' };
   }
-  if (args.recencyFilter !== undefined && !(RECENCY_VALUES as readonly string[]).includes(args.recencyFilter)) {
-    return {
-      success: false,
-      error: `source_check recencyFilter must be one of day|week|month|year — got ${JSON.stringify(args.recencyFilter)}. Refused rather than silently serving unscoped results.`,
-    };
-  }
-  if (args.domainFilter !== undefined && !Array.isArray(args.domainFilter)) {
-    return { success: false, error: 'source_check domainFilter must be an array of domain strings.' };
-  }
-  const domainFilter = Array.isArray(args.domainFilter)
-    ? args.domainFilter.filter((d): d is string => typeof d === 'string').map((d) => d.trim()).filter(Boolean)
-    : undefined;
   const requested = normalizeQueryList({ queries: args.queries });
   const queryList = (requested.length > 0 ? requested : [claim]).slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
-  const num = clampNumResults(args.numResults, AGENTIC_TOOL_BOUNDS.sourceCheckDefaultResults);
-  const provider =
-    typeof args.provider === 'string' && args.provider.trim()
-      ? args.provider.trim()
-      : context.searchProvider;
+  const scoping = resolveSearchScoping(context, args, 'source_check', AGENTIC_TOOL_BOUNDS.sourceCheckDefaultResults);
+  if ('error' in scoping) return { success: false, error: scoping.error };
+  const { provider, scoping: callOpts } = scoping;
   const wantContent = args.fetchContent === true;
 
-  const merged = new Map<string, StoredSearchHit>();
+  // Per-query slices are retained (Track D review): `queryIndex` on a check
+  // id pages the slice it names — never a dead empty success.
+  const slices: StoredSearchSlice[] = [];
   for (const q of queryList) {
-    const hits = await context.search(q, provider, {
-      numResults: num,
-      ...(args.recencyFilter !== undefined ? { recencyFilter: args.recencyFilter } : {}),
-      ...(domainFilter ? { domainFilter } : {}),
+    const hits = await context.search(q, provider, callOpts);
+    slices.push({
+      query: q,
+      hits: hits.map((h) => ({ url: h.url, title: h.title, snippet: h.snippet })),
     });
-    for (const h of hits) {
-      if (!merged.has(h.url)) merged.set(h.url, { url: h.url, title: h.title, snippet: h.snippet });
+  }
+  const merged = new Map<string, StoredSearchHit>();
+  for (const slice of slices) {
+    for (const h of slice.hits) {
+      if (!merged.has(h.url)) merged.set(h.url, { ...h });
     }
   }
   for (const hit of merged.values()) {
@@ -645,11 +693,22 @@ async function handleSourceCheck(
     lines.push(hit.content ? `Passage: ${hit.content.slice(0, AGENTIC_TOOL_BOUNDS.artifactExcerptChars)}` : 'Passage: (not extracted)');
   }
   if (merged.size === 0) lines.push('(no sources found)');
-  for (const note of notes) lines.push(`Note: ${note}`);
   const body = lines.join('\n\n');
-  const slices: StoredSearchSlice[] = queryList.map((q) => ({ query: q, hits: [] }));
-  const responseId = storeToolContent(context.sessionId, 'check', claim, queryList, body, [...merged.values()], slices);
-  return { success: true, result: capResultText(`${body}\n\nresponseId: ${responseId} (retrieve full stored content via get_search_content)`) };
+  // Fetched passages live on the merged hits — propagate them back into the
+  // per-query slices so `queryIndex` pages real content, never dead empties.
+  const byUrl = new Map([...merged.values()].map((h) => [h.url, h]));
+  for (const slice of slices) {
+    for (const h of slice.hits) {
+      const full = byUrl.get(h.url);
+      if (full?.content) h.content = full.content;
+    }
+  }
+  const storedText = [body, ...notes.map((n) => `Note: ${n}`)].join('\n\n');
+  const responseId = storeToolContent(context.sessionId, 'check', claim, queryList, storedText, [...merged.values()], slices);
+  // Notes and the responseId ride AFTER the cap (Track D review nit): on a
+  // long body the cap must never eat the honesty lines; the store holds all.
+  const tail = [...notes.map((n) => `Note: ${n}`), `responseId: ${responseId} (retrieve full stored content via get_search_content)`];
+  return { success: true, result: `${capResultText(body)}\n\n${tail.join('\n\n')}` };
 }
 
 /**
@@ -747,6 +806,9 @@ function handleGetSearchContent(
   }
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0 || limit > AGENTIC_TOOL_BOUNDS.getContentMaxLimit) {
     return { success: false, error: `get_search_content limit must be an integer 1-${AGENTIC_TOOL_BOUNDS.getContentMaxLimit}.` };
+  }
+  if (offset > target.text.length) {
+    return { success: false, error: `get_search_content offset ${offset} exceeds the stored text length (${target.text.length}) for ${target.label}.` };
   }
   const slice = target.text.slice(offset, offset + limit);
   const suffix = offset + limit < target.text.length

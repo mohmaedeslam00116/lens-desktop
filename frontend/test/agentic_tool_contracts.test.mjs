@@ -232,7 +232,9 @@ describe('Track D — web_search fan-out, scoping, and stored retrieval', () => 
 
     const page = await surface.handler({ name: 'get_search_content', arguments: { responseId, limit: 20 } });
     assert.equal(page.success, true);
-    assert.ok(String(page.result).length <= 60, 'paging bounds the returned text');
+    // The limit bounds stored content; the continuation suffix rides after it.
+    assert.match(String(page.result), /re-run with offset 20/, 'the suffix names the next page');
+    assert.ok(String(page.result).length <= 20 + 80, `paging bounds the body, got ${String(page.result).length}`);
 
     const found = await surface.handler({
       name: 'get_search_content',
@@ -290,8 +292,7 @@ describe('Track D — source_check verifies without inferring', () => {
   });
 });
 
-describe('Track D — fetch_content multi-URL honesty', () => {
-  it('serves each URL, reports per-URL failures inline, and threads raw mode', async () => {
+describe('Track D — fetch_content multi-URL honesty', () => {  it('serves each URL, reports per-URL failures inline, and threads raw mode', async () => {
     const seenModes = [];
     const surface = createAgenticToolSurface(stubContext({
       sessionId: 's-trackd-multi',
@@ -324,5 +325,111 @@ describe('Track D — fetch_content multi-URL honesty', () => {
       arguments: { url: 'https://down.example/only' },
     });
     assert.equal(out.success, false);
+  });
+
+  it('non-string domain entries are refused, never silently dropped', async () => {
+    const surface = createAgenticToolSurface(stubContext({ sessionId: 's-trackd-baddomain' }));
+    const out = await surface.handler({
+      name: 'web_search',
+      arguments: { query: 'q', domainFilter: ['example', 42] },
+    });
+    assert.equal(out.success, false);
+    assert.match(out.error ?? '', /domainFilter/i);
+  });
+});
+
+describe('Track D review — bounds, modes, and slices are proven, not trusted', () => {
+  it('readable strips boilerplate the raw mode keeps (vendored mode honored)', async () => {
+    const { primaryScrapePlane, __testSeams, resetScrapePlane } = await importEngine('scrapePlane.js');
+    __testSeams.setLookupOverride(async () => [{ address: '93.184.216.34', family: 4 }]);
+    const realFetch = globalThis.fetch;
+    const html = '<html><head><title>T</title><script>var a=1;</script></head><body><nav>nav junk link link</nav><article><h1>Real headline</h1><p>' + 'Dense evidence content. Verdant pastures. '.repeat(60) + '</p></article></body></html>';
+    globalThis.fetch = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+    try {
+      const readable = await primaryScrapePlane('http://mode.example/readable');
+      const raw = await primaryScrapePlane('http://mode.example/raw', 8000, undefined, 'raw');
+      assert.ok(readable.content.length > 0 && raw.content.length > 0, 'both modes serve');
+      assert.notEqual(readable.content, raw.content, 'the mode reaches the mechanism — outputs diverge');
+      assert.equal(readable.content.includes('nav junk'), false, 'readable strips boilerplate');
+      assert.equal(raw.content.includes('nav junk'), true, 'raw keeps the unprocessed source');
+    } finally {
+      globalThis.fetch = realFetch;
+      __testSeams.setLookupOverride(null);
+      resetScrapePlane();
+    }
+  });
+
+  it('stored page text is capped per hit with a truncation marker', async () => {
+    const big = 'x'.repeat(20000);
+    const surface = createAgenticToolSurface(stubContext({
+      sessionId: 's-trackd-hitcap',
+      search: async () => [{ url: 'https://big.example/p', title: 'Big', snippet: 'S' }],
+      fetchPage: async (url) => ({ url, title: url, text: big }),
+    }));
+    const searched = await surface.handler({ name: 'web_search', arguments: { query: 'q', includeContent: true } });
+    const responseId = String(searched.result).match(/responseId:\s*(\S+)/)?.[1];
+    assert.ok(responseId);
+    const got = await surface.handler({
+      name: 'get_search_content',
+      arguments: { responseId, url: 'https://big.example/p', limit: 16000 },
+    });
+    assert.equal(got.success, true);
+    assert.ok(String(got.result).length <= 12000 + 100, `per-hit cap holds, got ${String(got.result).length}`);
+    assert.match(String(got.result), /truncated/);
+  });
+
+  it('source_check slices page by queryIndex with real content', async () => {
+    const surface = createAgenticToolSurface(stubContext({
+      sessionId: 's-trackd-sc-slice',
+      search: async (query) => [{ url: `https://${query}.example/p`, title: `${query} page`, snippet: `${query} snippet` }],
+      fetchPage: async (url) => ({ url, title: url, text: `passage for ${url}` }),
+    }));
+    const checked = await surface.handler({
+      name: 'source_check',
+      arguments: { claim: 'c', queries: ['alpha', 'beta'], fetchContent: true },
+    });
+    const responseId = String(checked.result).match(/responseId:\s*(\S+)/)?.[1];
+    assert.ok(responseId);
+    const slice = await surface.handler({
+      name: 'get_search_content',
+      arguments: { responseId, queryIndex: 1 },
+    });
+    assert.equal(slice.success, true);
+    assert.match(String(slice.result), /beta/, 'the second slice names its query');
+    assert.match(String(slice.result), /passage for https:\/\/beta\.example\/p/, 'slices carry fetched passages');
+    const bad = await surface.handler({
+      name: 'get_search_content',
+      arguments: { responseId, queryIndex: 7 },
+    });
+    assert.equal(bad.success, false, 'out-of-range queryIndex is a refusal');
+  });
+
+  it('the session store evicts oldest-first past its bound', async () => {
+    const surface = createAgenticToolSurface(stubContext({
+      sessionId: 's-trackd-evict',
+      search: async (query) => [{ url: `https://${query}.example/`, title: query, snippet: 'S' }],
+    }));
+    let firstId = '';
+    for (let i = 0; i < 21; i += 1) {
+      const out = await surface.handler({ name: 'web_search', arguments: { query: `evict-${i}` } });
+      const id = String(out.result).match(/responseId:\s*(\S+)/)?.[1];
+      if (i === 0) firstId = id;
+    }
+    assert.ok(firstId);
+    const gone = await surface.handler({ name: 'get_search_content', arguments: { responseId: firstId } });
+    assert.equal(gone.success, false, 'the oldest entry evicted past the 20-entry bound');
+    assert.match(gone.error ?? '', /unknown responseId/);
+  });
+
+  it('an offset past the stored text is a refusal, not an empty success', async () => {
+    const surface = createAgenticToolSurface(stubContext({
+      sessionId: 's-trackd-offset',
+      search: async () => [{ url: 'https://off.example/', title: 'T', snippet: 'short' }],
+    }));
+    const searched = await surface.handler({ name: 'web_search', arguments: { query: 'q' } });
+    const responseId = String(searched.result).match(/responseId:\s*(\S+)/)?.[1];
+    const out = await surface.handler({ name: 'get_search_content', arguments: { responseId, offset: 10 ** 9 } });
+    assert.equal(out.success, false);
+    assert.match(out.error ?? '', /offset/i);
   });
 });
