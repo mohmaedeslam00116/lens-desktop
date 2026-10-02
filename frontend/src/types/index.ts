@@ -2,7 +2,13 @@ export type Language = 'ar' | 'en';
 export type ResearchDepth = 'quick' | 'deep' | 'storm';
 export type ResearchPerspective = 'balanced' | 'technical' | 'market' | 'critical' | 'storm';
 export type ResearchMode = 'standard' | 'wide';
-export type LLMProvider = 'openai' | 'google' | 'anthropic' | 'groq' | 'deepseek' | 'openrouter' | 'mistral' | 'ollama';
+/**
+ * Chat provider id — an OPEN Pi id space (Track A, SPEC #155). Pi owns the
+ * provider catalog (`GET /api/pi/providers`); the renderer never gates it
+ * with a hardcoded union. Any string here must round-trip through Pi routes
+ * and session construction verbatim.
+ */
+export type LLMProvider = string;
 export type EmbeddingProvider = 'google' | 'openai' | 'ollama' | 'none';
 
 export interface ModelOption {
@@ -269,19 +275,23 @@ export interface EmbeddingSettings {
 }
 
 export interface ApiSettings {
-  search_provider: 'duckduckgo' | 'tavily' | 'serper';
+  /**
+   * Search provider id — an OPEN id space served by the engine
+   * (`GET /api/pi/search-providers`, Track A, SPEC #155). The renderer
+   * renders that catalog verbatim and never gates it with a union.
+   */
+  search_provider: string;
   llm_provider: LLMProvider;
   model_name: string;
   custom_model_name?: string;
   ollama_endpoint: string;
   embedding?: EmbeddingSettings;
   // P2: chat keys are gone — Pi's `auth.json` owns them (never localStorage,
-  // never request envelopes). P3: embedding keys are gone too. Only search
-  // keys survive here (provisioned to `web-search.json` via write-through).
-  keys: {
-    tavily?: string;
-    serper?: string;
-  };
+  // never request envelopes). P3: embedding keys are gone too. Search keys
+  // survive here as an OPEN field map (Track A, SPEC #155): the engine
+  // search catalog names the fields (`keyField`); the renderer never closes
+  // the set. Only populated fields travel the write-through.
+  keys: Record<string, string | undefined>;
 }
 
 export interface DiscoverArticle {

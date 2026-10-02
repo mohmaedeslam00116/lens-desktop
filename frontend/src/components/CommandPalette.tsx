@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, Settings, Globe, Download, Cpu, X, Zap } from 'lucide-react';
-import { Language, ApiSettings, LLMProvider } from '../types';
+import { Language, ApiSettings } from '../types';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 
 interface CommandPaletteProps {
@@ -28,11 +28,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = (props) => {
     { id: 'settings', title: ar ? 'إعدادات النماذج والمفاتيح' : 'Model and API settings', icon: Settings, action: props.onOpenSettings },
     { id: 'language', title: ar ? 'Switch to English' : 'التحويل للعربية', icon: Globe, action: props.onToggleLanguage },
     ...(props.hasActiveReport ? (['pdf', 'docx', 'markdown'] as const).map(format => ({ id: format, title: `${ar ? 'تصدير التقرير' : 'Export report'} · ${format.toUpperCase()}`, icon: Download, action: () => props.onExport(format) })) : []),
-    ...(['google', 'openai', 'anthropic', 'deepseek', 'groq', 'ollama', 'openrouter'] as LLMProvider[]).map(provider => ({
+    // Quick-switch shortcuts over the OPEN Pi id spaces (Track A, SPEC #155):
+    // these are shortcuts, not a gate — Settings renders the full catalog
+    // and both id types accept any engine-known string.
+    ...(['google', 'openai', 'anthropic', 'deepseek', 'groq', 'mistral', 'ollama', 'openrouter'] as const).map(provider => ({
       id: provider, title: `${ar ? 'استخدام' : 'Use'} ${provider}`, icon: Cpu,
       action: () => props.onUpdateSettings({ ...props.settings, llm_provider: provider, model_name: '', custom_model_name: '' }),
     })),
-    ...(['duckduckgo', 'tavily'] as const).map(provider => ({ id: provider, title: `${ar ? 'البحث باستخدام' : 'Search with'} ${provider}`, icon: Zap, action: () => props.onUpdateSettings({ ...props.settings, search_provider: provider }) })),
+    ...(['duckduckgo', 'tavily', 'serper'] as const).map(provider => ({ id: provider, title: `${ar ? 'البحث باستخدام' : 'Search with'} ${provider}`, icon: Zap, action: () => props.onUpdateSettings({ ...props.settings, search_provider: provider }) })),
   ];
   const filtered = commands.filter(command => command.title.toLowerCase().includes(query.trim().toLowerCase()));
   const run = (action: () => void) => { props.onClose(); action(); };

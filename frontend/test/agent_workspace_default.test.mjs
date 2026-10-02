@@ -337,7 +337,11 @@ describe('Pi owns auth + defaults (P2 - Pi-only backend)', () => {
     assert.match(modal, /keyInputs/, 'key inputs are transient component state');
     assert.doesNotMatch(modal, /toPiId/, 'the read-mapping is deleted with the LENS-id state');
     assert.doesNotMatch(modal, /SUPPORTED_LENS_IDS/, 'the LENS-id pill list is gone');
-    assert.match(modal, /SUPPORTED_PI_IDS/, 'pills render Pi ids');
+    // Track A (SPEC #155): the 8-id Pi allowlist is deleted with the closed
+    // contract — pills render through the shared catalog component fed by
+    // the live Pi catalog state (iteration lives in SettingsCatalog.tsx).
+    assert.doesNotMatch(modal, /SUPPORTED_PI_IDS/, 'the Pi-id allowlist is gone');
+    assert.match(modal, /entries=\{piProviders\}/, 'pills render the Pi catalog');
     const types = await readSrc('../src/types/index.ts');
     assert.doesNotMatch(types, /gemini\?:\s*string/, 'no chat-key slots survive in ApiSettings');
     assert.match(types, /'google'/, 'the provider vocabulary speaks Pi ids');
@@ -437,6 +441,56 @@ describe('Ollama persists as a Pi overlay (P4 - Pi-only backend)', () => {
     assert.match(modal, /\/api\/pi\/ollama/, 'Save persists and refresh reads the overlay route');
     assert.match(modal, /piOllama/, 'the Local tab renders persisted overlay status');
     assert.doesNotMatch(modal, /endpoint: current/, 'no endpoint travels test or list calls');
+  });
+});
+
+describe('Settings renders the full Pi catalog (Track A - SPEC #155)', () => {
+  it('no provider allowlist survives in the renderer', async () => {
+    const modal = await readSrc('../src/components/SettingsModal.tsx');
+    assert.doesNotMatch(modal, /SUPPORTED_PI_IDS/, 'the 8-id allowlist is deleted');
+    assert.match(modal, /ProviderPills/, 'pills render through the catalog component');
+    assert.match(modal, /entries=\{piProviders\}/, 'the modal passes the live catalog into the pills');
+    assert.match(modal, /from '\.\/SettingsCatalog'/, 'the catalog components are shared, not inlined');
+    const catalog = await readSrc('../src/components/SettingsCatalog.tsx');
+    assert.match(catalog, /entries\.map\(/, 'the pill grid iterates catalog entries, never a list');
+    const types = await readSrc('../src/types/index.ts');
+    assert.match(types, /export type LLMProvider = string/, 'the chat provider id space is open Pi truth');
+    assert.doesNotMatch(types, /search_provider: 'duckduckgo' \| 'tavily' \| 'serper'/, 'the search provider id space is open');
+    assert.match(types, /keys: Record<string, string \| undefined>/, 'search credentials are an open field map');
+  });
+
+  it('search keys are typed, rendered, AND saved for any catalog keyField', async () => {
+    const modal = await readSrc('../src/components/SettingsModal.tsx');
+    assert.match(modal, /SearchProviderKeyField/, 'the key input is the generic catalog component');
+    assert.doesNotMatch(modal, /keyField as '/, 'no closed cast narrows the catalog keyField');
+    assert.match(modal, /searchKeyFields/, 'write-through derives fields from the catalog');
+    assert.doesNotMatch(modal, /tavily: current\.keys\.tavily/, 'the two-literal write-through is gone');
+  });
+
+  it('the footer reports the app version plus engine identity, never a hardcoded one', async () => {
+    const modal = await readSrc('../src/components/SettingsModal.tsx');
+    assert.doesNotMatch(modal, /v1\.0\.0/, 'the stale hardcoded footer version is gone');
+    assert.match(modal, /package\.json/, 'the footer reads the app version from the package');
+    assert.match(modal, /engineIdentity/, 'the footer carries engine identity state');
+    assert.match(modal, /\$\{apiBase\}\/`\)/, 'the identity comes from the readiness probe');
+  });
+
+  it('the Search tab renders engine truth, not three hardcoded cards', async () => {
+    const modal = await readSrc('../src/components/SettingsModal.tsx');
+    assert.match(modal, /\/api\/pi\/search-providers/, 'the tab loads the engine search catalog');
+    assert.doesNotMatch(
+      modal,
+      /id: 'duckduckgo', name: 'DuckDuckGo'/,
+      'the hardcoded DuckDuckGo/Tavily/Serper triple is gone'
+    );
+    const server = await readSrc('../electron/engine/server.ts');
+    assert.match(server, /\/api\/pi\/search-providers/, 'the engine serves the search catalog route');
+  });
+
+  it('quick-switch shortcuts cover the known Pi ids over the open id space', async () => {
+    const palette = await readSrc('../src/components/CommandPalette.tsx');
+    assert.match(palette, /'mistral'/, 'the palette no longer drops mistral');
+    assert.match(palette, /'serper'/, 'the palette no longer drops serper');
   });
 });
 
