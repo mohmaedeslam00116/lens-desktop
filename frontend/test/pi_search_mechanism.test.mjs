@@ -129,6 +129,18 @@ describe('Extension search mechanism (Track C Pi truth)', () => {
     assert.equal(out.results[0].title, 'Tavily deep hit');
   });
 
+  it('an unknown provider id serves the keyless chain instead of fanning out', async () => {
+    // The extension coerces unknown ids to `auto` (ambient-keyed fan-out
+    // excluding DDG) — the closed map must catch that into the deterministic
+    // keyless chain before the extension ever sees it.
+    const agentDir = mkdtempSync(join(tmpdir(), 'lens-trackc-'));
+    stubFetch(async () => new Response(DDG_ONE_RESULT, { status: 200 }));
+
+    const out = await searchViaExtension('tokamak benchmarks', { provider: 'qqq-unknown', agentDir });
+    assert.equal(out.provider, 'duckduckgo', 'unknown ids resolve keyless, never auto');
+    assert.equal(out.results.length, 1);
+  });
+
   it('recency/domain options pass through without breaking keyless resolution', async () => {
     const agentDir = mkdtempSync(join(tmpdir(), 'lens-trackc-'));
     stubFetch(async () => new Response(DDG_ONE_RESULT, { status: 200 }));

@@ -32,7 +32,7 @@
 
 import * as path from 'node:path';
 import { SearchResultItem } from './types';
-import { hasProvisionedKey, readProvisionedKey, redactKeyMaterial } from './configSeam';
+import { readProvisionedKey, redactKeyMaterial } from './configSeam';
 import { resolveAgentDir } from './agentSessionHost';
 
 /** Unified extension search entry (web-access/gemini-search.ts). */
@@ -43,7 +43,6 @@ type ExtensionSearchFn = (
     numResults?: number;
     recencyFilter?: 'day' | 'week' | 'month' | 'year';
     domainFilter?: string[];
-    includeContent?: boolean;
     signal?: AbortSignal;
   }
 ) => Promise<{
@@ -222,15 +221,30 @@ async function loadExtensionSearch(): Promise<ExtensionSearchFn> {
 }
 
 /**
- * Maps a LENS search-provider id onto the extension selection. Known plane
- * ids pass through; the legacy `google` id means the Google index (Serper);
- * anything else passes through verbatim — the extension validates and
- * rejects unknown ids, and the outer fallback below catches that into DDG.
+ * Maps a LENS search-provider id onto the extension selection. CLOSED map —
+ * the extension coerces unknown strings to `"auto"` (full-chain fan-out that
+ * deliberately excludes DDG and can resolve via ambient keys LENS never
+ * provisioned), so unknown ids must never pass through verbatim. Known plane
+ * ids pass through; the legacy `google` id means the Google index (Serper —
+ * the extension has no `google` id, without the alias it would silently
+ * become `auto`); explicit `auto` selects the extension chain deliberately.
+ * Anything else is a misconfiguration: warn once per process and serve the
+ * deterministic keyless chain.
  */
+const EXPLICIT_SELECTIONS = new Set(['duckduckgo', 'tavily', 'serper']);
+const warnedUnknownProviders = new Set<string>();
+
 function mapProviderSelection(provider: string): string {
   const id = (provider || '').trim().toLowerCase();
   if (id === 'google') return 'serper';
-  return id || 'duckduckgo';
+  if (id === 'auto') return 'auto';
+  if (EXPLICIT_SELECTIONS.has(id)) return id;
+  if (!id) return 'duckduckgo';
+  if (!warnedUnknownProviders.has(id)) {
+    warnedUnknownProviders.add(id);
+    console.warn(`[searchPlane] unknown search provider "${id}" — serving the keyless chain instead.`);
+  }
+  return 'duckduckgo';
 }
 
 /** Key families LENS provisions per call (caller key, else config-seam file). */
@@ -265,9 +279,15 @@ async function withKeyedEnv<T>(envName: string, key: string, run: () => Promise<
   }
 }
 
-function isTerminalPlaneError(err: unknown): boolean {
+function isTerminalPlaneError(err: unknown, signal?: AbortSignal): boolean {
+  // A cancelled caller must never degrade into a fallback retrieval: the
+  // vendor surfaces aborts heterogeneously (DOMException AbortError from
+  // fetch, plain "Aborted" errors, TimeoutError from AbortSignal.timeout),
+  // so test the signal first, then the name, then the message.
+  if (signal?.aborted) return true;
   if (err instanceof DOMException && err.name === 'AbortError') return true;
   if (err instanceof Error && /abort/i.test(err.name)) return true;
+  if (err instanceof Error && /abort|timed out|timeout/i.test(err.message)) return true;
   if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') return true;
   return false;
 }
@@ -333,7 +353,7 @@ export async function searchViaExtension(
     try {
       out = family && key ? await withKeyedEnv(family.env, key, run) : await run();
     } catch (err) {
-      if (isTerminalPlaneError(err)) throw err;
+      if (isTerminalPlaneError(err, signal)) throw err;
       if (selection === 'duckduckgo') throw err;
       // Observed fallback (never silent, never terminal unless the fallback
       // fails too): the keyless DDG chain serves the query instead.
@@ -368,6 +388,13 @@ export async function searchViaExtension(
 /**
  * The primary search plane. Signature-compatible with
  * `MultiSearchProvider.search`, so it slots behind the engine's search seam.
+ *
+ * Default-selection decision (Track C, SPEC #155): an unset provider serves
+ * the explicit keyless DDG chain — deterministic, single-transport, no
+ * ambient-key participation. The extension `auto` chain is available via
+ * explicit selection (Track B threads the setting) but is never the
+ * implicit default: auto fans out across ambient-keyed providers with
+ * per-provider deadlines before reaching anything keyless.
  */
 export async function primarySearchPlane(
   query: string,
