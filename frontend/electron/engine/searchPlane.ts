@@ -313,7 +313,8 @@ export function classifySearchError(err: unknown, signal?: AbortSignal): SearchE
   if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') return 'unavailable';
   if (/api key|apikey|unauthorized|forbidden|401|403|auth/.test(lower)) return 'auth-missing';
   if (/no parseable|invalid json|parse/.test(lower)) return 'parse';
-  if (/no usable|unusable|invalid result|empty/.test(lower)) return 'empty';
+  if (/invalid result/.test(lower)) return 'invalid-result';
+  if (/no usable|unusable|^empty|empty response|no results/.test(lower)) return 'empty';
   if (/fetch failed|network|econnreset|econnrefused|enotfound|socket|dns/.test(lower)) return 'network';
   if (/http\s+\d{3}|status\s+\d{3}|server error|service unavailable/.test(lower)) return 'http';
   if (/no .*provider|unavailable/.test(lower)) return 'unavailable';
@@ -413,7 +414,7 @@ function isTerminalPlaneError(err: unknown, signal?: AbortSignal): boolean {
   // saturation are terminal.
   if (signal?.aborted) return true;
   if (err instanceof DOMException && err.name === 'AbortError') return true;
-  if (err instanceof Error && /abort/i.test(err.name) && !/timeout/i.test(err.message)) return true;
+  if (err instanceof Error && /abort/i.test(err.name)) return true;
   if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') return true;
   return false;
 }

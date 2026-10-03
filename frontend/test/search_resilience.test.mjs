@@ -102,7 +102,7 @@ describe('resilient search plane (real modules, stubbed transport)', () => {
     assert.equal(out.attempts?.[0].status, 'success');
   });
 
-  it('Test 2 — falls back when the explicit keyless provider fails (DDG fails, Auto succeeds)', async () => {
+  it('Test 2 — falls back when the explicit keyless provider fails (regression: DDG fails, Auto succeeds)', async () => {
     const { searchViaExtension } = await importEngine('searchPlane.js');
     process.env.TAVILY_API_KEY = 'good-ambient-key';
     let fetches = 0;
@@ -212,7 +212,39 @@ describe('resilient search plane (real modules, stubbed transport)', () => {
     );
   });
 
-  it('empty provider output runs the fallback policy (never a fake success)', async () => {
+  it('auto requested delegates to Pi and falls back to DDG once (no recurse)', async () => {
+    const { searchViaExtension } = await importEngine('searchPlane.js');
+    delete process.env.TAVILY_API_KEY;
+    globalThis.fetch = (async () => new Response(DDG_ONE_RESULT, { status: 200 }));
+    const out = await searchViaExtension('tokamak benchmarks', {
+      provider: 'auto',
+      agentDir: mkdtempSync(join(tmpdir(), 'lens-resil-')),
+    });
+    assert.ok(out.results.length > 0, 'the DDG fallback served the failed auto chain');
+    assert.deepEqual(
+      out.attempts?.map((a) => a.provider),
+      ['auto', 'duckduckgo'],
+      'auto runs once, then keyless — never a cycle'
+    );
+  });
+
+  it('serper requested without keys runs requested → auto → DDG', async () => {
+    const { searchViaExtension } = await importEngine('searchPlane.js');
+    delete process.env.TAVILY_API_KEY;
+    globalThis.fetch = (async () => new Response(DDG_ONE_RESULT, { status: 200 }));
+    const out = await searchViaExtension('tokamak benchmarks', {
+      provider: 'serper',
+      agentDir: mkdtempSync(join(tmpdir(), 'lens-resil-')),
+    });
+    assert.ok(out.results.length > 0);
+    assert.deepEqual(
+      out.attempts?.map((a) => a.provider),
+      ['serper', 'auto', 'duckduckgo'],
+      'explicit, bounded, deterministic order'
+    );
+  });
+
+  it('empty provider output runs the fallback policy (regression: never a fake success)', async () => {
     const { searchViaExtension } = await importEngine('searchPlane.js');
     delete process.env.TAVILY_API_KEY;
     globalThis.fetch = (async (url) => {
@@ -232,7 +264,7 @@ describe('resilient search plane (real modules, stubbed transport)', () => {
     assert.equal(out.attempts?.[0].kind, 'empty');
   });
 
-  it('malformed items are filtered, usable ones survive', async () => {
+  it('malformed items are filtered, usable ones survive (regression: invalid results never leave the plane)', async () => {
     const { searchViaExtension } = await importEngine('searchPlane.js');
     globalThis.fetch = (async (url) => {
       if (String(url).includes('api.tavily.com')) {
@@ -284,7 +316,7 @@ describe('provider + options propagation', () => {
     assert.equal(seen[1][1], 'tavily', 'session selection rides the call otherwise');
   });
 
-  it('Test 8 — researcher preserves the requested search provider', async () => {
+  it('Test 8 — researcher preserves the requested search provider (regression: selection survives the researcher path)', async () => {
     const { runRehostedResearcher } = await importEngine('researcherAgent.js');
     const harness = await importEngine('parityHarness.js');
     const { resetFetchLedger } = await importEngine('fetchLedger.js');
