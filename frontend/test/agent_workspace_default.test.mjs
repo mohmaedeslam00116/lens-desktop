@@ -67,10 +67,12 @@ describe('A chat question starts an Agentic Search run', () => {
     assert.match(codeOnly, /onStartAgentRun/, 'the workspace hands the question to the agentic transport');
     assert.match(codeOnly, /onStartDeepResearch/, 'the Deep Research path keeps its own entry point');
     // Tool chips render from the live agentic feed only — never invented.
+    // The feed now surfaces inside the assistant turn as ResearchActivity.
     assert.match(codeOnly, /agentRunFeed/, 'the workspace consumes the reduced live feed');
-    assert.match(codeOnly, /<AgentRunFeed/, 'the workspace mounts the live run feed section');
+    assert.match(codeOnly, /ChatShell|ResearchActivity/, 'the live feed surfaces inside the conversation turn');
+    const activity = await readSrc('../src/components/chat/ResearchActivity.tsx');
+    assert.match(activity, /toolChips/, 'tool chips render from the live feed');
     const feedSection = await readSrc('../src/components/harness/AgentRunFeed.tsx');
-    assert.match(feedSection, /feed\.toolChips/, 'tool chips render from the live feed');
     assert.match(feedSection, /feed\.sources/, 'admitted sources render from the live feed');
     assert.match(feedSection, /feed\.retries/, 'auto-retries render as visible states');
     assert.match(feedSection, /feed\.steerNotice/, 'the steering queue renders as a visible state');
@@ -247,11 +249,11 @@ describe('Steering, retries, and cancel are visible states', () => {
   });
 });
 
-describe('The workspace reads as an agent session', () => {
-  it('the active canvas opens with the agent session header, not a static card', async () => {
+describe('The workspace reads as a conversation session', () => {
+  it('the canvas opens as a conversation thread, not a dashboard card', async () => {
     const workspace = await readSrc('../src/components/harness/LensHarnessWorkspace.tsx');
-    assert.match(workspace, /<AgentSessionHeader/, 'one question, one live agent: the run header leads the canvas');
-    assert.match(workspace, /hideQueryHeader/, 'the report no longer repeats the question as a second H1');
+    assert.match(workspace, /ChatShell/, 'the workspace composes the conversation shell');
+    assert.match(workspace, /ConversationTurn|fallbackTurns/, 'one question maps to one conversation turn');
     assert.doesNotMatch(workspace, /harness-session-card/, 'the static status card is gone');
   });
 

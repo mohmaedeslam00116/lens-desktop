@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Renderer (ChatGPT-style conversation UX)**: the workspace is recomposed
+  around a persistent conversation thread and a single shared composer
+  (`components/chat/`: `ChatShell`, `ChatSidebar`, `ChatHeader`,
+  `ConversationThread/Turn`, `UserMessage`, `AssistantMessage`,
+  `ResearchActivity`, `InlineSources`, `CitationList`, `AssistantActions`,
+  `FollowUpSuggestions`, `ResearchComposer`, contextual `ArtifactDrawer`).
+  Research activity (real engine events only, human-readable first) lives
+  inside the assistant turn — auto-expanded while running, collapsed to a
+  count summary after; citations open the preserved
+  `EvidenceInspectionDrawer` in place; the full shelf, plan, graph (lazy),
+  and report (deferred canvas) open only on request. The permanent
+  inspector and dashboard mode switcher are gone; completed turns persist
+  so follow-ups continue the same conversation; history restores the
+  conversation by default. Engine contracts (`/api/agent/*`, research
+  endpoints, streams, evidence pipeline) are untouched. Covered by
+  `test/chat_ux_contract.test.mjs` (28 assertions).
+
 ### Fixed
 - **Engine (web search reliability & retrieval architecture)**: the search
   plane runs every query through a bounded, explicit attempt plan
