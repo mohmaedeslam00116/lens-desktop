@@ -29,6 +29,11 @@ export interface SourceItem {
   snippet?: string;
   credibilityScore: number;
   passage?: string;
+  /**
+   * Provider-supplied publication date (ISO). Present only where a provider
+   * supplied it (Track E retention) — absent means unknown, never stale.
+   */
+  publishedAt?: string;
   originalSnippet?: string;
   score?: number;
   relevanceTier?: 'high' | 'medium' | 'low';
@@ -239,6 +244,8 @@ export interface LiveEvent {
   domain?: string;
   credibility?: number;
   snippet?: string;
+  /** Provider-supplied publication date echoed on `source` events (Track E). */
+  publishedAt?: string;
   chunk?: string;
   report?: string;
   sources?: SourceItem[];
@@ -312,6 +319,12 @@ export interface SearchResultItem {
    * conform; Track E retention builds on this field.
    */
   searchProvider?: string;
+  /**
+   * Provider-supplied publication date (ISO). Retained where providers
+   * supply it (Track E) — currently no vendored provider emits dates, so
+   * this is normally absent; absent means unknown, never stale.
+   */
+  publishedAt?: string;
 }
 
 export interface WideResearchRequest extends ResearchRequest {

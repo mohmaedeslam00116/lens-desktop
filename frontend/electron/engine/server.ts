@@ -327,7 +327,13 @@ export async function startAgenticSearchSession(
         ...(searchOpts?.recencyFilter ? { recencyFilter: searchOpts.recencyFilter } : {}),
         ...(searchOpts?.domainFilter ? { domainFilter: searchOpts.domainFilter } : {}),
       });
-      return out.results.map((hit) => ({ url: hit.url, title: hit.title, snippet: hit.snippet }));
+      return out.results.map((hit) => ({
+        url: hit.url,
+        title: hit.title,
+        snippet: hit.snippet,
+        // Track E retention: provider dates flow into the surface store.
+        ...(hit.publishedAt ? { publishedAt: hit.publishedAt } : {}),
+      }));
     },
     // Track D: the fetch mode threads into the vendored extraction
     // (readable/raw); answer never arrives (tool-layer refusal above).

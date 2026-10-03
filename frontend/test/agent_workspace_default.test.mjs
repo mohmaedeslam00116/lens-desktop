@@ -514,7 +514,8 @@ describe('Agentic Search carries the retrieval selection (Track B - SPEC #155)',
     assert.doesNotMatch(server, /primarySearchPlane\(query\)/, 'the bare DDG-default call is gone from the agentic path');
     const surface = await readSrc('../electron/engine/agenticSearch.ts');
     assert.match(surface, /searchProvider\?: string/, 'the tool context carries the threaded selection');
-    assert.match(surface, /context\.search\(q, provider, callOpts\)/, 'the handler forwards selection plus per-call scoping');
+    assert.match(surface, /context\.search\(q, provider, qOpts\)/, 'the handler forwards selection plus per-query scoping');
+    assert.match(surface, /resolveRecencyForQuery\(q\)/, 'auto-recency resolves per query (mixed fan-out never over-scopes)');
     assert.match(surface, /resolveSearchScoping/, 'one shared validator owns recency/domain/provider (no duplicated scoping)');
   });
 });

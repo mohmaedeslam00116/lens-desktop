@@ -8,6 +8,7 @@ import { BM25Index, tokenizeBilingual, normalizeArabic, stemArabicWord, Weighted
 import { fuseRankings } from './rrf';
 import { chunkStructuredDocument, parseMarkdownSections, parseHtmlSections, ContextualChunk } from './chunker';
 import { selectPassagesWithMMR, MMRCandidate, MMROptions, MMRResult } from './mmr';
+import { detectTemporalIntent } from './freshness';
 import {
   EmbeddingCache,
   getDefaultEmbeddingCache,
@@ -1000,7 +1001,7 @@ export function fallbackEvidence(
  * Semantic Passage Ranking Pipeline
  */
 export async function rankSourcePassages(
-  sources: Array<{ url: string; title: string; domain: string; content: string; credibilityScore?: number }>,
+  sources: Array<{ url: string; title: string; domain: string; content: string; credibilityScore?: number; publishedAt?: string }>,
   queries: string[],
   embeddingModel: BaseEmbedding,
   options: {
@@ -1020,6 +1021,8 @@ export async function rankSourcePassages(
     cache?: EmbeddingCache;
     disableCache?: boolean;
     disableQueryExpansion?: boolean;
+    /** Reference time for freshness weighting (Track E; default: Date.now()). */
+    now?: number;
   } = {}
 ): Promise<{
   evidenceText: string;
@@ -1281,16 +1284,27 @@ export async function rankSourcePassages(
       currentChars += chunk.content.length;
     }
   } else {
-    const mmrCandidates: MMRCandidate<ChunkRecord>[] = cappedChunks.map((chunk, idx) => ({
-      id: chunk.id,
-      score: chunk.score ?? 0,
-      vector: chunk.vector || chunkVectors[idx],
-      content: chunk.content,
-      sourceId: chunk.citationId,
-      domain: chunk.domain,
-      credibilityScore: sources[chunk.sourceIndex]?.credibilityScore,
-      metadata: chunk
-    }));
+    const mmrCandidates: MMRCandidate<ChunkRecord>[] = cappedChunks.map((chunk, idx) => {
+      const sourceDate = sources[chunk.sourceIndex]?.publishedAt;
+      return {
+        id: chunk.id,
+        score: chunk.score ?? 0,
+        vector: chunk.vector || chunkVectors[idx],
+        content: chunk.content,
+        sourceId: chunk.citationId,
+        domain: chunk.domain,
+        credibilityScore: sources[chunk.sourceIndex]?.credibilityScore,
+        // Track E retention: source dates ride into freshness-weighted ranking.
+        ...(sourceDate ? { publishedAt: sourceDate } : {}),
+        metadata: chunk,
+      };
+    });
+
+    // Track E freshness (SPEC #155): freshness-seeking queries penalize stale
+    // candidates inside the real ranking seam; timeless queries rank exactly
+    // as before (temporalIntent false → multiplier 1.0). Intent ORs across
+    // the turn's queries — one temporal member freshens the whole ranking.
+    const temporalIntent = cleanQueries.some((q) => detectTemporalIntent(q).isTemporal);
 
     const mmrResult = selectPassagesWithMMR<ChunkRecord>(mmrCandidates, {
       lambda: typeof options.mmrLambda === 'number' ? options.mmrLambda : 0.7,
@@ -1299,7 +1313,9 @@ export async function rankSourcePassages(
       maxPerDomain: options.maxPerDomain ?? 3,
       domainDecay: options.domainDecay ?? 0.75,
       sourceDecay: options.sourceDecay ?? 0.70,
-      maxContextChars: maxContextChars
+      maxContextChars: maxContextChars,
+      temporalIntent,
+      ...(typeof options.now === 'number' ? { now: options.now } : {}),
     });
 
     selectedChunks = mmrResult.selected.map(s => s.metadata!);

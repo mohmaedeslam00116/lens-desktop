@@ -31,11 +31,18 @@ import {
 } from './agenticConversationProjection';
 import type { AgenticTranscriptStore } from './agenticTranscript';
 import { isAnswerModeFetchCall, ANSWER_MODE_UNSUPPORTED_MESSAGE } from './piPackages';
+import {
+  detectTemporalIntent,
+  resolveRecencyForQuery,
+  buildDateAwareVariants,
+} from './freshness';
 
 export interface AgenticSearchHit {
   url: string;
   title: string;
   snippet: string;
+  /** Provider-supplied publication date (ISO, Track E retention). */
+  publishedAt?: string;
 }
 
 /**
@@ -109,6 +116,8 @@ function admitSource(context: AgenticToolContext, item: SourceItem): void {
     domain: item.domain,
     snippet: item.snippet,
     credibility: item.credibilityScore,
+    // Track E retention: the date rides the event where the provider supplied it.
+    ...(item.publishedAt ? { publishedAt: item.publishedAt } : {}),
   });
 }
 
@@ -125,6 +134,8 @@ export interface StoredSearchHit {
   title: string;
   snippet: string;
   content?: string;
+  /** Provider-supplied publication date (ISO, Track E retention). */
+  publishedAt?: string;
 }
 
 export interface StoredSearchSlice {
@@ -307,7 +318,7 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
     {
       name: 'web_search',
       description:
-        'Search the web for evidence. Prefer `queries` (2-4 varied angles) over a single `query`. Returns titles, URLs, snippets, and a responseId for full stored retrieval via get_search_content.',
+        'Search the web for evidence. Prefer `queries` (2-4 varied angles) over a single `query`. Returns titles, URLs, snippets, provider dates where supplied, and a responseId for full stored retrieval via get_search_content. Temporal queries without an explicit recencyFilter gain the intent recency automatically (reported in the result notes).',
       parameters: {
         type: 'object',
         properties: {
@@ -339,7 +350,7 @@ export function createAgenticToolSurface(context: AgenticToolContext): LensToolS
     },
     {
       name: 'source_check',
-      description: 'Gather web sources for a claim and return a bounded machine-readable artifact with exact passage citations for manual review. No verdict is ever inferred — the artifact is evidence, not a judgment.',
+      description: 'Gather web sources for a claim and return a bounded machine-readable artifact with exact passage citations for manual review. Temporal claims verify freshness-first (date-aware variants + auto recency) before anything cites them. No verdict is ever inferred — the artifact is evidence, not a judgment.',
       parameters: {
         type: 'object',
         properties: {
@@ -433,12 +444,35 @@ async function handleWebSearch(
   const includeContent = args.includeContent === true;
 
   const slices: StoredSearchSlice[] = [];
+  // Track E auto-recency (SPEC #155, review): resolved PER QUERY — a mixed
+  // fan-out (["latest benchmarks","history of chess"]) scopes only its
+  // temporal members; timeless queries ride unscoped. Reported, never
+  // silent; an explicit selection always wins (resolved above).
+  const autoApplied: string[] = [];
   for (const q of served) {
     // callOpts carries numResults plus only the scoping the call defined.
-    const hits = await context.search(q, provider, callOpts);
+    const qOpts =
+      args.recencyFilter === undefined
+        ? (() => {
+            const auto = resolveRecencyForQuery(q);
+            if (auto) {
+              const markers = detectTemporalIntent(q).matchedTerms.join(', ');
+              autoApplied.push(`'${auto}' → "${q}" (markers: ${markers})`);
+              return { ...callOpts, recencyFilter: auto };
+            }
+            return callOpts;
+          })()
+        : callOpts;
+    const hits = await context.search(q, provider, qOpts);
     slices.push({
       query: q,
-      hits: hits.map((h) => ({ url: h.url, title: h.title, snippet: h.snippet })),
+      // Track E retention: provider dates flow into the store and admission.
+      hits: hits.map((h) => ({
+        url: h.url,
+        title: h.title,
+        snippet: h.snippet,
+        ...(h.publishedAt ? { publishedAt: h.publishedAt } : {}),
+      })),
     });
   }
 
@@ -455,6 +489,8 @@ async function handleWebSearch(
       domain: safeHost(hit.url),
       snippet: hit.snippet,
       credibilityScore: 0.5,
+      // Track E retention: admitted sources carry dates where supplied.
+      ...(hit.publishedAt ? { publishedAt: hit.publishedAt } : {}),
     });
   }
 
@@ -488,10 +524,18 @@ async function handleWebSearch(
   slices.forEach((slice, qi) => {
     lines.push(`Query ${qi + 1}/${slices.length}: ${slice.query}`);
     slice.hits.forEach((h, i) => {
-      lines.push(`[${qi + 1}.${i + 1}] ${h.title} — ${h.url}\n${h.snippet}`);
+      // Track E: the date shows where the provider supplied it — the model
+      // cites fresh evidence for freshness-seeking queries, never assumes.
+      const dateSuffix = h.publishedAt ? ` (published ${h.publishedAt.slice(0, 10)})` : '';
+      lines.push(`[${qi + 1}.${i + 1}] ${h.title} — ${h.url}${dateSuffix}\n${h.snippet}`);
       if (h.content) lines.push(`Full text (excerpt): ${h.content.slice(0, 300)}`);
     });
   });
+  if (autoApplied.length > 0) {
+    notes.push(
+      `recencyFilter auto-applied provider-side (${autoApplied.join('; ')}) — pass an explicit recencyFilter to override.`
+    );
+  }
   if (merged.size === 0) lines.push('No results.');
   const body = lines.join('\n\n');
   const storedText = [body, ...notes.map((n) => `Note: ${n}`)].join('\n\n');
@@ -630,20 +674,57 @@ async function handleSourceCheck(
     return { success: false, error: 'source_check requires a claim.' };
   }
   const requested = normalizeQueryList({ queries: args.queries });
-  const queryList = (requested.length > 0 ? requested : [claim]).slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
   const scoping = resolveSearchScoping(context, args, 'source_check', AGENTIC_TOOL_BOUNDS.sourceCheckDefaultResults);
   if ('error' in scoping) return { success: false, error: scoping.error };
   const { provider, scoping: callOpts } = scoping;
   const wantContent = args.fetchContent === true;
+  const notes: string[] = [];
+
+  // Track E freshness-first verification (SPEC #155, review): a temporal
+  // claim without explicit queries fans out date-aware variants (claim +
+  // year anchor + latest tail) — variants and recency are INDEPENDENT axes:
+  // explicit queries disable variants, explicit recency disables auto
+  // recency, and each applies (or not) on its own. The check verifies
+  // against FRESH evidence before anything cites it.
+  let queryList = (requested.length > 0 ? requested : [claim]).slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
+  if (requested.length === 0) {
+    const intent = detectTemporalIntent(claim);
+    if (intent.isTemporal) {
+      queryList = buildDateAwareVariants(claim).slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
+      notes.push(
+        `temporal claim (markers: ${intent.matchedTerms.join(', ')}) — date-aware variants (${queryList.length}): ${queryList.join(' | ')}. Pass explicit queries to override.`
+      );
+    }
+  }
 
   // Per-query slices are retained (Track D review): `queryIndex` on a check
   // id pages the slice it names — never a dead empty success.
   const slices: StoredSearchSlice[] = [];
+  const autoApplied: string[] = [];
   for (const q of queryList) {
-    const hits = await context.search(q, provider, callOpts);
+    // Per-query auto recency (same mixed-intent rule as web_search):
+    // temporal members scope, timeless ride unscoped, explicit wins.
+    const qOpts =
+      args.recencyFilter === undefined
+        ? (() => {
+            const auto = resolveRecencyForQuery(q);
+            if (auto) {
+              autoApplied.push(`'${auto}' → "${q}"`);
+              return { ...callOpts, recencyFilter: auto };
+            }
+            return callOpts;
+          })()
+        : callOpts;
+    const hits = await context.search(q, provider, qOpts);
     slices.push({
       query: q,
-      hits: hits.map((h) => ({ url: h.url, title: h.title, snippet: h.snippet })),
+      // Track E retention: provider dates flow into the store and admission.
+      hits: hits.map((h) => ({
+        url: h.url,
+        title: h.title,
+        snippet: h.snippet,
+        ...(h.publishedAt ? { publishedAt: h.publishedAt } : {}),
+      })),
     });
   }
   const merged = new Map<string, StoredSearchHit>();
@@ -659,10 +740,11 @@ async function handleSourceCheck(
       domain: safeHost(hit.url),
       snippet: hit.snippet,
       credibilityScore: 0.5,
+      // Track E retention: admitted sources carry dates where supplied.
+      ...(hit.publishedAt ? { publishedAt: hit.publishedAt } : {}),
     });
   }
 
-  const notes: string[] = [];
   const targets = wantContent ? [...merged.values()].slice(0, AGENTIC_TOOL_BOUNDS.maxCheckPages) : [];
   let fetchedPages = 0;
   for (const hit of targets) {
@@ -677,6 +759,11 @@ async function handleSourceCheck(
       `passages extracted for ${fetchedPages} of ${targets.length} pages (budget cap ${context.maxFetches}).`
     );
   }
+  if (autoApplied.length > 0) {
+    notes.push(
+      `recencyFilter auto-applied provider-side (${autoApplied.join('; ')}) — pass an explicit recencyFilter to override.`
+    );
+  }
   if (!wantContent && merged.size > 0) {
     notes.push('passages not extracted (fetchContent false); re-run with fetchContent true for exact citations.');
   }
@@ -689,7 +776,10 @@ async function handleSourceCheck(
   let rank = 0;
   for (const hit of merged.values()) {
     rank += 1;
-    lines.push(`[${rank}] ${hit.title} — ${hit.url}\nSnippet: ${hit.snippet}`);
+    // Track E: dates show where supplied — the model cites verified fresh
+    // passages, never assumes recency.
+    const dateSuffix = hit.publishedAt ? ` (published ${hit.publishedAt.slice(0, 10)})` : '';
+    lines.push(`[${rank}] ${hit.title} — ${hit.url}${dateSuffix}\nSnippet: ${hit.snippet}`);
     lines.push(hit.content ? `Passage: ${hit.content.slice(0, AGENTIC_TOOL_BOUNDS.artifactExcerptChars)}` : 'Passage: (not extracted)');
   }
   if (merged.size === 0) lines.push('(no sources found)');
