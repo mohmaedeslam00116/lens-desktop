@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Engine (SPEC #155 Track F — adversarial freshness tests, live, #161)**: the
+  keyed live battery (`test/freshness_live.test.mjs`) asserting provider
+  provenance, recency forwarding, domain enforcement, and honest dates
+  (undefined-or-valid-ISO — never invented, never text) across temporal,
+  today-news, historical-control, official-source, conflict-verification,
+  and freshness round-trip legs per keyed provider. Human-in-the-loop by
+  design: everything skips loudly without `LENS_LIVE_TESTS=1` (+ provider
+  keys), so keyless runs stay green deterministically; keys travel per-call
+  into a temp agentDir with a redaction hygiene probe. Documents the
+  vendored date gap (Tavily/Serper mappings keep title/url/snippet only).
 - **Engine (SPEC #155 Track G — evidence honesty, #162)**: zero-evidence
   runs abstain instead of dossiering — the standard loop,
   `HierarchicalSynthesis`, and wide mode each own an abstain branch
