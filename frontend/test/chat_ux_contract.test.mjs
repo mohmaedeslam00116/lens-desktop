@@ -107,7 +107,7 @@ describe('Conversation — turns, continuity, history', () => {
 
   it('assistant answer is the primary object with citations, sources, actions, follow-ups', async () => {
     const assistant = await read('../src/components/chat/AssistantMessage.tsx');
-    assert.match(assistant, /ReportCanvas/, 'answer body reuses the report pipeline');
+    assert.match(assistant, /LazyReportCanvas|React\.lazy/, 'answer body rides the deferred canvas, never a static renderer');
     assert.match(assistant, /CitationList/, 'inline citations part of the answer');
     assert.match(assistant, /InlineSources/, 'sources under the answer');
     assert.match(assistant, /AssistantActions/, 'copy/export/artifact actions');
@@ -213,10 +213,37 @@ describe('Artifacts — contextual, never permanent', () => {
   it('conversation shell stays cheap: heavy views load lazily', async () => {
     const shell = await read('../src/components/chat/ChatShell.tsx');
     assert.doesNotMatch(codeOnly(shell), /from '\.\.\/vane\/ReportRenderer'|from 'react-markdown'/, 'no static heavy imports in the shell');
+    assert.doesNotMatch(codeOnly(shell), /chat-harness-compat|<span hidden/, 'no hidden mounted trees in the shell');
     const drawer = await read('../src/components/chat/ArtifactDrawer.tsx');
     assert.match(drawer, /React\.lazy/, 'graph/report chunks load on demand');
     const assistant = await read('../src/components/chat/AssistantMessage.tsx');
-    assert.match(assistant, /ReportCanvas/, 'report rides the deferred canvas, not a static renderer');
+    assert.match(assistant, /React\.lazy/, 'the answer canvas loads lazily too, not just the drawer copy');
+    assert.doesNotMatch(codeOnly(assistant), /from '\.\.\/vane\/ReportCanvas'/, 'no static canvas import in the thread');
+  });
+
+  it('stop works for every live run: agentic and Deep Research cancel through their own routes', async () => {
+    const app = await read('../src/App.tsx');
+    assert.match(app, /\/api\/agent\/cancel/, 'agentic stop posts to its route');
+    assert.match(app, /\/api\/research\/cancel/, 'deep stop posts to its own route');
+    assert.match(app, /handleCancelRun/, 'one unified stop fans out by live run kind');
+    const activity = await read('../src/components/chat/ResearchActivity.tsx');
+    assert.match(activity, /<button[^>]*className="chat-activity-stop"/, 'stop is a real sibling button, never nested inside the toggle');
+    assert.doesNotMatch(codeOnly(activity), /role="button"/, 'no fake button roles');
+  });
+
+  it('titles are concise derivations of real queries, never full dumps', async () => {
+    const app = await read('../src/App.tsx');
+    assert.match(app, /deriveConversationTitle\(trimmed\)/, 'saved reports title through the concise helper');
+    const sidebar = await read('../src/components/chat/ChatSidebar.tsx');
+    assert.match(sidebar, /deriveConversationTitle/, 'rows render the concise derivation');
+    const helper = await read('../src/utils/conversationTitle.ts');
+    assert.match(helper, /maxLength/, 'titles truncate at a bounded length');
+  });
+
+  it('mode menu dismisses with Escape and outside click', async () => {
+    const composer = await read('../src/components/chat/ResearchComposer.tsx');
+    assert.match(composer, /Escape/, 'escape closes the mode menu');
+    assert.match(composer, /pointerdown/, 'outside click closes the mode menu');
   });
 });
 

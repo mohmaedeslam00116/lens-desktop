@@ -46,7 +46,9 @@ describe('The harness workspace is the default workspace', () => {
       /onExit/,
       'the harness workspace has no exit-to-legacy escape hatch',
     );
-    assert.match(codeOnly, /data-testid="lens-harness"/, 'the harness shell is pinned');
+    assert.match(codeOnly, /ChatShell/, 'the harness workspace composes the conversation shell');
+    const shell = await readSrc('../src/components/chat/ChatShell.tsx');
+    assert.match(shell, /data-testid="lens-harness"/, 'the shell is pinned');
   });
 });
 

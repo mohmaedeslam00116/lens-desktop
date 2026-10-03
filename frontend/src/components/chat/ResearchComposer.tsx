@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { ArrowUp, ChevronDown, Cpu, Loader2, Plus } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowUp, ChevronDown, Cpu, Loader2 } from 'lucide-react';
 import type { ApiSettings, Language, ResearchMode } from '../../types';
 
 export type ComposerInteraction = 'agent' | 'deep-research';
@@ -53,6 +53,28 @@ export const ResearchComposer: React.FC<ResearchComposerProps> = ({
   const [local, setLocal] = useState('');
   const [modeOpen, setModeOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const modeTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // Dismiss the mode menu on Escape / outside click and return focus.
+  useEffect(() => {
+    if (!modeOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setModeOpen(false);
+        modeTriggerRef.current?.focus();
+      }
+    };
+    const onPointer = (e: PointerEvent) => {
+      const el = document.querySelector('.chat-mode-menu');
+      if (el && !el.contains(e.target as Node)) setModeOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointer);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointer);
+    };
+  }, [modeOpen]);
   const value = initialValue !== undefined ? initialValue : local;
   const setValue = (v: string) => {
     if (onValueChange) onValueChange(v);
@@ -102,11 +124,9 @@ export const ResearchComposer: React.FC<ResearchComposerProps> = ({
         />
         <div className="chat-composer-toolbar">
           <div className="chat-composer-tools">
-            <button type="button" className="chat-composer-plus" aria-label={ar ? 'إرفاق' : 'Attach'} title={ar ? 'إرفاق' : 'Attach'}>
-              <Plus size={15} />
-            </button>
             <div className="chat-mode-menu">
               <button
+                ref={modeTriggerRef}
                 type="button"
                 className="chat-mode-trigger"
                 onClick={() => setModeOpen((o) => !o)}
@@ -174,6 +194,7 @@ export const ResearchComposer: React.FC<ResearchComposerProps> = ({
       <div className="chat-composer-meta">
         <span id="chat-composer-hint">{ar ? 'Enter للإرسال · Shift + Enter لسطر جديد' : 'Enter to send · Shift + Enter for a new line'}</span>
         {runLive && <span role="status">{ar ? 'الوكيل يعمل — إرسالك يوجّهه.' : 'Agent working — sending steers it.'}</span>}
+        {!runLive && loading && <span role="status">{ar ? 'البحث يعمل — يمكن الإيقاف من نشاط البحث.' : 'Research running — you can stop it from the research activity.'}</span>}
       </div>
     </div>
   );

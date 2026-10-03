@@ -6,7 +6,6 @@ import type {
   ResearchGraphNode,
   ResearchMode,
   ResearchPlan,
-  ResearchStep,
   SourceItem,
   WideResearchTelemetry,
 } from '../../types';
@@ -14,7 +13,6 @@ import type { AgenticConversationProjection } from '../../utils/agenticConversat
 import type { AgentRunFeedState } from '../../utils/agentRunFeed.mjs';
 import type { AgentFeedState } from '../../utils/liveFeed';
 import { availableHarnessArtifacts, type HarnessArtifactTab } from '../../utils/harnessWorkspace';
-import { HarnessArtifactInspector } from '../harness/HarnessArtifactInspector';
 import { EvidenceInspectionDrawer } from '../research/EvidenceInspectionDrawer';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatHeader } from './ChatHeader';
@@ -32,7 +30,6 @@ interface ChatShellProps {
   currentQuery: string;
   report: string;
   sources: SourceItem[];
-  steps: ResearchStep[];
   plan?: ResearchPlan | null;
   graphNodes: ResearchGraphNode[];
   thoughts: string[];
@@ -110,14 +107,9 @@ export const ChatShell: React.FC<ChatShellProps> = (props) => {
     setArtifact({ kind, turnId });
   };
   const inspectCitation = (turnId: string, index: number) => {
-    const turn = props.turns.find((t) => t.id === turnId);
-    if (turn) {
-      const globalIndex = turn.sources.length > 0 ? index : index;
-      void globalIndex;
-    }
-    setEvidenceIndex(index);
     const target = props.turns.find((t) => t.id === turnId) ?? activeTurn;
     if (target) setArtifact({ kind: 'sources', turnId: target.id, citationIndex: index });
+    setEvidenceIndex(index);
   };
 
   const conversationTitle = activeTurn?.query || props.currentQuery || '';
@@ -262,26 +254,6 @@ export const ChatShell: React.FC<ChatShellProps> = (props) => {
         language={props.language}
         onNavigateCitation={(n) => setEvidenceIndex(n)}
       />
-      {/* Retained for the workspace contract: the tabbed companion renders
-          only inside the contextual drawer (ArtifactDrawer), never as a
-          permanent third column. */}
-      <span data-testid="chat-harness-compat" hidden>
-        <span>Toggle research history</span>
-        {availableTabs.length > 0 && inspectorTab && (
-          <HarnessArtifactInspector
-            availableTabs={availableTabs}
-            selectedTab={inspectorTab}
-            onSelectTab={setInspectorTab}
-            onClose={() => setInspectorTab(null)}
-            language={props.language}
-            plan={props.plan}
-            sources={props.sources}
-            report={props.report}
-            graphNodes={props.graphNodes}
-            conversationProjection={props.conversationProjection}
-          />
-        )}
-      </span>
     </div>
   );
 };

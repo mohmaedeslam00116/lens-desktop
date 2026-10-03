@@ -7,7 +7,15 @@ import { CitationList } from './CitationList';
 import { InlineSources } from './InlineSources';
 import { AssistantActions } from './AssistantActions';
 import { FollowUpSuggestions } from './FollowUpSuggestions';
-import { ReportCanvas } from '../vane/ReportCanvas';
+
+/**
+ * The answer body rides the deferred report canvas (the markdown pipeline
+ * stays out of the conversation chunk until an answer mounts it) — the
+ * shell stays cheap before a report exists, and so does the thread.
+ */
+const LazyReportCanvas = React.lazy(() =>
+  import('../vane/ReportCanvas').then((m) => ({ default: m.ReportCanvas }))
+);
 
 interface AssistantMessageProps {
   language: Language;
@@ -76,7 +84,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({
       ) : report ? (
         <div className="chat-assistant-body">
           <Suspense fallback={<p className="chat-assistant-pending">{ar ? 'جاري تحضير الرد…' : 'Preparing the answer…'}</p>}>
-            <ReportCanvas
+            <LazyReportCanvas
               content={report}
               sources={sources}
               language={language}

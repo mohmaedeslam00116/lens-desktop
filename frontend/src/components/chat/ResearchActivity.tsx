@@ -70,28 +70,28 @@ export const ResearchActivity: React.FC<ResearchActivityProps> = ({ language, li
 
   return (
     <section className="chat-activity" aria-label={ar ? 'نشاط البحث' : 'Research activity'} data-testid="chat-research-activity">
-      <button
-        type="button"
-        className="chat-activity-toggle"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-      >
-        <span className="chat-activity-dot" aria-hidden="true" data-running={running ? 'true' : 'false'} />
-        <span className="chat-activity-summary">{summary}</span>
-        <ChevronDown size={13} aria-hidden="true" className={`chat-activity-chevron${open ? ' is-open' : ''}`} />
+      <div className="chat-activity-bar">
+        <button
+          type="button"
+          className="chat-activity-toggle"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+        >
+          <span className="chat-activity-dot" aria-hidden="true" data-running={running ? 'true' : 'false'} />
+          <span className="chat-activity-summary">{summary}</span>
+          <ChevronDown size={13} aria-hidden="true" className={`chat-activity-chevron${open ? ' is-open' : ''}`} />
+        </button>
         {running && (
-          <span
-            role="button"
-            tabIndex={0}
+          <button
+            type="button"
             className="chat-activity-stop"
-            onClick={(e) => { e.stopPropagation(); onCancel(); }}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onCancel(); } }}
+            onClick={onCancel}
             aria-label={ar ? 'إيقاف البحث' : 'Stop research'}
           >
             <Square size={11} aria-hidden="true" />
-          </span>
+          </button>
         )}
-      </button>
+      </div>
       {open && (
         <div className="chat-activity-body">
           {currentStep && running && (

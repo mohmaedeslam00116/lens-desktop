@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Compass, FolderOpen, GitBranch, History, Plus, Search, Settings, Sparkles } from 'lucide-react';
+import { ChevronsLeft, ChevronsRight, Compass, FolderOpen, GitBranch, History, Plus, Search, Settings, Sparkles } from 'lucide-react';
 import { BrandLogo } from '../brand/BrandLogo';
+import { deriveConversationTitle } from '../../utils/conversationTitle';
 import type { Language, ReportData } from '../../types';
 
 interface ChatSidebarProps {
@@ -62,7 +63,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   }, [filtered]);
 
   const renderRow = (item: ReportData) => {
-    const title = (item.title || item.query || '').trim() || (ar ? 'بحث بدون عنوان' : 'Untitled research');
+    const raw = (item.title || item.query || '').trim();
+    const title = deriveConversationTitle(raw) || (ar ? 'بحث بدون عنوان' : 'Untitled research');
     const active = item.id === activeId;
     return (
       <li key={item.id}>
@@ -164,7 +166,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
               onClick={onToggleCollapse}
               aria-label={ar ? 'طي الشريط الجانبي' : 'Collapse sidebar'}
             >
-              <span aria-hidden="true">⟨⟩</span>
+              {ar ? <ChevronsRight size={15} aria-hidden="true" /> : <ChevronsLeft size={15} aria-hidden="true" />}
             </button>
           </div>
         </>
@@ -172,7 +174,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
       {collapsed && (
         <div className="chat-sidebar-collapsed-actions">
           <button type="button" onClick={onToggleCollapse} aria-label={ar ? 'توسيع الشريط الجانبي' : 'Expand sidebar'}>
-            <span aria-hidden="true">⟨⟩</span>
+            {ar ? <ChevronsLeft size={15} aria-hidden="true" /> : <ChevronsRight size={15} aria-hidden="true" />}
           </button>
         </div>
       )}

@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, AlertTriangle } from 'lucide-react';
 import { Sidebar } from './components/vane/Sidebar';
-import { MessageBox } from './components/vane/MessageBox';
-import { MessageInput } from './components/vane/MessageInput';
 import { DiscoverView } from './components/vane/DiscoverView';
 import { LibraryView } from './components/vane/LibraryView';
 import type { AgenticConversationProjection } from './utils/agenticConversation';
@@ -32,6 +30,7 @@ import { useEngineHealth } from './hooks/useEngineHealth';
 import type { EngineProbeResult } from './utils/engineHealth.mjs';
 import { telemetryStep, AgentFeedState, LiveEventLike } from './utils/liveFeed';
 import { initialAgentRunState, reduceAgentRun, type AgentRunFeedState } from './utils/agentRunFeed.mjs';
+import { deriveConversationTitle } from './utils/conversationTitle';
 import type { ChatTurn } from './components/chat/types';
 
 /**
@@ -584,7 +583,7 @@ export function App() {
             const finalReport = {
               id: sessionId,
               query: trimmed,
-              title: trimmed,
+              title: deriveConversationTitle(trimmed),
               content: String(payload.report ?? liveReportRef.current ?? ''),
               sources: Array.isArray(payload.sources) ? payload.sources : [],
               createdAt: new Date().toISOString(),
@@ -662,6 +661,35 @@ export function App() {
         body: JSON.stringify({ session_id: feed.sessionId, message: trimmed }),
       });
     } catch { /* The queued state stays visible; the engine applies when it can. */ }
+  };
+
+  /** Cancel the live Deep Research run — terminates the socket run and the engine session. */
+  const handleCancelDeepResearch = () => {
+    if (!isSearching) return;
+    runTerminatedRef.current = true;
+    const sessionId = activeSessionId;
+    if (sessionId) {
+      fetch(`${API_BASE}/api/research/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, reason: 'User cancelled the research run.' }),
+      }).catch(() => { /* socket teardown below still settles the run visibly */ });
+    }
+    try { wsRef.current?.close(); } catch { /* teardown is best-effort */ }
+    wsRef.current = null;
+    setIsSearching(false);
+    setCurrentStatus(language === 'ar' ? 'أُلغي البحث.' : 'Research cancelled.');
+    updateNonTerminalAgentStatus('failed');
+  };
+
+  /** Unified stop: the agentic loop cancels through its route, Deep Research through its own. */
+  const handleCancelRun = () => {
+    const liveFeed = agentRunFeed;
+    if (liveFeed && (liveFeed.phase === 'running' || liveFeed.phase === 'retrying')) {
+      handleCancelAgentRun();
+      return;
+    }
+    handleCancelDeepResearch();
   };
 
   /** Cancel the live agentic run — an explicit terminal, evidence retained. */
@@ -949,7 +977,7 @@ export function App() {
             const finalReport: ReportData = {
               id: sessionId,
               query: trimmed,
-              title: trimmed,
+              title: deriveConversationTitle(trimmed),
               content: payload.report || liveReportRef.current || '',
               sources: formattedSources.length > 0 ? formattedSources : accumulatedSources,
               depth,
@@ -1296,7 +1324,7 @@ export function App() {
           onStartAgentRun={handleStartAgentRun}
           onStartDeepResearch={handleStartResearch}
           onSteerAgentRun={handleSteerAgentRun}
-          onCancelAgentRun={handleCancelAgentRun}
+          onCancelAgentRun={handleCancelRun}
           onNewResearch={handleNewResearch}
           onSelectReport={handleSelectReport}
           onSelectTab={(tab) => setActiveTab(tab)}
