@@ -282,7 +282,7 @@ for (const leg of [{ provider: 'tavily', env: 'TAVILY_API_KEY' }, { provider: 's
             ...(opts?.recencyFilter ? { recencyFilter: opts.recencyFilter } : {}),
             ...(opts?.domainFilter ? { domainFilter: opts.domainFilter } : {}),
             apiKeys: { [leg.provider]: key },
-            agentDir: tempAgentDir(),
+            agentDir,
           });
           return out.results.map((h) => ({
             url: h.url, title: h.title, snippet: h.snippet,
