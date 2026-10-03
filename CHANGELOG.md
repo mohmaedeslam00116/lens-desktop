@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output runs the same fallback policy (never a fake success); aborts and
   queue saturation stay terminal with no fallback retrieval. Failures are
   classified (cancelled, auth-missing, timeout, network, http, parse,
-  empty, unavailable) and logged structurally (`[search] start`,
+  empty, invalid-result, unavailable, unknown) and logged structurally (`[search] start`,
   `[search] provider=<id> failed reason=<kind>`, `[search] fallback=<id>`,
   `[search] success`, `[search] terminal_failure`) with zero key material. The researcher,
   agentic, deep, and wide paths preserve the selected provider plus
