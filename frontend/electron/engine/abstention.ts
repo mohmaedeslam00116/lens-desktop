@@ -31,7 +31,11 @@ export interface AbstentionInput {
  * reader can mistake for a sourced claim.
  */
 export function buildAbstentionReport(input: AbstentionInput): string {
-  const query = typeof input?.query === 'string' && input.query.trim() ? input.query.trim() : 'untitled query';
+  const rawQuery = typeof input?.query === 'string' && input.query.trim() ? input.query.trim() : 'untitled query';
+  // Bracket-free by construction (Track G review): a query echoing citation
+  // brackets (e.g. pasted "[1]") must not smuggle them into the abstention —
+  // digits move to parens, the query stays recognizable.
+  const query = rawQuery.replace(/\[(\d+)\]/g, '($1)');
   const isAr = input?.language === 'ar' || /[\u0600-\u06FF]/.test(query);
   const attempts = typeof input?.attempts === 'number' && input.attempts > 0 ? input.attempts : 0;
 

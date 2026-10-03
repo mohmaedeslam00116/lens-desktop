@@ -326,9 +326,11 @@ export class WideResearchAgent {
     }
 
     if (signal?.aborted) return undefined;
-    // Track G honesty (SPEC #155): zero fetched pages abstain outright —
-    // synthesis never runs without evidence, so no dossier can form.
-    if (pagesByUrl.size === 0) {
+    const evidence = latestAdmission?.admittedChunks || [];
+    // Track G honesty (SPEC #155, review hardening): abstain on zero
+    // EVIDENCE, not just zero fetches — pages-fetched-but-nothing-admitted
+    // (e.g. under an injected synthesize seam) must not dossier either.
+    if (pagesByUrl.size === 0 || evidence.length === 0) {
       const abstention = buildAbstentionReport({
         query: request.query,
         language,
@@ -362,7 +364,6 @@ export class WideResearchAgent {
       });
       return { report: abstention, sources: [], telemetry: abstainTelemetry };
     }
-    const evidence = latestAdmission?.admittedChunks || [];
     const synthesis = await (this.dependencies.synthesize || ((input) => this.defaultSynthesize(input)))({
       request,
       plan,
