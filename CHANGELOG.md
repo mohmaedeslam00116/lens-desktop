@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-03
+
+**Pi-Owned Retrieval** — the SPEC #155 migration completes: Pi owns every
+retrieval mechanism (search, fetch, recency transports) while LENS owns the
+evidence policy (SSRF, dedupe, budgets/ledgers, citation fidelity,
+freshness, abstention). Tracks A–G land behind dual review with the suite
+growing 634 → 736: catalog-driven Settings with no allow-list, the
+extension search mechanism with explicit keyless default and per-call keys,
+threaded retrieval selection, full-contract tool surfaces with real
+verification tools, bilingual freshness semantics with stale penalization,
+abstain-instead-of-dossier honesty on all paths, and a live adversarial
+battery that skips loudly without operator keys.
+
 ### Added
 - **Engine (SPEC #155 Track F — adversarial freshness tests, live, #161)**: the
   keyed live battery (`test/freshness_live.test.mjs`) asserting provider
@@ -47,6 +60,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   official source), and `CitationGroundingContract.verifyTemporalGrounding`
   flags temporal sentences backed only by stale/undated excerpts for
   `source_check` re-verification — advisory, never stripping.
+- **Engine (SPEC #155 Track D — full search contract, #159)**: `web_search`
+  serves queries, provider, numResults, recency/domain filters, and
+  includeContent (fan-out with URL dedupe and stored responseIds);
+  `fetch_content` serves url/urls in readable/raw with answer mode refused
+  and unsupported mechanism fields rejected loudly; real `source_check`
+  (verdict-free claim artifacts) and `get_search_content` (session store
+  with paging + find) ride one ledgered, budget-capped fetcher.
+- **Engine (SPEC #155 Track C — Pi owns the search mechanism, #158)**:
+  pi-web-access 0.29.0→0.35.0 with all planes on the unified `search()`,
+  DDG-last fallback, and per-item provider attribution; the LENS agent
+  directory pins extension provisioning and keys travel per-call from
+  file-fresh reads (never ambient process state, never `~/.pi`).
+- **Engine (SPEC #155 Track B — threaded retrieval selection, #157)**:
+  `search_provider` threads agent-start → normalizer → tool surface →
+  plane → renderer through one channel with one keyless default;
+  explicit `auto` honored, unknown ids fall into the keyless chain with a
+  once-per-process warning.
+- **Engine (SPEC #155 Track A — catalog-driven Settings, #156)**: the
+  hardcoded search allow-list is deleted; Settings renders the Pi
+  search-provider catalog behind `GET /api/pi/search-providers`, with a
+  versioned footer and engine identity.
 
 ## [1.5.0] - 2026-10-02
 
