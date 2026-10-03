@@ -62,6 +62,12 @@ describe('Track G — abstention report builder (bilingual, machine-marked)', ()
     assert.ok(report.includes(ABSTAIN_MARKER));
     assert.doesNotMatch(report, CITATION_BRACKETS, 'abstention cites nothing');
   });
+
+  it('a query echoing citation brackets cannot smuggle them into the abstention', async () => {
+    const report = buildAbstentionReport({ query: 'tokamak results [1] overview', language: 'en', reason: 'no-evidence' });
+    assert.doesNotMatch(report, CITATION_BRACKETS, 'bracket-free by construction, even for hostile queries');
+    assert.match(report, /\(1\)/, 'the echoed query stays recognizable');
+  });
 });
 
 describe('Track G — fabrication surface is deleted', () => {
@@ -179,6 +185,43 @@ describe('Track G — wide mode abstains on zero evidence (offline, no synthesis
     assert.deepEqual(result.sources, [], 'no sources admitted');
     const finished = events.find((e) => e.type === 'finished');
     assert.ok(finished, 'the wide run still terminates explicitly');
+  });
+
+  it('pages-fetched-but-nothing-admitted abstains too (zero evidence, not just zero fetches)', async () => {
+    let synthesized = false;
+    const events = [];
+    const page = {
+      url: 'https://unadmitted.example/a',
+      title: 'Unadmitted',
+      domain: 'unadmitted.example',
+      credibilityScore: 80,
+      content: 'Some content about tokamak records that admission will drop. '.repeat(30),
+    };
+    const agent = new WideResearchAgent('wide-trackg-noadmit', (e) => events.push(e), {
+      search: async () => [{ url: page.url, title: page.title, snippet: 'S' }],
+      createPool: () => ({
+        scrapeAll: async (urls, { onProgress } = {}) => {
+          onProgress?.(1, urls.length, page);
+          return [page];
+        },
+        getDeduplicationStats: () => ({ urlDuplicates: 0, exactContentDuplicates: 0, nearDuplicates: 0, admitted: 1 }),
+      }),
+      admitEvidence: () => ({
+        admittedChunks: [],
+        coverageAudit: {
+          overallScore: 0, subqueryScore: 0, aspectScore: 0,
+          metricScore: 0, diversityScore: 0, uncoveredSubqueries: [],
+        },
+      }),
+      synthesize: async () => {
+        synthesized = true;
+        throw new Error('must not be called without admitted evidence');
+      },
+    });
+    const result = await agent.run({ query: 'tokamak records 2026', mode: 'wide', language: 'en', plan: approvedPlan });
+    assert.equal(synthesized, false, 'synthesis never runs without admitted evidence');
+    assert.ok(String(result.report).includes(ABSTAIN_MARKER), 'no admitted evidence means abstention');
+    assert.doesNotMatch(String(result.report), CITATION_BRACKETS, 'abstention cites nothing');
   });
 });
 
