@@ -103,22 +103,34 @@ describe('Harness artifact inspector contract', () => {
 });
 
 describe('Lens harness shell contract', () => {
-  it('connects the copied shell to existing research callbacks and the conditional inspector', async () => {
+  it('composes the conversation shell on existing research callbacks with a drawer-only inspector', async () => {
     const harness = await readFile(
       new URL('../src/components/harness/LensHarnessWorkspace.tsx', import.meta.url),
       'utf8',
     );
 
-    assert.match(harness, /data-testid="lens-harness"/);
     // Ticket #145: the composer routes by interaction kind — agentic default,
     // Deep Research opt-in — instead of the single onStartResearch entry.
     assert.match(harness, /onStartAgentRun/);
     assert.match(harness, /onStartDeepResearch/);
     assert.match(harness, /onSelectReport/);
-    assert.match(harness, /HarnessArtifactInspector/);
-    assert.match(harness, /isRailOpen/);
-    assert.match(harness, /Toggle research history/);
+    assert.match(harness, /ChatShell/, 'the workspace composes the conversation shell');
+    assert.match(harness, /onCancelAgentRun/, 'the unified stop control rides through');
+    // Drawer-only: no permanent inspector column, no hidden mounted tree.
+    assert.doesNotMatch(harness, /HarnessArtifactInspector/, 'the inspector lives in the drawer, not the workspace');
+    assert.doesNotMatch(harness, /isInspectorOpen/, 'no second inspector path outside the drawer');
+    assert.doesNotMatch(harness, /data-testid="lens-harness"/, 'no hidden test scaffolding in the workspace file');
     assert.doesNotMatch(harness, /Antigravity|Pull request|Terminal|Repository|Open IDE/);
+    const shell = await readFile(
+      new URL('../src/components/chat/ChatShell.tsx', import.meta.url),
+      'utf8',
+    );
+    assert.match(shell, /data-testid="lens-harness"/, 'the shell carries the pinned test id');
+    const header = await readFile(
+      new URL('../src/components/chat/ChatHeader.tsx', import.meta.url),
+      'utf8',
+    );
+    assert.match(header, /Toggle research history/, 'the rail toggle stays reachable');
   });
 
   it('defines wide, drawer, and narrow harness geometry with logical boundaries', async () => {
@@ -156,6 +168,6 @@ describe('Harness default-workspace integration contract (ticket #145)', () => {
     assert.doesNotMatch(app, /if \(ev\.code === 1008\) return/);
     assert.match(app, /ev\.code === 1008[\s\S]{0,500}setIsSearching\(false\)/);
     assert.match(app, /if \(isSearching\) return;/);
-    assert.match(harness, /disabled=\{loading\}/);
+    assert.match(harness, /if \(!loading\) onSelectReport/, 'history selection is guarded while a run is live');
   });
 });

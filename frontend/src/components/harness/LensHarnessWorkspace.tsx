@@ -1,18 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, Eye, FileText, History, PanelLeft, Plus } from 'lucide-react';
-import { BrandLogo } from '../brand/BrandLogo';
-import { EmptyChatMessageInput } from '../vane/EmptyChatMessageInput';
-import { MessageBox } from '../vane/MessageBox';
-import { MessageInput } from '../vane/MessageInput';
-import { AgentFeedList } from '../AgentFeedList';
-import { AgentRunFeed } from './AgentRunFeed';
-import { AgentSessionHeader } from './AgentSessionHeader';
-import { HarnessArtifactInspector } from './HarnessArtifactInspector';
-import {
-  availableHarnessArtifacts,
-  defaultHarnessArtifact,
-  type HarnessArtifactTab,
-} from '../../utils/harnessWorkspace';
+import React, { useMemo, useState } from 'react';
 import type { AgenticConversationProjection } from '../../utils/agenticConversation';
 import type { AgentRunFeedState } from '../../utils/agentRunFeed.mjs';
 import type { AgentFeedState } from '../../utils/liveFeed';
@@ -27,6 +13,9 @@ import type {
   SourceItem,
   WideResearchTelemetry,
 } from '../../types';
+import { ChatShell } from '../chat/ChatShell';
+import type { ChatTurn } from '../chat/types';
+import type { ComposerInteraction } from '../chat/ResearchComposer';
 
 /**
  * How the composer's question will be answered. AGENTIC SEARCH IS THE
@@ -67,19 +56,38 @@ interface LensHarnessWorkspaceProps {
   agentRunFeed: AgentRunFeedState | null;
   /** The persisted Agentic Conversation projection (#144), when this session holds one. */
   conversationProjection?: AgenticConversationProjection | null;
+  /** Conversation turns (past + current) — one conceptual model for live and history. */
+  turns?: ChatTurn[];
+  activeReportId?: string | null;
+  activeTab?: string;
+  theme?: 'dark' | 'light';
+  onToggleTheme?: () => void;
+  onToggleLanguage?: () => void;
+  liveReport?: string;
   /** Start an Agentic Search run (the default interaction). */
   onStartAgentRun: (query: string) => void;
   /** Start a Deep Research run (plan-first; the explicit opt-in). */
-  onStartDeepResearch: (query: string) => void;  /** Steer the live agentic run (queues visibly before applying). */
+  onStartDeepResearch: (query: string) => void;
+  /** Steer the live agentic run (queues visibly before applying). */
   onSteerAgentRun: (message: string) => void;
-  /** Cancel the live agentic run (explicit terminal, evidence retained). */
+  /** Cancel the live run — agentic or Deep Research, evidence retained. */
   onCancelAgentRun: () => void;
   onNewResearch: () => void;
   onSelectReport: (report: ReportData) => void;
+  onSelectTab?: (tab: 'discover' | 'history' | 'graph' | 'skills') => void;
   onOpenSettings: () => void;
   onExport: (format: 'pdf' | 'docx' | 'markdown') => void;
+  onReviewPlan?: () => void;
 }
 
+/**
+ * LensHarnessWorkspace — a thin composition root over ChatShell.
+ * Conversation-first: Sidebar + Conversation with contextual drawers.
+ * Engine behavior unchanged: onStartAgentRun / onStartDeepResearch /
+ * onSteerAgentRun / onCancelAgentRun ride straight through; the artifact
+ * inspector lives only inside the contextual drawer (closed by default,
+ * never a permanent column, never a hidden mounted tree).
+ */
 export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
   language,
   query,
@@ -97,7 +105,6 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
   researchError,
   report,
   sources,
-  steps,
   plan,
   graphNodes,
   thoughts,
@@ -106,43 +113,30 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
   agentEventCount,
   history,
   wideTelemetry,
-  wideExpansionHistory,
   agentRunFeed,
   conversationProjection,
+  turns,
+  activeReportId,
+  activeTab,
+  theme,
+  onToggleTheme,
+  onToggleLanguage,
+  liveReport,
   onStartAgentRun,
   onStartDeepResearch,
   onSteerAgentRun,
   onCancelAgentRun,
   onNewResearch,
   onSelectReport,
+  onSelectTab,
   onOpenSettings,
   onExport,
+  onReviewPlan,
 }) => {
-  const ar = language === 'ar';
-  const artifactInput = useMemo(
-    () => ({ plan, sources, report, graphNodes, conversation: conversationProjection != null }),
-    [plan, sources, report, graphNodes, conversationProjection]
-  );
-  const availableTabs = useMemo(() => availableHarnessArtifacts(artifactInput), [artifactInput]);
-  const [selectedTab, setSelectedTab] = useState<HarnessArtifactTab | null>(() => defaultHarnessArtifact(artifactInput));
-  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
-  const [isRailOpen, setIsRailOpen] = useState(false);
   // The composer's interaction kind: AGENTIC SEARCH IS THE DEFAULT. An
   // explicit composer choice always wins over the default.
   const [agentInteraction, setAgentInteraction] = useState<AgentInteraction>('agent');
 
-  useEffect(() => {
-    if (availableTabs.length === 0) {
-      setSelectedTab(null);
-      return;
-    }
-    if (!selectedTab || !availableTabs.includes(selectedTab)) {
-      setSelectedTab(defaultHarnessArtifact(artifactInput));
-      setIsInspectorOpen(true);
-    }
-  }, [artifactInput, availableTabs, selectedTab]);
-
-  const hasSession = Boolean(currentQuery || report || loading || researchError || agentRunFeed);
   const runLive = Boolean(agentRunFeed && (agentRunFeed.phase === 'running' || agentRunFeed.phase === 'retrying'));
 
   const submitQuestion = (question: string) => {
@@ -164,169 +158,74 @@ export const LensHarnessWorkspace: React.FC<LensHarnessWorkspaceProps> = ({
     onStartAgentRun(trimmed);
   };
 
+  const fallbackTurns: ChatTurn[] = useMemo(() => {
+    if (turns) return turns;
+    const hasSession = Boolean(currentQuery || report || loading || researchError || agentRunFeed);
+    if (!hasSession) return [];
+    return [
+      {
+        id: 'legacy-session',
+        query: currentQuery,
+        report,
+        sources,
+        status: loading ? 'running' : researchError ? 'error' : 'done',
+        interaction: agentInteraction,
+        createdAt: new Date().toISOString(),
+        plan: plan ?? null,
+        graphNodes,
+        wideTelemetry: wideTelemetry ?? null,
+        conversationProjection: conversationProjection ?? null,
+        live: loading,
+        error: researchError || undefined,
+      },
+    ];
+  }, [turns, currentQuery, report, loading, researchError, agentRunFeed, sources, agentInteraction, plan, graphNodes, wideTelemetry, conversationProjection]);
+
   return (
-    <div className="lens-harness" data-testid="lens-harness" dir={ar ? 'rtl' : 'ltr'}>
-      <aside className={`harness-rail${isRailOpen ? ' is-open' : ''}`} aria-label={ar ? 'سجل البحث والتنقل' : 'Research history and navigation'}>
-        <button className="harness-brand" type="button" onClick={onNewResearch} aria-label={ar ? 'LENS — بحث جديد' : 'LENS — New research'}>
-          <BrandLogo />
-        </button>
-        <button className="harness-new-research" type="button" onClick={() => { onNewResearch(); setIsRailOpen(false); }}>
-          <Plus size={16} />
-          <span>{ar ? 'بحث جديد' : 'New research'}</span>
-        </button>
-
-        <section className="harness-history" aria-labelledby="harness-history-title">
-          <div className="harness-section-heading">
-            <History size={14} />
-            <h2 id="harness-history-title">{ar ? 'الأبحاث الأخيرة' : 'Recent research'}</h2>
-          </div>
-          {history.length === 0 ? (
-            <p className="harness-history-empty">{ar ? 'ستظهر الأبحاث المحفوظة هنا.' : 'Saved research will appear here.'}</p>
-          ) : (
-            <ol className="harness-history-list">
-              {history.slice(0, 12).map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    disabled={loading}
-                    aria-current={item.query === currentQuery ? 'page' : undefined}
-                    onClick={() => { if (!loading) { onSelectReport(item); setIsRailOpen(false); } }}
-                    title={item.query}
-                  >
-                    <FileText size={14} />
-                    <span>{item.title || item.query}</span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-      </aside>
-
-      <section className="harness-workspace">
-        <header className="harness-utility-bar">
-          <div className="harness-location"><span dir="ltr">LENS</span><span aria-hidden="true">/</span><strong>{ar ? 'مساحة البحث' : 'Research workspace'}</strong></div>
-          <div className="harness-utility-actions">
-            <button
-              type="button"
-              className="harness-utility-button harness-rail-toggle"
-              onClick={() => setIsRailOpen((open) => !open)}
-              aria-label={ar ? 'تبديل سجل البحث' : 'Toggle research history'}
-            >
-              <PanelLeft size={15} />
-              <span>{ar ? 'السجل' : 'History'}</span>
-            </button>
-            {availableTabs.length > 0 && !isInspectorOpen && (
-              <button type="button" className="harness-utility-button" onClick={() => setIsInspectorOpen(true)}>
-                <Eye size={15} />
-                <span>{ar ? 'إظهار المقتنيات' : 'Show artifacts'}</span>
-              </button>
-            )}
-          </div>
-        </header>
-
-        <main className="harness-canvas" id="main-content">
-          {!hasSession ? (
-            <div className="harness-empty-state">
-              <div className="harness-empty-intro">
-                <h1>{ar ? 'ابدأ بسؤال يستحق نظرة أعمق.' : 'Start with a question worth a closer look.'}</h1>
-                <p>{ar ? 'سيبقى الدليل ومسار البحث واضحين مع تقدّم الجلسة.' : 'Evidence and the research path remain clear as the session develops.'}</p>
-              </div>
-              <EmptyChatMessageInput
-                query={query}
-                setQuery={setQuery}
-                onSubmit={() => submitQuestion(query)}
-                loading={loading}
-                language={language}
-                settings={settings}
-                onOpenSettings={onOpenSettings}
-                optimizationMode={optimizationMode}
-                setOptimizationMode={setOptimizationMode}
-                sourceFocus={sourceFocus}
-                setSourceFocus={setSourceFocus}
-                researchMode={researchMode}
-                setResearchMode={setResearchMode}
-                interaction={agentInteraction}
-                onSelectInteraction={setAgentInteraction}
-              />
-            </div>
-          ) : (
-            <div className="harness-active-state">
-              <AgentSessionHeader
-                question={currentQuery}
-                mode={agentInteraction}
-                feed={agentRunFeed}
-                live={loading || runLive}
-                language={language}
-                onCancel={onCancelAgentRun}
-              />
-
-              {researchError && (
-                <p className="harness-session-error" role="alert">{researchError}</p>
-              )}
-
-              {agentRunFeed && (
-                <AgentRunFeed feed={agentRunFeed} language={language} onCancel={onCancelAgentRun} />
-              )}
-
-              {subqueries.length > 0 && (
-                <section className="harness-tool-activity" aria-label={ar ? 'استعلامات البحث' : 'Research queries'}>
-                  <div>{subqueries.map((subquery) => <span key={subquery} className="harness-tool-chip">{subquery}</span>)}</div>
-                </section>
-              )}
-
-              {thoughts.length > 0 && (
-                <section className="harness-event-feed" aria-label={ar ? 'تحديثات الجلسة' : 'Session updates'}>
-                  {thoughts.slice(-4).map((thought, index) => <p key={`${thought}-${index}`}>{thought}</p>)}
-                </section>
-              )}
-
-              {loading && <AgentFeedList agents={agents} language={language} eventCount={agentEventCount} />}
-
-              <MessageBox
-                query={currentQuery}
-                report={report}
-                sources={sources}
-                steps={steps}
-                loading={loading}
-                language={language}
-                plan={plan}
-                onExport={onExport}
-                onFollowUp={submitQuestion}
-                wideTelemetry={wideTelemetry}
-                wideExpansionHistory={wideExpansionHistory}
-                agents={agents}
-                agentEventCount={agentEventCount}
-                conversationProjection={conversationProjection}
-                hideQueryHeader
-              />
-              <MessageInput
-                onSendMessage={submitQuestion}
-                loading={runLive ? false : loading}
-                language={language}
-                runLive={runLive}
-                interaction={agentInteraction}
-                onSelectInteraction={setAgentInteraction}
-              />
-            </div>
-          )}
-        </main>
-      </section>
-
-      {isInspectorOpen && selectedTab && (
-        <HarnessArtifactInspector
-          availableTabs={availableTabs}
-          selectedTab={selectedTab}
-          onSelectTab={setSelectedTab}
-          onClose={() => setIsInspectorOpen(false)}
-          language={language}
-          plan={plan}
-          sources={sources}
-          report={report}
-          graphNodes={graphNodes}
-          conversationProjection={conversationProjection}
-        />
-      )}
-    </div>
+    <ChatShell
+      language={language}
+      theme={theme ?? 'dark'}
+      onToggleTheme={onToggleTheme ?? (() => {})}
+      onToggleLanguage={onToggleLanguage ?? (() => {})}
+      turns={fallbackTurns}
+      currentQuery={currentQuery}
+      report={report}
+      sources={sources}
+      plan={plan}
+      graphNodes={graphNodes}
+      thoughts={thoughts}
+      subqueries={subqueries}
+      agents={agents}
+      agentEventCount={agentEventCount}
+      currentStatus={currentStatus}
+      loading={loading}
+      liveReport={liveReport ?? report}
+      wideTelemetry={wideTelemetry}
+      agentRunFeed={agentRunFeed}
+      conversationProjection={conversationProjection}
+      researchError={researchError}
+      history={history}
+      activeReportId={activeReportId ?? null}
+      activeTab={activeTab ?? 'home'}
+      query={query}
+      setQuery={setQuery}
+      settings={settings}
+      optimizationMode={optimizationMode}
+      setOptimizationMode={setOptimizationMode}
+      sourceFocus={sourceFocus}
+      setSourceFocus={setSourceFocus}
+      researchMode={researchMode}
+      setResearchMode={setResearchMode}
+      interaction={agentInteraction as ComposerInteraction}
+      onSelectInteraction={setAgentInteraction}
+      onSubmitQuestion={submitQuestion}
+      onCancel={onCancelAgentRun}
+      onNewResearch={onNewResearch}
+      onSelectReport={(r) => { if (!loading) onSelectReport(r); }}
+      onSelectTab={onSelectTab ?? (() => {})}
+      onOpenSettings={onOpenSettings}
+      onExport={onExport}
+      onReviewPlan={onReviewPlan ?? (() => {})}
+    />
   );
 };

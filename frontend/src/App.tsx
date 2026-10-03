@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, AlertTriangle } from 'lucide-react';
 import { Sidebar } from './components/vane/Sidebar';
-import { MessageBox } from './components/vane/MessageBox';
-import { MessageInput } from './components/vane/MessageInput';
 import { DiscoverView } from './components/vane/DiscoverView';
 import { LibraryView } from './components/vane/LibraryView';
 import type { AgenticConversationProjection } from './utils/agenticConversation';
@@ -32,6 +30,8 @@ import { useEngineHealth } from './hooks/useEngineHealth';
 import type { EngineProbeResult } from './utils/engineHealth.mjs';
 import { telemetryStep, AgentFeedState, LiveEventLike } from './utils/liveFeed';
 import { initialAgentRunState, reduceAgentRun, type AgentRunFeedState } from './utils/agentRunFeed.mjs';
+import { deriveConversationTitle } from './utils/conversationTitle';
+import type { ChatTurn } from './components/chat/types';
 
 /**
  * The embedded engine's endpoint is bound by the Electron main process, which
@@ -216,6 +216,62 @@ export function App() {
   // entry at terminal time and replayed by session id from the history rail.
   const [conversationProjection, setConversationProjection] = useState<AgenticConversationProjection | null>(null);
 
+  // Conversation-first model: completed turns persist in the thread while a
+  // new question runs. Follow-ups stay in the same conversation instead of
+  // replacing it — the thread renders past turns plus the live turn from
+  // the same state the engine already owns. No second transcript: turns are
+  // a projection of report/sources/plan/graph state per question.
+  const [pastTurns, setPastTurns] = useState<ChatTurn[]>([]);
+  const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
+
+  /** Snapshot the finished turn before a new question replaces it. */
+  const snapshotFinishedTurn = () => {
+    const finishedReport = activeReport?.content || liveReportRef.current || '';
+    const finishedSources = activeReport?.sources?.length ? activeReport.sources : visitedSourcesRefSafe();
+    const finishedQuery = currentQueryRefSafe() || activeReport?.query || '';
+    if (!finishedQuery && !finishedReport) return;
+    const turn: ChatTurn = {
+      id: activeReport?.id || currentTurnId || `turn-${Date.now()}`,
+      query: finishedQuery || query,
+      report: finishedReport,
+      sources: finishedSources,
+      status: researchError ? 'error' : 'done',
+      interaction: lastInteractionRef.current,
+      createdAt: activeReport?.createdAt || new Date().toISOString(),
+      plan: activeReport?.plan || proposedPlanRefSafe() || null,
+      graphNodes: activeReport?.graphNodes || graphNodesRefSafe(),
+      wideTelemetry: activeReport?.wideTelemetry || wideTelemetryRef.current || null,
+      conversationProjection: conversationProjectionRefSafe(),
+      live: false,
+      error: researchError || undefined,
+    };
+    setPastTurns((prev) => {
+      if (prev.some((t) => t.id === turn.id)) return prev;
+      return [...prev.slice(-19), turn];
+    });
+  };
+  // Refs so the snapshot reads fresh state inside async starters.
+  const currentQueryRef = useRef('');
+  currentQueryRef.current = currentQuery;
+  const queryRef = useRef('');
+  queryRef.current = query;
+  const visitedSourcesSnapshotRef = useRef(visitedSources);
+  visitedSourcesSnapshotRef.current = visitedSources;
+  const graphNodesSnapshotRef = useRef(graphNodes);
+  graphNodesSnapshotRef.current = graphNodes;
+  const proposedPlanSnapshotRef = useRef(proposedPlan);
+  proposedPlanSnapshotRef.current = proposedPlan;
+  const activeReportSnapshotRef = useRef(activeReport);
+  activeReportSnapshotRef.current = activeReport;
+  const conversationProjectionSnapshotRef = useRef(conversationProjection);
+  conversationProjectionSnapshotRef.current = conversationProjection;
+  const lastInteractionRef = useRef<'agent' | 'deep-research'>('agent');
+  const currentQueryRefSafe = () => currentQueryRef.current;
+  const visitedSourcesRefSafe = () => visitedSourcesSnapshotRef.current;
+  const graphNodesRefSafe = () => graphNodesSnapshotRef.current;
+  const proposedPlanRefSafe = () => proposedPlanSnapshotRef.current;
+  const conversationProjectionRefSafe = () => conversationProjectionSnapshotRef.current;
+
   const wsRef = useRef<WebSocket | null>(null);
   // Live-connection resilience (visibility fix, ticket #119): track the last
   // delivered engine eventId for delta replay, bound reconnect attempts, and
@@ -386,6 +442,9 @@ export function App() {
     setResearchError('');
     setIsSearching(false);
     setActiveReport(null);
+    setPastTurns([]);
+    setCurrentTurnId(null);
+    setConversationProjection(null);
     setCurrentQuery('');
     setQuery('');
     setCurrentStatus('');
@@ -421,6 +480,11 @@ export function App() {
     // local key. The engine's admission guard (Pi standing) rejects keyless
     // runs with a bilingual 422; here we just start.
 
+    // Conversation continuity: the finished turn stays in the thread — the
+    // new question becomes the next turn, never a replacement.
+    snapshotFinishedTurn();
+    lastInteractionRef.current = 'agent';
+    setCurrentTurnId(`turn-${Date.now()}`);
     setResearchError('');
     setCurrentQuery(trimmed);
     setIsSearching(true);
@@ -519,7 +583,7 @@ export function App() {
             const finalReport = {
               id: sessionId,
               query: trimmed,
-              title: trimmed,
+              title: deriveConversationTitle(trimmed),
               content: String(payload.report ?? liveReportRef.current ?? ''),
               sources: Array.isArray(payload.sources) ? payload.sources : [],
               createdAt: new Date().toISOString(),
@@ -599,6 +663,35 @@ export function App() {
     } catch { /* The queued state stays visible; the engine applies when it can. */ }
   };
 
+  /** Cancel the live Deep Research run — terminates the socket run and the engine session. */
+  const handleCancelDeepResearch = () => {
+    if (!isSearching) return;
+    runTerminatedRef.current = true;
+    const sessionId = activeSessionId;
+    if (sessionId) {
+      fetch(`${API_BASE}/api/research/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, reason: 'User cancelled the research run.' }),
+      }).catch(() => { /* socket teardown below still settles the run visibly */ });
+    }
+    try { wsRef.current?.close(); } catch { /* teardown is best-effort */ }
+    wsRef.current = null;
+    setIsSearching(false);
+    setCurrentStatus(language === 'ar' ? 'أُلغي البحث.' : 'Research cancelled.');
+    updateNonTerminalAgentStatus('failed');
+  };
+
+  /** Unified stop: the agentic loop cancels through its route, Deep Research through its own. */
+  const handleCancelRun = () => {
+    const liveFeed = agentRunFeed;
+    if (liveFeed && (liveFeed.phase === 'running' || liveFeed.phase === 'retrying')) {
+      handleCancelAgentRun();
+      return;
+    }
+    handleCancelDeepResearch();
+  };
+
   /** Cancel the live agentic run — an explicit terminal, evidence retained. */
   const handleCancelAgentRun = () => {
     const feed = agentRunFeed;
@@ -644,6 +737,10 @@ export function App() {
     // Pi standing.
 
     const trimmed = searchQuery.trim();
+    // Conversation continuity: keep the finished turn in the thread.
+    snapshotFinishedTurn();
+    lastInteractionRef.current = 'deep-research';
+    setCurrentTurnId(`turn-${Date.now()}`);
     setResearchError('');
     setCurrentQuery(trimmed);
     setProposedPlan(null);
@@ -880,7 +977,7 @@ export function App() {
             const finalReport: ReportData = {
               id: sessionId,
               query: trimmed,
-              title: trimmed,
+              title: deriveConversationTitle(trimmed),
               content: payload.report || liveReportRef.current || '',
               sources: formattedSources.length > 0 ? formattedSources : accumulatedSources,
               depth,
@@ -1115,9 +1212,132 @@ export function App() {
 
   const currentSources = activeReport?.sources || visitedSources;
   const currentContent = activeReport?.content || liveReport;
-  const resolvedTelemetry = resolveReportTelemetry(activeReport, wideTelemetry, wideExpansionHistory);  return (
+  const resolvedTelemetry = resolveReportTelemetry(activeReport, wideTelemetry, wideExpansionHistory);
+
+  // Derived conversation turns: past finished turns plus the live/current
+  // turn. The same component renders live runs and restored history.
+  const hasSession = Boolean(currentQuery || activeReport?.query || currentContent || isSearching || researchError || agentRunFeed || proposedPlan);
+  const currentTurn: ChatTurn | null = hasSession
+    ? {
+        id: currentTurnId || activeReport?.id || 'live-turn',
+        query: currentQuery || activeReport?.query || query,
+        report: currentContent,
+        sources: currentSources,
+        status: isSearching ? 'running' : researchError ? 'error' : 'done',
+        interaction: lastInteractionRef.current,
+        createdAt: activeReport?.createdAt || new Date().toISOString(),
+        plan: activeReport?.plan || proposedPlan || null,
+        graphNodes: activeReport?.graphNodes || graphNodes,
+        wideTelemetry: resolvedTelemetry.wideTelemetry,
+        conversationProjection,
+        live: isSearching,
+        error: researchError || undefined,
+      }
+    : null;
+  const chatTurns: ChatTurn[] = currentTurn ? [...pastTurns.filter((t) => t.id !== currentTurn.id), currentTurn] : [...pastTurns];
+
+  const handleSelectReport = (report: ReportData) => {
+    if (isSearching) return;
+    // Restoring a conversation reopens it as the single current turn —
+    // default state is the conversation, never graph/shelf/inspector.
+    setPastTurns([]);
+    setCurrentTurnId(report.id);
+    setActiveReport(report);
+    setCurrentQuery(report.query);
+    setQuery(report.query);
+    setCurrentStatus('');
+    setResearchError('');
+    setThoughts([]);
+    setSubqueries([]);
+    setVisitedSources([]);
+    setReflections(report.reflections || []);
+    setGraphNodes(report.graphNodes || []);
+    setAgents([]);
+    setAgentEventCount(0);
+    setLiveReport(report.content || '');
+    liveReportRef.current = report.content || '';
+    setWideTelemetry(report.wideTelemetry || null);
+    setWideExpansionHistory(report.wideExpansionHistory || []);
+    setProposedPlan(null);
+    setIsPlanModalOpen(false);
+    // Replaying a saved run restores its persisted conversation too —
+    // the conversation thread replays what happened.
+    try {
+      const rawConversations = localStorage.getItem('lens-agentic-conversations');
+      const conversations = rawConversations ? JSON.parse(rawConversations) : {};
+      setConversationProjection(conversations[report.id] ?? null);
+    } catch {
+      setConversationProjection(null);
+    }
+  };
+
+  return (
     <div className="app-shell">
-      {/* 1. Left vertical LENS rail (72px) */}
+      {activeTab === 'home' ? (
+        <>
+        {!engineHealth.checking && engineHealth.status === 'offline' && (
+          <div className="engine-alert" role="status" aria-live="polite" style={{ position: 'absolute', top: 64, left: '50%', transform: 'translateX(-50%)', zIndex: 80 }}>
+            <AlertTriangle size={16} aria-hidden="true" />
+            <p>
+              <strong>{language === 'ar' ? 'محرك البحث غير متاح' : 'Research engine unavailable'}</strong>
+              {' — '}
+              {describeEngineOutage(engineHealth.reason, language, API_BASE)}
+            </p>
+          </div>
+        )}
+        <LensHarnessWorkspace
+          language={language}
+          query={query}
+          setQuery={setQuery}
+          settings={settings}
+          loading={isSearching}
+          optimizationMode={optimizationMode}
+          setOptimizationMode={setOptimizationMode}
+          sourceFocus={sourceFocus}
+          setSourceFocus={setSourceFocus}
+          researchMode={researchMode}
+          setResearchMode={setResearchMode}
+          currentQuery={currentQuery || activeReport?.query || ''}
+          currentStatus={currentStatus}
+          researchError={researchError}
+          report={currentContent}
+          sources={currentSources}
+          steps={compiledSteps}
+          plan={activeReport?.plan || proposedPlan}
+          graphNodes={activeReport?.graphNodes || graphNodes}
+          thoughts={thoughts}
+          subqueries={subqueries}
+          agents={agents}
+          agentEventCount={agentEventCount}
+          history={history}
+          wideTelemetry={resolvedTelemetry.wideTelemetry}
+          wideExpansionHistory={resolvedTelemetry.wideExpansionHistory}
+          agentRunFeed={agentRunFeed}
+          conversationProjection={conversationProjection}
+          turns={chatTurns}
+          activeReportId={activeReport?.id ?? null}
+          activeTab={activeTab}
+          theme={theme}
+          onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+          onToggleLanguage={() => setLanguage((l) => (l === 'ar' ? 'en' : 'ar'))}
+          liveReport={liveReport}
+          onStartAgentRun={handleStartAgentRun}
+          onStartDeepResearch={handleStartResearch}
+          onSteerAgentRun={handleSteerAgentRun}
+          onCancelAgentRun={handleCancelRun}
+          onNewResearch={handleNewResearch}
+          onSelectReport={handleSelectReport}
+          onSelectTab={(tab) => setActiveTab(tab)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onExport={handleExport}
+          onReviewPlan={() => setIsPlanModalOpen(true)}
+        />
+        </>
+      ) : (
+      <>
+      {/* 1. Left vertical LENS rail (72px) — secondary destinations only.
+          The home conversation owns its ChatSidebar; this rail serves
+          Discover / Library / Graph / Skills. */}
       <Sidebar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -1142,101 +1362,6 @@ export function App() {
         <button className="command-trigger" onClick={() => setIsCommandPaletteOpen(true)} aria-label={language === 'ar' ? 'البحث في الأوامر' : 'Search commands'}><Search size={15} /><span>{language === 'ar' ? 'الأوامر' : 'Commands'}</span><kbd dir="ltr">Ctrl K</kbd></button>
       </header>
       <main className="workspace-main" id="main-content">
-        {researchError && <div className="research-alert" role="alert"><p>{researchError}</p><button className="icon-button" onClick={() => setResearchError('')} aria-label={language === 'ar' ? 'إغلاق التنبيه' : 'Dismiss alert'}><X size={16} /></button></div>}
-        {/*
-          Engine reachability. Previously a dead engine was invisible until the
-          first search failed, and the startup failure only reached a console the
-          packaged build has no way to show. The banner states the observed
-          condition and the address that was probed; it never claims readiness.
-        */}
-        {!engineHealth.checking && engineHealth.status === 'offline' && (
-          <div className="engine-alert" role="status" aria-live="polite">
-            <AlertTriangle size={16} aria-hidden="true" />
-            <p>
-              <strong>{language === 'ar' ? 'محرك البحث غير متاح' : 'Research engine unavailable'}</strong>
-              {' — '}
-              {ENGINE_ENDPOINT.status === 'failed' && ENGINE_ENDPOINT.error
-                ? ENGINE_ENDPOINT.error
-                : describeEngineOutage(engineHealth.reason, language, API_BASE)}
-              {' '}
-              {language === 'ar'
-                ? 'لن تعمل طلبات البحث حتى يتوفر المحرك.'
-                : 'Research requests cannot run until the engine is available.'}
-            </p>
-            {/* Only an address that exists is named. A startup failure has none,
-                and an empty hint would read as a gap in the message. */}
-            {API_BASE && <span className="engine-alert-hint" dir="ltr">{API_BASE}</span>}
-          </div>
-        )}
-        {activeTab === 'home' && (
-          <LensHarnessWorkspace
-            language={language}
-            query={query}
-            setQuery={setQuery}
-            settings={settings}
-            loading={isSearching}
-            optimizationMode={optimizationMode}
-            setOptimizationMode={setOptimizationMode}
-            sourceFocus={sourceFocus}
-            setSourceFocus={setSourceFocus}
-            researchMode={researchMode}
-            setResearchMode={setResearchMode}
-            currentQuery={currentQuery || activeReport?.query || ''}
-            currentStatus={currentStatus}
-            researchError={researchError}
-            report={currentContent}
-            sources={currentSources}
-            steps={compiledSteps}
-            plan={activeReport?.plan || proposedPlan}
-            graphNodes={activeReport?.graphNodes || graphNodes}
-            thoughts={thoughts}
-            subqueries={subqueries}
-            agents={agents}
-            agentEventCount={agentEventCount}
-            history={history}
-            wideTelemetry={resolvedTelemetry.wideTelemetry}
-            wideExpansionHistory={resolvedTelemetry.wideExpansionHistory}
-            agentRunFeed={agentRunFeed}
-            conversationProjection={conversationProjection}
-            onStartAgentRun={handleStartAgentRun}
-            onStartDeepResearch={handleStartResearch}
-            onSteerAgentRun={handleSteerAgentRun}
-            onCancelAgentRun={handleCancelAgentRun}
-            onNewResearch={handleNewResearch}
-            onSelectReport={(report) => {
-              if (isSearching) return;
-              setActiveReport(report);
-              setCurrentQuery(report.query);
-              setQuery(report.query);
-              setCurrentStatus('');
-              setResearchError('');
-              setThoughts([]);
-              setSubqueries([]);
-              setVisitedSources([]);
-              setReflections(report.reflections || []);
-              setGraphNodes(report.graphNodes || []);
-              setAgents([]);
-              setAgentEventCount(0);
-              setLiveReport(report.content || '');
-              liveReportRef.current = report.content || '';
-              setWideTelemetry(report.wideTelemetry || null);
-              setWideExpansionHistory(report.wideExpansionHistory || []);
-              setProposedPlan(null);
-              setIsPlanModalOpen(false);
-              // Replaying a saved run restores its persisted conversation too —
-              // the inspector's conversation tab replays what happened.
-              try {
-                const rawConversations = localStorage.getItem('lens-agentic-conversations');
-                const conversations = rawConversations ? JSON.parse(rawConversations) : {};
-                setConversationProjection(conversations[report.id] ?? null);
-              } catch {
-                setConversationProjection(null);
-              }
-            }}
-            onOpenSettings={() => setIsSettingsOpen(true)}
-            onExport={handleExport}
-          />
-        )}
 
         {activeTab === 'discover' && (
           <DiscoverView
@@ -1261,6 +1386,8 @@ export function App() {
             onSelectReport={(item) => {
               const matched = history.find(h => h.id === item.id);
               if (matched) {
+                setPastTurns([]);
+                setCurrentTurnId(matched.id);
                 setActiveReport(matched);
                 setCurrentQuery(matched.query);
                 setActiveTab('home');
@@ -1277,6 +1404,8 @@ export function App() {
             }}
             onClearHistory={() => {
               setHistory([]);
+              setPastTurns([]);
+              setCurrentTurnId(null);
               localStorage.removeItem('deep_research_history');
               localStorage.removeItem('lens-agentic-conversations');
               setConversationProjection(null);
@@ -1305,6 +1434,8 @@ export function App() {
         )}
       </main>
       </div>
+      </>
+      )}
 
       {/* 3. Modals */}
       <SettingsModal
