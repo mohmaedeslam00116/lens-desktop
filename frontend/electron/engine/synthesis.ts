@@ -89,11 +89,8 @@ import {
   formatContradictionCallout,
   extractContradictionCallouts,
   detectMetricContradictions,
-  type ContradictionClaim,
-  type ContradictionCalloutOptions,
   type ExtractedContradiction,
   type DetectedContradiction,
-  type ContradictionExcerpt,
 } from './contradictions';
 export {
   formatContradictionCallout,
