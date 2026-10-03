@@ -22,12 +22,18 @@
  * maxResults, signal) => SearchResultItem[]`) is preserved — the delegated
  * loop and researchers need no structural change.
  *
- * Failure semantics (Track C):
- *  - Explicit keyed selection without keys (or a keyed failure) degrades to
- *    the keyless DDG plane through the extension chain — observed fallback,
- *    never silent and never terminal, unless the fallback itself fails.
- *  - A DDG failure propagates terminally (no re-entry cycle; caller aborts
- *    propagate as AbortError, queue saturation propagates by name).
+ * Failure semantics (resilient plane):
+ *  - Every selection runs a bounded, explicit attempt plan — requested
+ *    provider, then the Pi `auto` chain, then the keyless DDG chain — with
+ *    each step skipped when it duplicates the step already tried. No
+ *    recursion, no cycles: DDG→Auto terminates, Auto→DDG terminates.
+ *  - A DDG failure no longer terminates research by itself: control passes
+ *    to the `auto` provider path, and only a joint failure is terminal.
+ *  - Empty or unusable provider output (no valid title+url items) counts as
+ *    an unsuccessful retrieval and runs the fallback policy — it is never a
+ *    fake success.
+ *  - Caller aborts and queue saturation stay terminal immediately: a
+ *    cancelled caller must never degrade into a fallback retrieval.
  */
 
 import * as path from 'node:path';
@@ -235,19 +241,137 @@ async function loadExtensionSearch(): Promise<ExtensionSearchFn> {
 const EXPLICIT_SELECTIONS = new Set(['duckduckgo', 'tavily', 'serper']);
 const warnedUnknownProviders = new Set<string>();
 
+/** The keyless default selection. Single source of truth for every
+ * `?? 'duckduckgo'` site in the engine — import this instead of
+ * hard-coding the id. Kept as the default (not `auto`) per product
+ * semantics: deterministic, single-transport, no ambient-key fan-out. */
+export const DEFAULT_SEARCH_PROVIDER = 'duckduckgo';
+
+/** Authoritative default-provider resolution (one source of truth). */
+export function resolveDefaultSearchProvider(): string {
+  return DEFAULT_SEARCH_PROVIDER;
+}
+
 function mapProviderSelection(provider: string): string {
   const id = (provider || '').trim().toLowerCase();
   if (id === 'google') return 'serper';
   if (id === 'auto') return 'auto';
   if (EXPLICIT_SELECTIONS.has(id)) return id;
-  if (!id) return 'duckduckgo';
+  if (!id) return DEFAULT_SEARCH_PROVIDER;
   if (!warnedUnknownProviders.has(id)) {
     warnedUnknownProviders.add(id);
     console.warn(`[searchPlane] unknown search provider "${id}" — serving the keyless chain instead.`);
   }
-  return 'duckduckgo';
+  return DEFAULT_SEARCH_PROVIDER;
 }
 
+/**
+ * One provider attempt inside a bounded fallback run. Recorded internally
+ * for diagnostics (`Attempt 1: duckduckgo → failed (timeout)` instead of a
+ * bare `search failed`); the terminal error carries the full list for
+ * development/debug tooling while the user-facing message stays concise.
+ * No key material, no query content beyond what the caller already owns.
+ */
+export interface SearchAttempt {
+  provider: string;
+  status: 'success' | 'failed';
+  /** Machine-readable failure class (see classifySearchError). Absent on success. */
+  kind?: string;
+  /** Redacted one-line reason. Absent on success. Never carries secrets. */
+  error?: string;
+  /** Usable results served by this attempt. Present on success. */
+  results?: number;
+}
+
+/** Failure classes the plane distinguishes (never collapsed to `search failed`). */
+export type SearchErrorKind =
+  | 'cancelled'
+  | 'auth-missing'
+  | 'timeout'
+  | 'network'
+  | 'http'
+  | 'parse'
+  | 'empty'
+  | 'invalid-result'
+  | 'unavailable'
+  | 'unknown';
+
+/**
+ * Classifies a search failure without collapsing it. Credential-safe: the
+ * returned kind is a fixed vocabulary word, never provider text.
+ */
+export function classifySearchError(err: unknown, signal?: AbortSignal): SearchErrorKind {
+  if (signal?.aborted) return 'cancelled';
+  if (err instanceof DOMException && err.name === 'AbortError') return 'cancelled';
+  if (err instanceof Error && /abort/i.test(err.name)) return 'cancelled';
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  if (/abort|timed out|timeout/.test(lower)) {
+    if (/abort/.test(lower)) return 'cancelled';
+    return 'timeout';
+  }
+  if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') return 'unavailable';
+  if (/api key|apikey|unauthorized|forbidden|401|403|auth/.test(lower)) return 'auth-missing';
+  if (/no parseable|invalid json|parse/.test(lower)) return 'parse';
+  if (/invalid result/.test(lower)) return 'invalid-result';
+  if (/no usable|unusable|^empty|empty response|no results/.test(lower)) return 'empty';
+  if (/fetch failed|network|econnreset|econnrefused|enotfound|socket|dns/.test(lower)) return 'network';
+  if (/http\s+\d{3}|status\s+\d{3}|server error|service unavailable/.test(lower)) return 'http';
+  if (/no .*provider|unavailable/.test(lower)) return 'unavailable';
+  return 'unknown';
+}
+
+/**
+ * Terminal retrieval failure: every bounded attempt failed. The user-facing
+ * `message` is concise (no stacks, no provider internals); `attempts`
+ * carries the per-provider diagnostics for debug tooling.
+ */
+export class SearchPlaneTerminalError extends Error {
+  attempts: SearchAttempt[];
+  constructor(attempts: SearchAttempt[]) {
+    const trail = attempts.map((a) => `${a.provider} → ${a.status}${a.kind ? ` (${a.kind})` : ''}`).join('; ');
+    super(
+      `Web search is temporarily unavailable. The selected provider failed, and no fallback provider returned usable results (${trail}).`
+    );
+    this.name = 'SearchPlaneTerminalError';
+    this.attempts = attempts;
+  }
+}
+
+/**
+ * Bounded attempt plan for one query. Explicit, deterministic, cycle-free:
+ * the requested selection first, then the Pi `auto` chain (unless already
+ * tried), then the keyless DDG chain (unless already tried). Duplicates are
+ * skipped, so DDG→Auto and Auto→DDG each terminate after at most two steps
+ * and keyed selections after at most three.
+ */
+export function planSearchAttempts(selection: string): string[] {
+  const plan: string[] = [];
+  const push = (id: string): void => {
+    if (!plan.includes(id)) plan.push(id);
+  };
+  push(selection);
+  if (selection !== 'auto') push('auto');
+  if (selection !== 'duckduckgo') push('duckduckgo');
+  return plan;
+}
+
+/** A result item is usable only with a non-empty title and a valid http(s) URL. */
+export function isUsableSearchResult(item: { title?: unknown; url?: unknown }): boolean {
+  if (typeof item?.title !== 'string' || !item.title.trim()) return false;
+  if (typeof item?.url !== 'string' || !item.url.trim()) return false;
+  try {
+    const parsed = new URL(item.url.trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/** User-facing terminal message builder (no raw errors, no internals). */
+export function toUserFacingSearchError(attempts: SearchAttempt[]): Error {
+  return new SearchPlaneTerminalError(attempts);
+}
 /** Key families LENS provisions per call (caller key, else config-seam file). */
 function keyFamilyOf(selection: string): { provider: 'tavily' | 'serper'; env: string } | null {
   if (selection === 'tavily') return { provider: 'tavily', env: 'TAVILY_API_KEY' };
@@ -285,10 +409,12 @@ function isTerminalPlaneError(err: unknown, signal?: AbortSignal): boolean {
   // vendor surfaces aborts heterogeneously (DOMException AbortError from
   // fetch, plain "Aborted" errors, TimeoutError from AbortSignal.timeout),
   // so test the signal first, then the name, then the message.
+  // Timeouts WITHOUT a caller abort are retriable through the fallback plan
+  // (provider timeout ≠ research failure); only true cancellation and queue
+  // saturation are terminal.
   if (signal?.aborted) return true;
   if (err instanceof DOMException && err.name === 'AbortError') return true;
   if (err instanceof Error && /abort/i.test(err.name)) return true;
-  if (err instanceof Error && /abort|timed out|timeout/i.test(err.message)) return true;
   if (err instanceof Error && err.name === 'SearchPlaneQueueSaturated') return true;
   return false;
 }
@@ -319,14 +445,30 @@ export interface ExtensionSearchOutcome {
    * filter it does not implement. Undefined when no recency rode the call.
    */
   recencyFilter?: 'day' | 'week' | 'month' | 'year';
+  /**
+   * Per-provider attempt trail for this query (diagnostics, never secrets).
+   * Present on success (trailing failed attempts + the winner) and on the
+   * terminal error's `attempts` (all failed).
+   */
+  attempts?: SearchAttempt[];
 }
 
 /**
  * Runs one query through the extension search mechanism under the LENS gate.
  * Provider answers are IGNORED (provider-side drafts are never evidence);
  * results map to `{title, url, snippet}` with the resolving provider
- * attached for telemetry/provenance. Non-terminal failures on a non-DDG
- * selection degrade once to the keyless DDG chain; anything else propagates.
+ * attached for telemetry/provenance.
+ *
+ * Bounded fallback (explicit, deterministic, cycle-free): the requested
+ * selection runs first; on failure control passes to the Pi `auto` chain
+ * (unless already tried), then to the keyless DDG chain (unless already
+ * tried). A DDG failure therefore reaches `auto` instead of terminating
+ * research; only joint failure is terminal, surfaced as a concise
+ * user-facing error carrying the per-provider attempt trail for debug
+ * tooling. Empty/unusable provider output counts as failure and runs the
+ * same policy — never a fake success. Results always pass through the
+ * normal normalization below (evidence admission, dedupe, ledger, and
+ * citation grounding downstream are untouched).
  */
 export async function searchViaExtension(
   query: string,
@@ -335,68 +477,80 @@ export async function searchViaExtension(
   const signal = options?.signal;
   if (signal?.aborted) throw abortError();
   const cleanQuery = query.trim();
-  const selection = mapProviderSelection(options?.provider ?? 'duckduckgo');
+  const selection = mapProviderSelection(options?.provider ?? resolveDefaultSearchProvider());
   if (!cleanQuery) return { results: [], provider: selection };
-
-  const family = keyFamilyOf(selection);
-  const callerKey = family ? options?.apiKeys?.[family.provider] : undefined;
-  const key =
-    callerKey ??
-    (family ? readProvisionedKey(family.provider, options?.agentDir) : undefined);
 
   await gate.acquire(signal);
   try {
     gate.ledgered += 1;
     if (signal?.aborted) throw abortError();
     const search = await loadExtensionSearch();
-    const run = (): Promise<Awaited<ReturnType<ExtensionSearchFn>>> =>
-      search(cleanQuery, {
-        provider: selection,
-        numResults: options?.numResults ?? 8,
-        ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
-        ...(options?.domainFilter ? { domainFilter: options.domainFilter } : {}),
-        ...(signal ? { signal } : {}),
-      });
-    let out: Awaited<ReturnType<ExtensionSearchFn>>;
-    try {
-      out = family && key ? await withKeyedEnv(family.env, key, run) : await run();
-    } catch (err) {
-      if (isTerminalPlaneError(err, signal)) throw err;
-      if (selection === 'duckduckgo') throw err;
-      // Observed fallback (never silent, never terminal unless the fallback
-      // fails too): the keyless DDG chain serves the query instead.
-      console.warn(
-        `[searchPlane] extension ${selection} failed — falling back to the keyless chain:`,
-        redactKeyMaterial(err, key ?? '')
-      );
-      const fallback = await loadExtensionSearch();
-      out = await fallback(cleanQuery, {
-        provider: 'duckduckgo',
-        numResults: options?.numResults ?? 8,
-        ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
-        ...(options?.domainFilter ? { domainFilter: options.domainFilter } : {}),
-        ...(signal ? { signal } : {}),
-      });
-    }
-    const resolved = typeof out?.provider === 'string' && out.provider ? out.provider : selection;
-    // Track E retention: kept where a provider supplies a date (none of the
-    // current vendored providers do — normally absent, never invented).
-    const toItem = (r: { title?: string; url?: string; snippet?: string; publishedAt?: unknown; date?: unknown }): SearchResultItem => {
-      const publishedAt = parsePublishedAt(r?.publishedAt ?? r?.date);
-      return {
-        title: String(r?.title ?? ''),
-        url: String(r?.url ?? ''),
-        snippet: String(r?.snippet ?? ''),
-        searchProvider: resolved,
-        ...(publishedAt ? { publishedAt } : {}),
+    const attempts: SearchAttempt[] = [];
+    console.info(`[search] start provider=${selection}`);
+    for (const attemptProvider of planSearchAttempts(selection)) {
+      if (signal?.aborted) throw abortError();
+      const family = keyFamilyOf(attemptProvider);
+      const callerKey = family ? options?.apiKeys?.[family.provider] : undefined;
+      const key =
+        callerKey ??
+        (family ? readProvisionedKey(family.provider, options?.agentDir) : undefined);
+      const run = (): Promise<Awaited<ReturnType<ExtensionSearchFn>>> =>
+        search(cleanQuery, {
+          provider: attemptProvider,
+          numResults: options?.numResults ?? 8,
+          ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
+          ...(options?.domainFilter ? { domainFilter: options.domainFilter } : {}),
+          ...(signal ? { signal } : {}),
+        });
+      let out: Awaited<ReturnType<ExtensionSearchFn>>;
+      try {
+        out = family && key ? await withKeyedEnv(family.env, key, run) : await run();
+      } catch (err) {
+        if (isTerminalPlaneError(err, signal)) throw err;
+        const kind = classifySearchError(err, signal);
+        const reason = redactKeyMaterial(err, key ?? '');
+        attempts.push({ provider: attemptProvider, status: 'failed', kind, error: reason });
+        console.warn(`[search] provider=${attemptProvider} failed reason=${kind}`);
+        if (attemptProvider !== selection) {
+          console.info(`[search] fallback=${attemptProvider} failed reason=${kind}`);
+        }
+        continue;
+      }
+      const resolved = typeof out?.provider === 'string' && out.provider ? out.provider : attemptProvider;
+      // Track E retention: kept where a provider supplies a date (none of the
+      // current vendored providers do — normally absent, never invented).
+      const toItem = (r: { title?: string; url?: string; snippet?: string; publishedAt?: unknown; date?: unknown }): SearchResultItem => {
+        const publishedAt = parsePublishedAt(r?.publishedAt ?? r?.date);
+        return {
+          title: String(r?.title ?? ''),
+          url: String(r?.url ?? ''),
+          snippet: String(r?.snippet ?? ''),
+          searchProvider: resolved,
+          ...(publishedAt ? { publishedAt } : {}),
+        };
       };
-    };
-    return {
-      results: (out?.results ?? []).map(toItem),
-      provider: resolved,
-      // Track E echo: the recency forwarded provider-side (see field docs).
-      ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
-    };
+      const usable = (out?.results ?? []).map(toItem).filter(isUsableSearchResult);
+      if (usable.length === 0) {
+        attempts.push({ provider: attemptProvider, status: 'failed', kind: 'empty', error: 'no usable results' });
+        console.warn(`[search] provider=${attemptProvider} failed reason=empty`);
+        continue;
+      }
+      attempts.push({ provider: attemptProvider, status: 'success', results: usable.length });
+      if (attemptProvider !== selection) {
+        console.info(`[search] fallback=${attemptProvider} success results=${usable.length}`);
+      } else {
+        console.info(`[search] success provider=${attemptProvider} results=${usable.length}`);
+      }
+      return {
+        results: usable,
+        provider: resolved,
+        // Track E echo: the recency forwarded provider-side (see field docs).
+        ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
+        attempts,
+      };
+    }
+    console.warn(`[search] terminal_failure attempts=${attempts.map((a) => `${a.provider}:${a.kind ?? a.status}`).join(',')}`);
+    throw toUserFacingSearchError(attempts);
   } finally {
     gate.release();
   }
@@ -420,7 +574,7 @@ export async function searchViaExtension(
  */
 export async function primarySearchPlane(
   query: string,
-  provider: string = 'duckduckgo',
+  provider: string = DEFAULT_SEARCH_PROVIDER,
   apiKeys?: Record<string, string>,
   maxResults = 8,
   signal?: AbortSignal,
@@ -449,11 +603,11 @@ export async function primarySearchPlane(
 
   // Keyed providers (post-#112, Track C mechanism): served through the
   // extension chain with the caller's key or a config-seam-provisioned key.
-  // A keyed failure degrades to the keyless chain inside searchViaExtension
-  // (observed fallback); the keyless path never re-enters the keyed path
-  // (terminal, no cycle). Items keep their resolving-provider attribution
-  // (Track E provenance) — callers that serialize items tolerate the extra
-  // optional field.
+  // A keyed failure runs the bounded attempt plan inside searchViaExtension
+  // (auto chain, then the keyless chain — observed fallback); the terminal
+  // error surfaces only when every attempt fails. Items keep their
+  // resolving-provider attribution (Track E provenance) — callers that
+  // serialize items tolerate the extra optional field.
   const out = await searchViaExtension(cleanQuery, {
     provider,
     numResults: maxResults,

@@ -18,7 +18,7 @@ import {
 } from './agenticSearch';
 import { createAgenticResearchSession } from './agenticSessionBootstrap';
 import { AgenticTranscriptStore } from './agenticTranscript';
-import { searchViaExtension } from './searchPlane';
+import { searchViaExtension, resolveDefaultSearchProvider } from './searchPlane';
 import { primaryScrapePlane } from './scrapePlane';
 import { WideResearchAgent, WideResearchRunResult } from './wideAgent';
 import { DiscoverService } from './discover';
@@ -150,9 +150,9 @@ export interface AgenticStartRequest {
  * explicit keyless chain — never implicit `auto` (Track C decision: auto
  * fans out across ambient-keyed providers with per-provider deadlines).
  * Single source of truth for the normalizer, the surface field, and the
- * plane closure below; the plane keeps its own default as a separate-layer
- * contract. */
-export const DEFAULT_AGENTIC_SEARCH_PROVIDER = 'duckduckgo';
+ * plane closure below; resolved through the plane's authoritative default so
+ * the id lives in exactly one place. */
+export const DEFAULT_AGENTIC_SEARCH_PROVIDER = resolveDefaultSearchProvider();
 
 /** Server-side admission-time normalization of the start request.
  * Exported for the Track B contract suite. `search_provider` normalizes to
@@ -310,11 +310,11 @@ export async function startAgenticSearchSession(
     emit: (event) => emitAgentEvent(sessionId, event),
     // Track B (SPEC #155): the user's retrieval selection rides the request
     // into the surface through ONE channel — request → searchProvider field
-    // → handler arg → closure param → plane. The closure trusts ONLY its
-    // param (never re-reads the request), so there is no second source of
-    // truth to drift. Keyed keys resolve server-side from the LENS agentDir
-    // file, never the wire; absent means the explicit keyless chain
-    // (Track C decision), never implicit auto.
+    // → handler arg → closure param → plane. The closure trusts its param
+    // first, then the request selection, then the default — never a bare
+    // default that would discard the request. Keyed keys resolve server-side
+    // from the LENS agentDir file, never the wire; absent means the explicit
+    // keyless chain (Track C decision), never implicit auto.
     searchProvider: request.search_provider ?? DEFAULT_AGENTIC_SEARCH_PROVIDER,
     // Track D (SPEC #155): the full per-call contract rides the third
     // argument into the extension mechanism. The env-pinned LENS agentDir
@@ -322,7 +322,7 @@ export async function startAgenticSearchSession(
     // through here — the plane resolves keys exactly as Deep Research does.
     search: async (query, providerOverride, searchOpts) => {
       const out = await searchViaExtension(query, {
-        provider: providerOverride ?? DEFAULT_AGENTIC_SEARCH_PROVIDER,
+        provider: providerOverride ?? request.search_provider ?? DEFAULT_AGENTIC_SEARCH_PROVIDER,
         numResults: searchOpts?.numResults ?? 8,
         ...(searchOpts?.recencyFilter ? { recencyFilter: searchOpts.recencyFilter } : {}),
         ...(searchOpts?.domainFilter ? { domainFilter: searchOpts.domainFilter } : {}),

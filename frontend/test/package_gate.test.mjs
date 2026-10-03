@@ -43,6 +43,14 @@ const COMPLETE_STUBS = {
   'dist-electron/preload.js': [
     "contextBridge.exposeInMainWorld('lens', { engine: { endpoint: () => invoke('engine-endpoint') }, secret: () => invoke('secure-store-get') });",
   ].join('\n'),
+  // Presence-only probe: the unified Pi search module rides the packaged
+  // vendor tree (jiti-loaded at runtime, never in the compiled graph), so
+  // the gate asserts the entry exists, not its syntax.
+  'dist-electron/vendor/pi/web-access/gemini-search.ts': [
+    'export async function search(query, options) {',
+    '  return { provider: "duckduckgo", results: [] };',
+    '}',
+  ].join('\n'),
 };
 
 // The same probes, but every one of them survives only inside a comment: this
@@ -132,7 +140,7 @@ describe('packaged-artifact gate (scripts/verify-package.mjs)', () => {
     const asarPath = await buildStubArchive('comment-only', COMMENT_ONLY_STUBS);
     const { status, output } = runGate(asarPath);
     assert.equal(status, 1, `gate passed a stale artifact:\n${output}`);
-    assert.match(output, /9 expectation\(s\) missing/);
+    assert.match(output, /10 expectation\(s\) missing/);
     assert.match(output, /MISS\s+single-instance lock/);
   });
 
@@ -142,7 +150,7 @@ describe('packaged-artifact gate (scripts/verify-package.mjs)', () => {
     assert.equal(status, 1, `gate passed an artifact that only names its contracts:\n${output}`);
     // Every expected file is present; only the behaviour is missing.
     assert.doesNotMatch(output, /MISSING/, `files should all be present:\n${output}`);
-    assert.match(output, /9 expectation\(s\) missing/);
+    assert.match(output, /10 expectation\(s\) missing/);
     assert.match(output, /MISS\s+single-instance lock/);
     assert.match(output, /MISS\s+engine identity payload/);
     assert.match(output, /MISS\s+secure store bridge/);
@@ -156,6 +164,17 @@ describe('packaged-artifact gate (scripts/verify-package.mjs)', () => {
     assert.equal(status, 1, `gate passed an incomplete artifact:\n${output}`);
     assert.match(output, /MISSING\s+dist-electron\/preload\.js/);
     assert.match(output, /MISSING\s+dist-electron\/engine\/server\.js/);
+  });
+
+  it('fails an archive carrying the behaviour but missing the vendor search module', async () => {
+    // The compiled engine can look complete while the jiti-loaded vendor
+    // tree never made it into the package — search would only fail when the
+    // user tries it. The gate must catch that shape.
+    const { ['dist-electron/vendor/pi/web-access/gemini-search.ts']: _dropped, ...withoutVendor } = COMPLETE_STUBS;
+    const asarPath = await buildStubArchive('no-vendor-search', withoutVendor);
+    const { status, output } = runGate(asarPath);
+    assert.equal(status, 1, `gate passed an artifact without the vendor search module:\n${output}`);
+    assert.match(output, /MISS.*unified Pi Web Access search module/);
   });
 
   it('fails loudly when no package exists yet', () => {

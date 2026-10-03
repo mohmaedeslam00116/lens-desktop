@@ -1,6 +1,6 @@
 import { LiveEvent, ResearchGraphNode, ResearchRequest, SourceItem, WideResearchRequest, PlanMilestone } from './types';
 import { MultiSearchProvider } from './search';
-import { primarySearchPlane } from './searchPlane';
+import { primarySearchPlane, resolveDefaultSearchProvider } from './searchPlane';
 import { claimAndShare } from './fetchLedger';
 import { PageScraper, ScrapedPage } from './scraper';
 import { auditEvidenceClaims, buildAuditSection } from './evidenceAuditor';
@@ -119,7 +119,7 @@ export class DeepResearchAgent {
     const depth = request.report_type || 'deep';
     const perspective = request.perspective || 'balanced';
     const language = request.language || 'ar';
-    const searchProvider = request.search_provider || 'duckduckgo';
+    const searchProvider = request.search_provider || resolveDefaultSearchProvider();
     const llmProvider = request.llm_provider || 'google';
     const modelName = request.model_name;
     const embeddingEnabled = request.embedding_enabled !== false;

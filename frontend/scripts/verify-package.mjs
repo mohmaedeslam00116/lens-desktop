@@ -187,6 +187,25 @@ const expectations = [
 ];
 
 let missing = 0;
+
+// File-presence probes: entries that must exist in the package whatever
+// their content (the syntax probes above cannot see them — e.g. the
+// vendored Pi sources load through jiti at runtime, never through the
+// compiled engine graph, so only presence is assertable here).
+const requiredEntries = [
+  {
+    entry: 'dist-electron/vendor/pi/web-access/gemini-search.ts',
+    desc: 'unified Pi Web Access search module in the packaged vendor tree',
+  },
+];
+for (const { entry, desc } of requiredEntries) {
+  const found = entries.some(
+    (candidate) => candidate.replace(/\\/g, '/').replace(/^\//, '') === entry
+  );
+  if (!found) missing += 1;
+  console.log(`  ${found ? 'OK  ' : 'MISS'} ${desc} (${entry})`);
+}
+
 for (const { file: entryPath, desc, probes } of expectations) {
   const file = parseEntry(entryPath);
   if (file === null) {

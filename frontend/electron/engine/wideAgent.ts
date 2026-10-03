@@ -6,6 +6,7 @@ import {
   WideResearchTelemetry,
 } from './types';
 import { MultiSearchProvider } from './search';
+import { resolveDefaultSearchProvider } from './searchPlane';
 import { buildAbstentionReport } from './abstention';
 import { resolveRecencyForQuery } from './freshness';
 import { BoundedScraperPool } from './scraperPool';
@@ -63,7 +64,7 @@ export interface WideResearchRunResult {
 export interface WideResearchAgentDependencies {
   search?: (
     query: string,
-    provider: 'duckduckgo' | 'tavily' | 'serper',
+    provider: string,
     apiKeys: Record<string, string>,
     maxResults: number,
     signal?: AbortSignal,
@@ -187,7 +188,7 @@ export class WideResearchAgent {
 
     const language = request.language || 'en';
     const ar = isArabic(language);
-    const provider = request.search_provider || 'duckduckgo';
+    const provider = request.search_provider || resolveDefaultSearchProvider();
     // P2: chat keys are gone from the envelope; search keys resolve from the
     // provisioned store (web-search.json) inside the plane — pass empty.
     const apiKeys: Record<string, string> = {};
@@ -420,7 +421,7 @@ export class WideResearchAgent {
     milestones: PlanMilestone[];
     discovered: Map<string, { milestoneId: string; title: string }>;
     search: NonNullable<WideResearchAgentDependencies['search']>;
-    provider: 'duckduckgo' | 'tavily' | 'serper';
+    provider: string;
     apiKeys: Record<string, string>;
     signal?: AbortSignal;
     onSearch: () => void;

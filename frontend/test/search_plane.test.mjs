@@ -84,18 +84,29 @@ describe('primary search plane (ADR-0013 seam swap, #109)', () => {
     assert.equal(after.active, 0, 'gate released after the call');
   });
 
-  it('propagates vendored-plane failures when no keyed provider is available (post-contract, #110)', async () => {
-    // Post-contract the plane IS the keyless path (native DDG retired) — a
-    // plane failure with no keys is terminal: the error propagates to the
-    // caller's per-query handling. A re-entry into native search() would
-    // cycle (search() → plane → search()); assert it never happens.
+  it('a keyless DDG failure reaches the auto path before terminating (bounded, diagnostic)', async () => {
+    // Resilient plane: an explicit DDG failure no longer terminates research
+    // by itself — control passes to the Pi `auto` chain, and only joint
+    // failure is terminal, surfaced as a concise user-facing error carrying
+    // the per-provider attempt trail (never raw provider internals). A
+    // re-entry into native search() would cycle (search() → plane →
+    // search()); assert it never happens.
     globalThis.fetch = (async () =>
       new Response('no parseable results here', { status: 200 }));
-    await assert.rejects(
-      primarySearchPlane('fallback query', 'duckduckgo', {}, 3),
-      /no parseable results/,
-      'terminal: the vendored-plane error propagates (no re-entry cycle)'
+    const err = await primarySearchPlane('fallback query', 'duckduckgo', {}, 3).then(
+      () => null,
+      (e) => e
     );
+    assert.ok(err, 'joint failure throws');
+    assert.equal(err.name, 'SearchPlaneTerminalError');
+    assert.match(err.message, /temporarily unavailable/);
+    assert.ok(!/no parseable/i.test(err.message), 'raw provider internals stay out of the user message');
+    assert.deepEqual(
+      err.attempts.map((a) => a.provider),
+      ['duckduckgo', 'auto'],
+      'DDG → Auto, then terminal (no recursion, no re-entry cycle)'
+    );
+    assert.ok(err.attempts.every((a) => a.status === 'failed'));
   });
 
   it('serves a keyed provider through the extension chain with a one-call key override (D2, #112; Track C mechanism)', async () => {

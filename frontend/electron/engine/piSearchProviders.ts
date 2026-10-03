@@ -8,6 +8,11 @@
  * that response verbatim. Zero key material — entries name the settings key
  * field (`keyField`), never a secret.
  *
+ * Scope note: this is the LENS-supported set (providers with complete
+ * end-to-end support: UX, credentials, tests, evidence pipeline) — NOT the
+ * full Pi Web Access provider set. Pi supports many more providers; exposing
+ * them here is follow-up work, not a bug fix.
+ *
  * Backend v1 serves the plane providers (keyless DuckDuckGo default, keyed
  * Tavily/Serper). Track C swaps this backend to the upgraded extension
  * surface (`web-search.json` routing truth) without touching the route or
@@ -17,8 +22,8 @@
 export interface SearchProviderEntry {
   id: string;
   name: string;
-  /** Card badge: the keyless default vs bring-your-own-key. */
-  badge: 'Default' | 'BYOK';
+  /** Card badge: the keyless default, automatic Pi selection, or bring-your-own-key. */
+  badge: 'Default' | 'Auto' | 'BYOK';
   descEn: string;
   descAr: string;
   /**
@@ -41,6 +46,13 @@ export function getSearchProviderCatalog(): SearchProviderEntry[] {
       badge: 'Default',
       descEn: 'Free & built-in, zero setup required',
       descAr: 'مجاني ومدمج 100% بدون أي إعداد أو مفاتيح',
+    },
+    {
+      id: 'auto',
+      name: 'Auto',
+      badge: 'Auto',
+      descEn: 'Pi selects the provider per query, keyless DDG as final fallback',
+      descAr: 'يختار Pi المزود لكل استعلام تلقائياً، مع DuckDuckGo المجاني كملاذ أخير',
     },
     {
       id: 'tavily',
