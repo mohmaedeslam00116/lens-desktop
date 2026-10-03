@@ -1,5 +1,5 @@
 import { tokenizeBilingual } from './bm25';
-import { extractContradictionCallouts, type DetectedContradiction } from './synthesis';
+import { extractContradictionCallouts, type DetectedContradiction } from './contradictions';
 
 /**
  * evidenceAuditor.ts — advisory Evidence Auditor (ADR-0010 decision 4,

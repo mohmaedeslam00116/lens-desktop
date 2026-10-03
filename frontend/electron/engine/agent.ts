@@ -14,7 +14,7 @@ import {
   detectMetricContradictions,
   extractContradictionCallouts,
   formatContradictionCallout,
-} from './synthesis';
+} from './contradictions';
 import { buildAbstentionReport } from './abstention';
 import { resolveRecencyForQuery } from './freshness';
 
