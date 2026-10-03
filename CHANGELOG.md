@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-03
+
 ### Changed
 - **Renderer (ChatGPT-style conversation UX)**: the workspace is recomposed
   around a persistent conversation thread and a single shared composer
@@ -25,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so follow-ups continue the same conversation; history restores the
   conversation by default. Engine contracts (`/api/agent/*`, research
   endpoints, streams, evidence pipeline) are untouched. Covered by
-  `test/chat_ux_contract.test.mjs` (28 assertions).
+  `test/chat_ux_contract.test.mjs` (31 assertions).
 
 ### Fixed
 - **Engine (web search reliability & retrieval architecture)**: the search
