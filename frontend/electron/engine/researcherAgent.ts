@@ -1,6 +1,7 @@
 import { LiveEvent, ResearchRequest, SourceItem } from './types';
 import { SkillActivationManager } from './skills';
 import { ResearcherRole, roleBrief } from './researcherRoles';
+import { resolveDefaultSearchProvider } from './searchPlane';
 
 /**
  * researcherAgent.ts — the re-hosted researcher (ticket #146; ADR-0014
@@ -253,14 +254,38 @@ export async function runRehostedResearcher(
   // Track E retention: search-hit provider dates are indexed here so the
   // harvest adapter (which only sees URLs + scraped pages) can re-attach
   // them to findings and source events.
+  //
+  // Retrieval selection (reliability fix): the researcher's provider resolves
+  // once — per-call override, then the researcher's own selection, then the
+  // request's `search_provider`, then the plane default — and the closure
+  // trusts only that resolution (never a bare default). Recency, domain,
+  // result count, abort signal, and the LENS agent dir all ride through, so
+  // the Research Request → Researcher → Surface → Plane → Pi chain loses
+  // nothing.
   const hitDates = new Map<string, string>();
+  const selectedSearchProvider =
+    options.searchProvider ?? request.search_provider ?? resolveDefaultSearchProvider();
   const surface = createAgenticToolSurface({
     sessionId,
     state,
     maxFetches: 8,
     emit: emitToParent,
-    search: async (query) => {
-      const hits = await primarySearchPlane(query);
+    searchProvider: selectedSearchProvider,
+    ...(signal ? { signal } : {}),
+    search: async (query, providerOverride, searchOpts) => {
+      const provider = providerOverride ?? selectedSearchProvider;
+      const hits = await primarySearchPlane(
+        query,
+        provider,
+        undefined,
+        searchOpts?.numResults ?? 8,
+        signal,
+        options.agentDir,
+        {
+          ...(searchOpts?.recencyFilter ? { recencyFilter: searchOpts.recencyFilter } : {}),
+          ...(searchOpts?.domainFilter ? { domainFilter: searchOpts.domainFilter } : {}),
+        }
+      );
       for (const hit of hits) {
         if (hit.publishedAt) hitDates.set(hit.url, hit.publishedAt);
       }

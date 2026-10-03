@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Engine (web search reliability & retrieval architecture)**: the search
+  plane runs every query through a bounded, explicit attempt plan
+  (requested provider → Pi `auto` chain → keyless DDG, duplicates skipped)
+  instead of letting a DuckDuckGo failure terminate research — only joint
+  failure is terminal, surfaced as a concise user-facing error carrying the
+  per-provider attempt trail (`SearchAttempt`: provider, status, failure
+  kind, redacted reason) for debug tooling. Empty or unusable provider
+  output runs the same fallback policy (never a fake success); aborts and
+  queue saturation stay terminal with no fallback retrieval. Failures are
+  classified (cancelled, auth-missing, timeout, network, http, parse,
+  empty, unavailable) and logged structurally (`search.start`,
+  `search.provider.failed`, `search.provider.fallback`, `search.success`,
+  `search.terminal_failure`) with zero key material. The researcher,
+  agentic, deep, and wide paths preserve the selected provider plus
+  recency, domain, result-count, abort signal, and agent dir into the plane
+  through one centralized default (`resolveDefaultSearchProvider`); the
+  `auto` selection is exposed in Settings. Packaging fails early when the
+  unified Pi search module is missing from the vendor tree
+  (`verify-vendor-search.mjs` in `build:electron`, plus a package-gate
+  probe), and an opt-in live smoke (`LENS_LIVE_TESTS=1`) proves the real
+  packaged runtime → jiti → vendored Pi → internet chain.
+
 ## [1.6.0] - 2026-10-03
 
 **Pi-Owned Retrieval** — the SPEC #155 migration completes: Pi owns every

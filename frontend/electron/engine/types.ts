@@ -282,7 +282,10 @@ export interface ResearchRequest {
   perspective?: SearchPerspective;
   language?: string;
   tone?: string;
-  search_provider?: 'duckduckgo' | 'tavily' | 'serper';
+  /** Retrieval selection (open id space: known plane ids, the legacy
+   * `google` alias, and explicit `auto` are honored; unknown ids fall into
+   * the keyless chain via the plane's closed map). */
+  search_provider?: string;
   llm_provider?: LLMProvider;
   model_name?: string;
   embedding_provider?: EmbeddingProvider;
