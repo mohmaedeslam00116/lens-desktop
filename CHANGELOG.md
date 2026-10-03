@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Engine (SPEC #155 Track G — evidence honesty, #162)**: zero-evidence
+  runs abstain instead of dossiering — the standard loop,
+  `HierarchicalSynthesis`, and wide mode each own an abstain branch
+  emitting a bilingual unsupported/uncertain report with a machine-readable
+  marker and zero citation brackets. The empty-evidence prompt substitution
+  and both fabricating fallback generators are deleted; dead-generator
+  synthesis now serves uncertain sections (structural headings hold,
+  admitted excerpts verbatim, no generated claims) and the comparison
+  table derives every cell from admitted evidence. The evidence auditor
+  marks unresolved evidence conflicts (advisory) and names them in its
+  report section.
 - **Engine (SPEC #155 Track E — freshness semantics, #160)**: bilingual
   (AR/EN) temporal-intent detection with urgency-mapped provider recency
   (`breaking`/`today` → day, `latest`/`current` → week,

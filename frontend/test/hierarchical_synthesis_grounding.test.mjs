@@ -542,7 +542,7 @@ Cryogenic transmon coherence reached 320 µs [3]. Control scaling was achieved v
     assert.ok(result.references.every(r => r.cited === true));
   });
 
-  it('executes robust deterministic fallback synthesis when LLM provider is offline', async () => {
+  it('produces uncertain (never authoritative) sections when the LLM provider is offline', async () => {
     const plan = {
       id: 'plan-offline',
       version: 1,
@@ -563,7 +563,9 @@ Cryogenic transmon coherence reached 320 µs [3]. Control scaling was achieved v
       }
     ];
 
-    // No generator or llm options passed -> triggers fallback synthesis
+    // No generator or llm options passed -> synthesis is unavailable, so
+    // Track G (SPEC #155) serves UNCERTAIN sections: structural headings
+    // hold, admitted excerpts surface verbatim, zero generated claims.
     const result = await synthesizeHierarchical({
       plan,
       evidence,
@@ -577,6 +579,11 @@ Cryogenic transmon coherence reached 320 µs [3]. Control scaling was achieved v
     assert.ok(result.report.includes('## Comparative Matrix & Trade-offs'));
     assert.ok(result.report.includes('## References & Evidence Provenance'));
     assert.ok(result.report.includes('[1]'));
+    assert.match(result.report, /uncertain|unavailable/i, 'offline synthesis is labeled uncertain, not authoritative');
+    assert.ok(
+      result.report.includes('Preemption latency was guaranteed under 10 microseconds'),
+      'admitted excerpts surface verbatim'
+    );
   });
 });
 

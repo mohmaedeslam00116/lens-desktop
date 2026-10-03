@@ -17,6 +17,7 @@ import { LLMRequestOptions } from './models';
 import { generate } from './modelGateway';
 import { AdmittedChunk, CandidateChunk } from './admission';
 import { verifyTemporalGrounding as verifyTemporalClaimGrounding, type TemporalGroundingFlag } from './freshness';
+import { buildAbstentionReport, buildUncertainSectionNotice, ABSTAIN_MARKER } from './abstention';
 import { CompactionShield } from './skills';
 
 /**
@@ -879,12 +880,20 @@ export class HierarchicalSynthesis {
 
   /**
    * Executes the complete hierarchical synthesis pipeline.
+   *
+   * Track G honesty (SPEC #155): zero admitted excerpts abstain outright —
+   * no sections, no meta pass, no dossier. A report without evidence is an
+   * abstention, never an authoritative document.
    */
   public async synthesize(): Promise<HierarchicalSynthesisResult> {
     const language = this.options.language || 'en';
     const isAr = language === 'ar';
     const perspective = this.options.perspective || 'balanced';
     const query = this.options.query || (this.options.plan as any).objective || 'Research Report';
+
+    if (this.contract.getTotalCount() === 0) {
+      return this.synthesizeAbstention(query, language);
+    }
 
     // Normalize milestones
     const planMilestones: PlanMilestone[] = [];
@@ -1057,6 +1066,62 @@ export class HierarchicalSynthesis {
   }
 
   /**
+   * Track G abstention (SPEC #155): zero admitted excerpts produce an
+   * abstention report, never a dossier. The result shape is complete (all
+   * consumers keep working) but carries no sections, no references, and no
+   * citation brackets anywhere.
+   */
+  private synthesizeAbstention(query: string, language: 'ar' | 'en'): HierarchicalSynthesisResult {
+    const report = buildAbstentionReport({ query, language, reason: 'no-evidence' });
+    if (this.options.onProgress) {
+      this.options.onProgress({ stage: 'verification', progressPercent: 100 });
+    }
+    const verification: GroundingVerificationResult = {
+      sanitizedText: report,
+      originalText: report,
+      totalFound: 0,
+      validCount: 0,
+      hallucinatedCount: 0,
+      remappedCount: 0,
+      hallucinatedIndices: [],
+      validIndices: [],
+      citedIndices: [],
+      deterministicVerification: true,
+      zeroHallucinationGuaranteed: true,
+    };
+    const metaResult: MetaSynthesisResult = {
+      rawContent: report,
+      sanitizedContent: report,
+      executiveSummary: '',
+      comparisonMatrix: undefined,
+      citedIndices: [],
+      contradictions: [],
+      verification,
+    };
+    return {
+      report,
+      objective: query,
+      language,
+      metaSynthesis: metaResult,
+      milestoneSections: [],
+      contract: this.contract,
+      totalAdmittedSources: 0,
+      totalCitedSources: 0,
+      groundingVerification: {
+        totalFoundInReport: 0,
+        validCitations: 0,
+        hallucinatedStripped: 0,
+        remappedCount: 0,
+        deterministicVerification: true,
+        zeroHallucinationGuaranteed: true,
+        citedIndices: [],
+      },
+      references: [],
+      contradictions: [],
+    };
+  }
+
+  /**
    * Synthesizes an analytical section for an individual milestone from its admitted evidence.
    */
   private async synthesizeMilestoneSection(
@@ -1131,7 +1196,7 @@ Synthesize the detailed analytical section now, starting with heading "### ${mil
           { stage: 'milestone', milestone, milestoneIndex: index, totalMilestones: total }
         );
       } catch (err: any) {
-        rawContent = this.generateFallbackMilestoneSection(milestone, milestoneEvidence, relevantContradictions, isAr);
+        rawContent = this.buildUncertainMilestoneSection(milestone, milestoneEvidence, relevantContradictions, isAr);
       }
     } else if (this.options.llmOptions) {
       try {
@@ -1145,10 +1210,10 @@ Synthesize the detailed analytical section now, starting with heading "### ${mil
           onChunk: this.options.onChunk
         });
       } catch (err: any) {
-        rawContent = this.generateFallbackMilestoneSection(milestone, milestoneEvidence, relevantContradictions, isAr);
+        rawContent = this.buildUncertainMilestoneSection(milestone, milestoneEvidence, relevantContradictions, isAr);
       }
     } else {
-      rawContent = this.generateFallbackMilestoneSection(milestone, milestoneEvidence, relevantContradictions, isAr);
+      rawContent = this.buildUncertainMilestoneSection(milestone, milestoneEvidence, relevantContradictions, isAr);
     }
 
     // Run Citation Grounding verification on this section
@@ -1244,7 +1309,7 @@ Synthesize the overarching Executive Summary, Comparative Matrix, and Strategic 
           { stage: 'meta' }
         );
       } catch (err: any) {
-        rawContent = this.generateFallbackMetaPass(query, sections, contradictions, isAr);
+        rawContent = this.buildUncertainMetaPass(query, sections, contradictions, isAr);
       }
     } else if (this.options.llmOptions) {
       try {
@@ -1258,10 +1323,10 @@ Synthesize the overarching Executive Summary, Comparative Matrix, and Strategic 
           onChunk: this.options.onChunk
         });
       } catch (err: any) {
-        rawContent = this.generateFallbackMetaPass(query, sections, contradictions, isAr);
+        rawContent = this.buildUncertainMetaPass(query, sections, contradictions, isAr);
       }
     } else {
-      rawContent = this.generateFallbackMetaPass(query, sections, contradictions, isAr);
+      rawContent = this.buildUncertainMetaPass(query, sections, contradictions, isAr);
     }
 
     const verification = this.contract.verifyAndSanitize(rawContent);
@@ -1398,61 +1463,66 @@ Do NOT blend or average the numbers. You MUST format an explicit Contradiction C
     return m ? m[0] : undefined;
   }
 
+  /**
+   * Track G honest comparison table (SPEC #155): every cell derives from
+   * admitted evidence — the milestone query, a verbatim excerpt slice, and
+   * its real citations. No invented architectures, metrics, or trade-offs;
+   * sections without citations say so explicitly instead of borrowing [1].
+   */
   private generateDefaultComparisonTable(sections: MilestoneSectionResult[], isAr: boolean): string {
-    if (isAr) {
-      const rows = sections.map(s => {
-        const citations = s.citedIndices.length > 0 ? s.citedIndices.map(i => `[${i}]`).join('') : '[1]';
-        return `| ${s.milestoneQuery} | تحليل معماري ومعياري | متوافق مع متطلبات الإنتاج | توازن بين الكفاءة والتعقيد | ${citations} |`;
-      });
+    const rows = sections.map(s => {
+      const citations = s.citedIndices.length > 0
+        ? s.citedIndices.map(i => `[${i}]`).join('')
+        : (isAr ? '(لا أدلة مستشهد بها)' : '(no cited evidence)');
+      const excerpt = s.citedIndices.length > 0
+        ? (this.contract.getExcerpt(s.citedIndices[0])?.text.slice(0, 120) ?? '')
+        : '';
+      const evidenceCell = excerpt ? `${excerpt} ${s.citedIndices.map(i => `[${i}]`).join('')}` : citations;
+      return `| ${s.milestoneQuery} | ${evidenceCell} | ${citations} |`;
+    });
 
+    if (isAr) {
       return [
-        '| المحور التحليلي | النهج المعماري الرئيسي | المؤشر والجاهزية | المفاضلات والقيود | مراجع الأدلة |',
-        '|---|---|---|---|---|',
+        '| المحور التحليلي | الأدلة المعتمدة (حرفياً) | مراجع الأدلة |',
+        '|---|---|---|',
         ...rows
       ].join('\n');
     }
 
-    const rows = sections.map(s => {
-      const citations = s.citedIndices.length > 0 ? s.citedIndices.map(i => `[${i}]`).join('') : '[1]';
-      return `| ${s.milestoneQuery} | Specialized Architecture | Production Benchmarks Met | Latency vs. Throughput Trade-offs | ${citations} |`;
-    });
-
     return [
-      '| Milestone / Facet | Architectural Approach | Readiness & Metrics | Trade-offs & Constraints | Evidence Citations |',
-      '|---|---|---|---|---|',
+      '| Milestone / Facet | Admitted evidence (verbatim) | Evidence Citations |',
+      '|---|---|---|',
       ...rows
     ].join('\n');
   }
 
-  private generateFallbackMilestoneSection(
+  /**
+   * Track G uncertain section (SPEC #155): synthesis transport failed but
+   * admitted evidence exists. The section keeps its structural heading and
+   * reproduces excerpts VERBATIM with their real brackets — no generated
+   * claims, no invented metrics, no confidence language. It replaces the
+   * deleted fabricating fallback, which wrote authoritative-sounding prose
+   * over the same evidence slots.
+   */
+  private buildUncertainMilestoneSection(
     milestone: PlanMilestone,
     excerpts: GroundedExcerpt[],
     contradictions: DetectedContradiction[],
     isAr: boolean
   ): string {
     const list = excerpts.length > 0 ? excerpts : this.contract.getAllExcerpts().slice(0, 4);
-    const citationsStr = list.slice(0, 3).map(e => e.bracket).join('');
 
     const lines: string[] = [];
     lines.push(`### ${milestone.query}`);
     lines.push('');
-
-    if (isAr) {
-      lines.push(`يتناول هذا المحور التحليلي المتعمق دراسة تفصيلية لـ "${milestone.query}". تشير الأدلة المعرفية الموثقة إلى تطورات جوهرية في المعمارية والنظم التشغيلية ${citationsStr}.`);
-      lines.push('');
-      for (const ex of list.slice(0, 2)) {
-        lines.push(`- **استخلاص موثق**: ${ex.text.slice(0, 200)} ${ex.bracket}`);
-      }
-    } else {
-      lines.push(`This analytical section investigates the foundational mechanisms and empirical benchmarks governing "${milestone.query}". Admitted evidence confirms substantial advancements in core architectures and operational frameworks ${citationsStr}.`);
-      lines.push('');
-      for (const ex of list.slice(0, 2)) {
-        lines.push(`- **Verified Evidence**: ${ex.text.slice(0, 200)} ${ex.bracket}`);
-      }
+    lines.push(buildUncertainSectionNotice(isAr ? 'ar' : 'en', 'milestone'));
+    lines.push('');
+    for (const ex of list.slice(0, 4)) {
+      const label = isAr ? 'مقتطف موثق حرفياً' : 'Verbatim admitted excerpt';
+      lines.push(`- **${label}**: ${ex.text.slice(0, 300)} ${ex.bracket}`);
     }
     lines.push('');
 
-    // Include contradiction callout if relevant
     if (contradictions.length > 0) {
       const c = contradictions[0];
       lines.push(formatContradictionCallout({
@@ -1470,47 +1540,44 @@ Do NOT blend or average the numbers. You MUST format an explicit Contradiction C
     return lines.join('\n');
   }
 
-  private generateFallbackMetaPass(
+  /**
+   * Track G uncertain meta pass (SPEC #155): same contract as the milestone
+   * builder — structural headings preserved (downstream shape contracts),
+   * zero generated takeaways. It replaces the deleted fabricating fallback,
+   * which asserted invented alignment and confidence over these slots.
+   */
+  private buildUncertainMetaPass(
     query: string,
     sections: MilestoneSectionResult[],
     contradictions: DetectedContradiction[],
     isAr: boolean
   ): string {
-    const allExcerpts = this.contract.getAllExcerpts();
-    const topCitation = allExcerpts.length > 0 ? allExcerpts[0].bracket : '[1]';
-
     const lines: string[] = [];
 
+    lines.push(buildUncertainSectionNotice(isAr ? 'ar' : 'en', 'meta'));
+    lines.push('');
     if (isAr) {
-      lines.push('> [!NOTE]');
-      lines.push(`> **الخلاصة الاستراتيجية**: يُظهر التوليف البحثي لـ "${query}" تكاملاً معرفياً عالي الدقة يجمع بين الكفاءة المعمارية والموثوقية القياسية ${topCitation}.`);
-      lines.push('');
       lines.push('## ملخص تنفيذي وأبرز المؤشرات (Executive Summary & Key Metrics)');
-      lines.push(`- توثيق دقيق لكافة المحاور البحثية المعتمدة عبر ${sections.length} فصول تحليلية متخصصة.`);
-      lines.push(`- مطابقة معيارية شاملة مدعومة بأدلة مثبتة في مصفوفات المقارنة.`);
-      lines.push('');
-      lines.push('## جدول المقارنة المعيارية وتحليل المفاضلات');
-      lines.push('');
-      lines.push(this.generateDefaultComparisonTable(sections, true));
-      lines.push('');
+      lines.push(`- تعذر التوليف الآلي لموضوع "${query}" — المقاييس أدناه هي جرد للأدلة المعتمدة، لا استنتاجات.`);
+      lines.push(`- عدد الأقسام التحليلية: ${sections.length} (راجع كل قسم ومقتطفاته الموثقة).`);
+    } else {
+      lines.push('## Executive Summary & Key Metrics');
+      lines.push(`- Automated synthesis of "${query}" is unavailable — the inventory below counts admitted evidence, never findings.`);
+      lines.push(`- Analytical sections: ${sections.length} (see each section and its cited excerpts).`);
+    }
+    lines.push('');
+    lines.push('## Comparative Matrix & Trade-offs');
+    lines.push('');
+    lines.push(this.generateDefaultComparisonTable(sections, isAr));
+    lines.push('');
+    if (isAr) {
       lines.push('## التوصيات الاستراتيجية والآفاق المستقبلية');
       lines.push('> [!TIP]');
-      lines.push('> **توصية تنفيذية**: الشروع في تطبيق المعمارية الموصى بها مع متابعة مؤشرات الأداء الحيوية.');
+      lines.push('> **توصية إجرائية**: لا توجد توصية مولّدة — راجع المقتطفات الموثقة في كل قسم قبل أي قرار.');
     } else {
-      lines.push('> [!NOTE]');
-      lines.push(`> **Strategic Takeaway**: Synthesizing the research across "${query}" reveals high-fidelity alignment between foundational architectural rigor and empirical performance benchmarks ${topCitation}.`);
-      lines.push('');
-      lines.push('## Executive Summary & Key Metrics');
-      lines.push(`- Rigorous analytical synthesis completed across ${sections.length} approved research milestones.`);
-      lines.push(`- High-confidence verification across admitted evidence with grounded provenance.`);
-      lines.push('');
-      lines.push('## Comparative Matrix & Trade-offs');
-      lines.push('');
-      lines.push(this.generateDefaultComparisonTable(sections, false));
-      lines.push('');
       lines.push('## Strategic Recommendations & Outlook');
       lines.push('> [!TIP]');
-      lines.push('> **Top Actionable Recommendation**: Prioritize production deployment of verified architectural components while monitoring empirical trade-offs.');
+      lines.push('> **Procedural recommendation**: no generated recommendation exists — review the cited excerpts in each section before any decision.');
     }
 
     return lines.join('\n');

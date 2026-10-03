@@ -6,6 +6,7 @@ import {
   WideResearchTelemetry,
 } from './types';
 import { MultiSearchProvider } from './search';
+import { buildAbstentionReport } from './abstention';
 import { resolveRecencyForQuery } from './freshness';
 import { BoundedScraperPool } from './scraperPool';
 import { ScrapedPage } from './scraper';
@@ -325,6 +326,42 @@ export class WideResearchAgent {
     }
 
     if (signal?.aborted) return undefined;
+    // Track G honesty (SPEC #155): zero fetched pages abstain outright —
+    // synthesis never runs without evidence, so no dossier can form.
+    if (pagesByUrl.size === 0) {
+      const abstention = buildAbstentionReport({
+        query: request.query,
+        language,
+        reason: 'no-evidence',
+      });
+      const abstainTelemetry = this.createTelemetry({
+        activeBudget,
+        discovered: discovered.size,
+        fetched: 0,
+        unique: 0,
+        admitted: 0,
+        cited: 0,
+        hop,
+        coverageScore: latestAdmission?.coverageAudit.overallScore,
+      });
+      this.emitEvent({ type: 'wide_telemetry', wideTelemetry: abstainTelemetry });
+      this.emitEvent({
+        type: 'finished',
+        report: abstention,
+        sources: [],
+        costs: 0,
+        wideTelemetry: abstainTelemetry,
+        coverage: latestAdmission ? {
+          overallScore: latestAdmission.coverageAudit.overallScore,
+          subqueryScore: latestAdmission.coverageAudit.subqueryScore,
+          aspectScore: latestAdmission.coverageAudit.aspectScore,
+          metricScore: latestAdmission.coverageAudit.metricScore,
+          diversityScore: latestAdmission.coverageAudit.diversityScore,
+          uncoveredSubqueries: latestAdmission.coverageAudit.uncoveredSubqueries,
+        } : undefined,
+      });
+      return { report: abstention, sources: [], telemetry: abstainTelemetry };
+    }
     const evidence = latestAdmission?.admittedChunks || [];
     const synthesis = await (this.dependencies.synthesize || ((input) => this.defaultSynthesize(input)))({
       request,

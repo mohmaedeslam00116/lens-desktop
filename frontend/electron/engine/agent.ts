@@ -10,6 +10,12 @@ import { createEmbeddingModel, defaultEmbeddingModel, rankSourcePassages, fallba
 import { auditEvidenceCoverage, generateAdaptiveHopPlan, formatAuditReflections } from './evidenceCoverage';
 import { SkillActivationManager, CompactionShield } from './skills';
 import { CitationGroundingContract } from './synthesis';
+import {
+  detectMetricContradictions,
+  extractContradictionCallouts,
+  formatContradictionCallout,
+} from './synthesis';
+import { buildAbstentionReport } from './abstention';
 import { resolveRecencyForQuery } from './freshness';
 
 export class DeepResearchAgent {
@@ -453,6 +459,26 @@ Return ONLY a valid JSON array of strings, for example:
 
     if (signal?.aborted) return;
 
+    // Track G honesty (SPEC #155): zero admitted sources abstain outright —
+    // no synthesis call, no dossier. Absence of evidence is surfaced as
+    // unsupported/uncertain, never translated into findings.
+    if (scrapedSources.length === 0) {
+      const abstention = buildAbstentionReport({
+        query,
+        language: isAr ? 'ar' : 'en',
+        reason: 'no-evidence',
+      });
+      this.emitEvent({ type: 'report_chunk', chunk: abstention });
+      this.emitEvent({
+        type: 'finished',
+        report: abstention,
+        sources: [],
+        costs: 0.002,
+        reflections: reflectionsList
+      });
+      return;
+    }
+
     // 6. Final Report Synthesis & Semantic Evidence Retrieval
     this.emitEvent({
       type: 'status',
@@ -592,10 +618,14 @@ CRITICAL FORMATTING & STRUCTURE RULES:
 Perspective: ${perspectiveLabel}
 
 --- GATHERED EVIDENCE ---
-${evidenceText || 'No external evidence retrieved. Synthesize an exhaustive report based on verified knowledge.'}
+${evidenceText}
 --- END OF EVIDENCE ---
 
 Synthesize the complete, richly formatted, authoritative research dossier now following all structural and table guidelines.`;
+    // Track G: the empty-evidence substitution is deleted — a zero-evidence
+    // run abstains before synthesis (above) and never reaches this prompt.
+    // An empty evidence string here means a bug, and the model sees exactly
+    // that (nothing fabricated to fill it).
 
     let report = '';
     try {
@@ -629,6 +659,40 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
     })));
     report = citationContract.verifyAndSanitize(report).sanitizedText;
 
+    // Track G honesty (SPEC #155): evidence conflicts the dossier never
+    // calls out are surfaced as an explicit uncertain section — conflicting
+    // numbers are never silently blended. The auditor below then sees the
+    // callouts and marks them resolved-by-surfacing.
+    const potentialContradictions = detectMetricContradictions(citationContract.getAllExcerpts());
+    const existingCallouts = extractContradictionCallouts(report);
+    const unresolvedConflicts = potentialContradictions.filter(
+      (c) =>
+        !existingCallouts.some(
+          (call) =>
+            call.sourceIndices.includes(c.sourceA.index) &&
+            call.sourceIndices.includes(c.sourceB.index)
+        )
+    );
+    if (unresolvedConflicts.length > 0) {
+      const conflictHeading = isAr ? '## تعارضات غير محسومة — تحقق مطلوب' : '## Unresolved Conflicts — Verification Required';
+      const conflictLines = [conflictHeading, ''];
+      for (const c of unresolvedConflicts) {
+        conflictLines.push(formatContradictionCallout({
+          topicOrMetric: c.topicOrMetric,
+          claims: [
+            { sourceIndex: c.sourceA.index, valueOrAssertion: c.sourceA.value, domain: c.sourceA.domain },
+            { sourceIndex: c.sourceB.index, valueOrAssertion: c.sourceB.value, domain: c.sourceB.domain },
+          ],
+          explanation: c.suggestedExplanation,
+          language: isAr ? 'ar' : 'en',
+        }));
+        conflictLines.push('');
+      }
+      const conflictSection = conflictLines.join('\n');
+      this.emitEvent({ type: 'report_chunk', chunk: '\n\n' + conflictSection });
+      report += '\n\n' + conflictSection;
+    }
+
     // 7. Advisory Evidence Audit (ADR-0010 decision 4, ticket #91)
     // Deterministic, offline, bilingual claim-vs-evidence verification of the
     // synthesized report. Advisory only: verdicts annotate — they never gate
@@ -637,7 +701,7 @@ Synthesize the complete, richly formatted, authoritative research dossier now fo
     const audit = auditEvidenceClaims(
       report,
       scrapedSources.map(s => ({ content: s.content, url: s.url })),
-      { language: isAr ? 'ar' : 'en' }
+      { language: isAr ? 'ar' : 'en', contradictions: potentialContradictions }
     );
     this.emitEvent({ type: 'audit_telemetry', auditTelemetry: audit });
     // The report itself surfaces audit outcomes (both languages). Streamed as
