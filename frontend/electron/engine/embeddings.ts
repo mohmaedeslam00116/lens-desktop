@@ -1021,6 +1021,8 @@ export async function rankSourcePassages(
     cache?: EmbeddingCache;
     disableCache?: boolean;
     disableQueryExpansion?: boolean;
+    /** Reference time for freshness weighting (Track E; default: Date.now()). */
+    now?: number;
   } = {}
 ): Promise<{
   evidenceText: string;
@@ -1282,22 +1284,26 @@ export async function rankSourcePassages(
       currentChars += chunk.content.length;
     }
   } else {
-    const mmrCandidates: MMRCandidate<ChunkRecord>[] = cappedChunks.map((chunk, idx) => ({
-      id: chunk.id,
-      score: chunk.score ?? 0,
-      vector: chunk.vector || chunkVectors[idx],
-      content: chunk.content,
-      sourceId: chunk.citationId,
-      domain: chunk.domain,
-      credibilityScore: sources[chunk.sourceIndex]?.credibilityScore,
-      // Track E retention: source dates ride into freshness-weighted ranking.
-      ...(sources[chunk.sourceIndex]?.publishedAt ? { publishedAt: sources[chunk.sourceIndex]!.publishedAt! } : {}),
-      metadata: chunk
-    }));
+    const mmrCandidates: MMRCandidate<ChunkRecord>[] = cappedChunks.map((chunk, idx) => {
+      const sourceDate = sources[chunk.sourceIndex]?.publishedAt;
+      return {
+        id: chunk.id,
+        score: chunk.score ?? 0,
+        vector: chunk.vector || chunkVectors[idx],
+        content: chunk.content,
+        sourceId: chunk.citationId,
+        domain: chunk.domain,
+        credibilityScore: sources[chunk.sourceIndex]?.credibilityScore,
+        // Track E retention: source dates ride into freshness-weighted ranking.
+        ...(sourceDate ? { publishedAt: sourceDate } : {}),
+        metadata: chunk,
+      };
+    });
 
     // Track E freshness (SPEC #155): freshness-seeking queries penalize stale
     // candidates inside the real ranking seam; timeless queries rank exactly
-    // as before (temporalIntent false → multiplier 1.0).
+    // as before (temporalIntent false → multiplier 1.0). Intent ORs across
+    // the turn's queries — one temporal member freshens the whole ranking.
     const temporalIntent = cleanQueries.some((q) => detectTemporalIntent(q).isTemporal);
 
     const mmrResult = selectPassagesWithMMR<ChunkRecord>(mmrCandidates, {
@@ -1309,6 +1315,7 @@ export async function rankSourcePassages(
       sourceDecay: options.sourceDecay ?? 0.70,
       maxContextChars: maxContextChars,
       temporalIntent,
+      ...(typeof options.now === 'number' ? { now: options.now } : {}),
     });
 
     selectedChunks = mmrResult.selected.map(s => s.metadata!);

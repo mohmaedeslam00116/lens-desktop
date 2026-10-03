@@ -85,6 +85,8 @@ export interface ResearcherRunResult {
     domain: string;
     content: string;
     credibilityScore: number;
+    /** Provider-supplied publication date (ISO, Track E retention). */
+    publishedAt?: string;
     milestoneId?: string;
     milestoneTitle?: string;
   }>;
@@ -222,6 +224,9 @@ export async function runRehostedResearcher(
         domain: page.domain,
         content: page.content,
         credibilityScore: page.credibilityScore,
+        // Track E retention: the scrape plane rarely carries dates, so a
+        // provider date seen on the search hit rides along via hitDates.
+        ...(page.publishedAt ?? hitDates.get(url) ? { publishedAt: (page.publishedAt ?? hitDates.get(url))! } : {}),
         milestoneId: options.milestoneId,
         milestoneTitle: options.milestoneTitle,
       });
@@ -232,6 +237,8 @@ export async function runRehostedResearcher(
         domain: page.domain,
         credibility: page.credibilityScore as number,
         snippet: page.content.slice(0, 160),
+        // Track E retention: same date as the finding above.
+        ...(page.publishedAt ?? hitDates.get(url) ? { publishedAt: (page.publishedAt ?? hitDates.get(url))! } : {}),
         milestoneId: options.milestoneId,
         milestoneTitle: options.milestoneTitle,
       });
@@ -243,6 +250,10 @@ export async function runRehostedResearcher(
 
   // The plane-backed surface (ADR-0013/0014: enforcement inside the tools),
   // wrapped with the harvest adapter on web_search results.
+  // Track E retention: search-hit provider dates are indexed here so the
+  // harvest adapter (which only sees URLs + scraped pages) can re-attach
+  // them to findings and source events.
+  const hitDates = new Map<string, string>();
   const surface = createAgenticToolSurface({
     sessionId,
     state,
@@ -250,6 +261,9 @@ export async function runRehostedResearcher(
     emit: emitToParent,
     search: async (query) => {
       const hits = await primarySearchPlane(query);
+      for (const hit of hits) {
+        if (hit.publishedAt) hitDates.set(hit.url, hit.publishedAt);
+      }
       return hits.map((hit) => ({
         url: hit.url,
         title: hit.title,

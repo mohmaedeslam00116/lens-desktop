@@ -22,10 +22,16 @@ export const FRESHNESS_BOUNDS = {
   recentWithinDays: 120,
   /** Evidence older than this is STALE for temporal claims. */
   staleAfterDays: 180,
+  /** Weight of aging (recent-but-not-stale) evidence under temporal intent. */
+  agingWeight: 0.75,
   /** Weight of undated evidence under temporal intent (below fresh, above stale). */
   undatedTemporalWeight: 0.9,
   /** Weight of stale evidence under temporal intent. */
   staleTemporalWeight: 0.5,
+  /** Timeless queries keep full weight for evidence this fresh. */
+  timelessFreshDays: 365,
+  /** Timeless queries keep near-full weight for evidence this fresh. */
+  timelessAgingDays: 730,
   /** Weight floor for old evidence when the query is timeless. */
   timelessFloorWeight: 0.85,
   /** Cap on date-aware query variants per temporal query. */
@@ -54,6 +60,7 @@ const EN_MARKERS: Marker[] = [
   { term: 'current', recency: 'week' },
   { term: 'this month', recency: 'month' },
   { term: 'new model', recency: 'month' },
+  { term: 'new models', recency: 'month' },
   { term: 'new-model', recency: 'month' },
   { term: 'announcement', recency: 'month' },
   { term: 'announced', recency: 'month' },
@@ -118,25 +125,40 @@ export function detectTemporalIntent(query: string): TemporalIntent {
   const yearMatch = YEAR_RE.exec(text);
   if (yearMatch) matched.push({ term: yearMatch[1], recency: 'year' });
   if (matched.length === 0) return { isTemporal: false, matchedTerms: [] };
-  matched.sort((a, b) => RECENCY_RANK[a.recency] - RECENCY_RANK[b.recency]);
+  // Subsumption dedupe (Track E review): Arabic substring matching fires
+  // nested markers (الأحدث⊃أحدث, مستجدات⊃مستجد) — a term subsumed by a
+  // longer matched term carries no extra signal, so the longest wins and
+  // telemetry/notes stay honest.
+  const deduped = matched.filter(
+    (m, i) => !matched.some((o, j) => j !== i && o.term !== m.term && o.term.includes(m.term))
+  );
+  const ranked = [...deduped].sort((a, b) => RECENCY_RANK[a.recency] - RECENCY_RANK[b.recency]);
   return {
     isTemporal: true,
-    matchedTerms: matched.map((m) => m.term),
-    suggestedRecency: matched[0].recency,
+    matchedTerms: ranked.map((m) => m.term),
+    suggestedRecency: ranked[0].recency,
   };
 }
 
 /**
  * Resolves the provider-side recency for one query: an explicit caller
- * selection always wins; otherwise the temporal intent suggests; timeless
- * queries resolve to undefined — never a silent default scope.
+ * selection always wins (case-insensitive — 'Week' means 'week'); otherwise
+ * the temporal intent suggests; timeless queries resolve to undefined —
+ * never a silent default scope.
+ *
+ * Contract (Track E review): `explicit` must be a valid filter when
+ * provided — user-facing layers validate first (the tool layer refuses
+ * garbage loudly); an unrecognized string falls back to intent rather than
+ * inventing scope, so programmatic callers must validate before passing
+ * one through.
  */
 export function resolveRecencyForQuery(
   query: string,
   explicit?: string
 ): RecencyFilter | undefined {
-  if (explicit === 'day' || explicit === 'week' || explicit === 'month' || explicit === 'year') {
-    return explicit;
+  const norm = typeof explicit === 'string' ? explicit.trim().toLowerCase() : '';
+  if (norm === 'day' || norm === 'week' || norm === 'month' || norm === 'year') {
+    return norm;
   }
   return detectTemporalIntent(query).suggestedRecency;
 }
@@ -192,14 +214,17 @@ export function freshnessMultiplier(
     return isTemporal ? FRESHNESS_BOUNDS.undatedTemporalWeight : 1.0;
   }
   const ageDays = Math.max(0, (nowMs - ms) / DAY_MS);
+  // THE stale boundary is FRESHNESS_BOUNDS.staleAfterDays everywhere (Track E
+  // review): verifyTemporalGrounding flags past the same horizon the ranker
+  // penalizes past — a kept excerpt is never simultaneously "flagged stale".
   if (isTemporal) {
     if (ageDays <= FRESHNESS_BOUNDS.freshWithinDays) return 1.0;
     if (ageDays <= FRESHNESS_BOUNDS.recentWithinDays) return 0.9;
-    if (ageDays <= 365) return 0.75;
+    if (ageDays <= FRESHNESS_BOUNDS.staleAfterDays) return FRESHNESS_BOUNDS.agingWeight;
     return FRESHNESS_BOUNDS.staleTemporalWeight;
   }
-  if (ageDays <= 365) return 1.0;
-  if (ageDays <= 730) return 0.95;
+  if (ageDays <= FRESHNESS_BOUNDS.timelessFreshDays) return 1.0;
+  if (ageDays <= FRESHNESS_BOUNDS.timelessAgingDays) return 0.95;
   return FRESHNESS_BOUNDS.timelessFloorWeight;
 }
 
@@ -209,8 +234,12 @@ export interface TemporalExcerpt {
 }
 
 export interface TemporalGroundingFlag {
-  /** Sentence index in the report (stable order). */
-  index: number;
+  /**
+   * Sentence ordinal in the report (0-based). Named distinctly from
+   * TemporalExcerpt.index (a 1-based citation id) — the two domains must
+   * never be joined (Track E review).
+   */
+  sentenceIndex: number;
   claim: string;
   citedIndices: number[];
   reason: string;
@@ -249,7 +278,7 @@ export function verifyTemporalGrounding(
     )).filter((n) => Number.isInteger(n) && n > 0);
     if (cited.length === 0) {
       flags.push({
-        index: i,
+        sentenceIndex: i,
         claim: sentence,
         citedIndices: [],
         reason: 'temporal claim without citations — verify via source_check before citing.',
@@ -265,14 +294,14 @@ export function verifyTemporalGrounding(
     });
     if (states.every((s) => s === 'stale')) {
       flags.push({
-        index: i,
+        sentenceIndex: i,
         claim: sentence,
         citedIndices: cited,
         reason: `temporal claim cited only to stale excerpts (older than ${FRESHNESS_BOUNDS.staleAfterDays} days) — re-verify via source_check before citing.`,
       });
     } else if (states.every((s) => s !== 'fresh')) {
       flags.push({
-        index: i,
+        sentenceIndex: i,
         claim: sentence,
         citedIndices: cited,
         reason: 'temporal claim has no dated fresh backing — verify via source_check before citing.',

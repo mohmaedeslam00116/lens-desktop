@@ -436,22 +436,6 @@ async function handleWebSearch(
   const { provider, scoping: callOpts } = scoping;
   const served = queryList.slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
   const notes: string[] = [];
-  // Track E auto-recency (SPEC #155): a temporal query without an explicit
-  // recencyFilter gains the intent's suggestion provider-side — reported,
-  // never silent; an explicit selection always wins (resolved above).
-  if (args.recencyFilter === undefined) {
-    const auto = resolveRecencyForQuery(served.join(' '));
-    if (auto) {
-      callOpts.recencyFilter = auto;
-      const markers = served
-        .map((q) => detectTemporalIntent(q).matchedTerms)
-        .reduce((all, terms) => all.concat(terms), [])
-        .filter((t, i, arr) => arr.indexOf(t) === i);
-      notes.push(
-        `recencyFilter '${auto}' auto-applied provider-side (temporal intent: ${markers.join(', ') || 'freshness-seeking query'}) — pass an explicit recencyFilter to override.`
-      );
-    }
-  }
   if (queryList.length > served.length) {
     notes.push(
       `${served.length} of ${queryList.length} queries served (cap ${AGENTIC_TOOL_BOUNDS.maxQueriesPerCall}); resubmit the remainder separately.`
@@ -460,9 +444,26 @@ async function handleWebSearch(
   const includeContent = args.includeContent === true;
 
   const slices: StoredSearchSlice[] = [];
+  // Track E auto-recency (SPEC #155, review): resolved PER QUERY — a mixed
+  // fan-out (["latest benchmarks","history of chess"]) scopes only its
+  // temporal members; timeless queries ride unscoped. Reported, never
+  // silent; an explicit selection always wins (resolved above).
+  const autoApplied: string[] = [];
   for (const q of served) {
     // callOpts carries numResults plus only the scoping the call defined.
-    const hits = await context.search(q, provider, callOpts);
+    const qOpts =
+      args.recencyFilter === undefined
+        ? (() => {
+            const auto = resolveRecencyForQuery(q);
+            if (auto) {
+              const markers = detectTemporalIntent(q).matchedTerms.join(', ');
+              autoApplied.push(`'${auto}' → "${q}" (markers: ${markers})`);
+              return { ...callOpts, recencyFilter: auto };
+            }
+            return callOpts;
+          })()
+        : callOpts;
+    const hits = await context.search(q, provider, qOpts);
     slices.push({
       query: q,
       // Track E retention: provider dates flow into the store and admission.
@@ -530,6 +531,11 @@ async function handleWebSearch(
       if (h.content) lines.push(`Full text (excerpt): ${h.content.slice(0, 300)}`);
     });
   });
+  if (autoApplied.length > 0) {
+    notes.push(
+      `recencyFilter auto-applied provider-side (${autoApplied.join('; ')}) — pass an explicit recencyFilter to override.`
+    );
+  }
   if (merged.size === 0) lines.push('No results.');
   const body = lines.join('\n\n');
   const storedText = [body, ...notes.map((n) => `Note: ${n}`)].join('\n\n');
@@ -674,36 +680,42 @@ async function handleSourceCheck(
   const wantContent = args.fetchContent === true;
   const notes: string[] = [];
 
-  // Track E freshness-first verification (SPEC #155): a temporal claim
-  // without explicit queries fans out date-aware variants (claim + year
-  // anchor + latest tail) and auto-applies the intent recency — the check
-  // verifies against FRESH evidence before anything cites it. Explicit
-  // queries or an explicit recency stay exactly as the caller scoped them.
+  // Track E freshness-first verification (SPEC #155, review): a temporal
+  // claim without explicit queries fans out date-aware variants (claim +
+  // year anchor + latest tail) — variants and recency are INDEPENDENT axes:
+  // explicit queries disable variants, explicit recency disables auto
+  // recency, and each applies (or not) on its own. The check verifies
+  // against FRESH evidence before anything cites it.
   let queryList = (requested.length > 0 ? requested : [claim]).slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
-  if (requested.length === 0 && args.recencyFilter === undefined) {
+  if (requested.length === 0) {
     const intent = detectTemporalIntent(claim);
     if (intent.isTemporal) {
       queryList = buildDateAwareVariants(claim).slice(0, AGENTIC_TOOL_BOUNDS.maxQueriesPerCall);
-      if (intent.suggestedRecency) {
-        callOpts.recencyFilter = intent.suggestedRecency;
-        notes.push(
-          `temporal claim — date-aware variants (${queryList.length}) with recencyFilter '${intent.suggestedRecency}' auto-applied (markers: ${intent.matchedTerms.join(', ')}); pass explicit queries/recencyFilter to override.`
-        );
-      }
-    }
-  } else if (args.recencyFilter === undefined) {
-    const auto = resolveRecencyForQuery(queryList.join(' '));
-    if (auto) {
-      callOpts.recencyFilter = auto;
-      notes.push(`recencyFilter '${auto}' auto-applied provider-side (temporal intent) — pass an explicit recencyFilter to override.`);
+      notes.push(
+        `temporal claim (markers: ${intent.matchedTerms.join(', ')}) — date-aware variants (${queryList.length}): ${queryList.join(' | ')}. Pass explicit queries to override.`
+      );
     }
   }
 
   // Per-query slices are retained (Track D review): `queryIndex` on a check
   // id pages the slice it names — never a dead empty success.
   const slices: StoredSearchSlice[] = [];
+  const autoApplied: string[] = [];
   for (const q of queryList) {
-    const hits = await context.search(q, provider, callOpts);
+    // Per-query auto recency (same mixed-intent rule as web_search):
+    // temporal members scope, timeless ride unscoped, explicit wins.
+    const qOpts =
+      args.recencyFilter === undefined
+        ? (() => {
+            const auto = resolveRecencyForQuery(q);
+            if (auto) {
+              autoApplied.push(`'${auto}' → "${q}"`);
+              return { ...callOpts, recencyFilter: auto };
+            }
+            return callOpts;
+          })()
+        : callOpts;
+    const hits = await context.search(q, provider, qOpts);
     slices.push({
       query: q,
       // Track E retention: provider dates flow into the store and admission.
@@ -745,6 +757,11 @@ async function handleSourceCheck(
   if (wantContent && fetchedPages < targets.length) {
     notes.push(
       `passages extracted for ${fetchedPages} of ${targets.length} pages (budget cap ${context.maxFetches}).`
+    );
+  }
+  if (autoApplied.length > 0) {
+    notes.push(
+      `recencyFilter auto-applied provider-side (${autoApplied.join('; ')}) — pass an explicit recencyFilter to override.`
     );
   }
   if (!wantContent && merged.size > 0) {

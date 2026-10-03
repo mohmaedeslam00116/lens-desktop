@@ -53,6 +53,7 @@ describe('Track E — temporal-intent detection (EN)', () => {
       'current gold prices today',
       'breaking tokamak news',
       'new model announcement from OpenAI',
+      'new models compared for 2026',
       'recent advances in fusion',
     ]) {
       const intent = detectTemporalIntent(q);
@@ -112,12 +113,19 @@ describe('Track E — temporal-intent detection (AR)', () => {
       assert.equal(detectTemporalIntent(q).isTemporal, false, `"${q}" is not temporal`);
     }
   });
+
+  it('fires each Arabic marker once (longest match wins, no nested double-fire)', async () => {
+    assert.deepEqual(detectTemporalIntent('الأحدث').matchedTerms, ['الأحدث']);
+    assert.deepEqual(detectTemporalIntent('آخر المستجدات في الأسواق').matchedTerms, ['آخر المستجدات']);
+    assert.deepEqual(detectTemporalIntent('تحديثات الأسواق').matchedTerms, ['تحديثات']);
+  });
 });
 
 describe('Track E — recency resolution and date-aware variants', () => {
-  it('an explicit recency always wins over intent', async () => {
+  it('an explicit recency always wins over intent (case-insensitive)', async () => {
     assert.equal(resolveRecencyForQuery('breaking news today', 'year'), 'year');
     assert.equal(resolveRecencyForQuery('history of chess', 'month'), 'month');
+    assert.equal(resolveRecencyForQuery('breaking news today', 'Week'), 'week');
   });
 
   it('temporal queries resolve to the intent suggestion; timeless resolve to undefined (no silent scoping)', async () => {
@@ -167,6 +175,18 @@ describe('Track E — publishedAt parsing and freshness scoring', () => {
     assert.ok(undated < fresh && undated > stale, `undated sits between, got ${undated}`);
     assert.ok(timeless > stale, 'timeless queries penalize less than temporal ones');
     assert.ok(FRESHNESS_BOUNDS.staleAfterDays > 0, 'the staleness horizon is a named bound');
+  });
+
+  it('the ranker and the verifier agree on what stale means (one named horizon)', async () => {
+    const now = new Date('2026-10-02T00:00:00Z').getTime();
+    const aging = new Date(now - 100 * 86400000).toISOString();
+    const stale = new Date(now - 200 * 86400000).toISOString();
+    assert.ok(freshnessMultiplier(aging, now, true) > 0.5, 'aging evidence keeps weight');
+    assert.equal(freshnessMultiplier(stale, now, true), FRESHNESS_BOUNDS.staleTemporalWeight, 'past-horizon evidence takes the stale weight');
+    const flaggedAging = verifyTemporalGrounding('The latest record was set this year [1].', [{ index: 1, publishedAt: aging }], now);
+    const flaggedStale = verifyTemporalGrounding('The latest record was set this year [1].', [{ index: 1, publishedAt: stale }], now);
+    assert.deepEqual(flaggedAging, [], 'kept evidence is never simultaneously flagged stale');
+    assert.equal(flaggedStale.length, 1, 'past-horizon backing flags');
   });
 });
 
@@ -274,6 +294,27 @@ describe('Track E — publishedAt retention on admitted sources', () => {
     assert.equal(seen[0].opts?.recencyFilter, 'year');
     assert.doesNotMatch(String(out.result), /auto-applied/, 'no auto note when the caller chose');
   });
+
+  it('mixed-intent fan-out scopes only its temporal members (no over-scoping)', async () => {
+    const { createAgenticToolSurface } = await importEngine('agenticSearch.js');
+    const seen = [];
+    const surface = createAgenticToolSurface(stubContext({
+      sessionId: 's-tracke-mixed',
+      search: async (query, provider, opts) => {
+        seen.push({ query, opts });
+        return [];
+      },
+    }));
+    const out = await surface.handler({
+      name: 'web_search',
+      arguments: { queries: ['latest LLM benchmarks', 'history of chess'] },
+    });
+    assert.equal(out.success, true);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0].opts?.recencyFilter, 'week', 'the temporal member scopes');
+    assert.equal(seen[1].opts?.recencyFilter, undefined, 'the timeless member rides unscoped');
+    assert.match(String(out.result), /latest LLM benchmarks/, 'the note names the scoped query');
+  });
 });
 
 describe('Track E — source_check verifies temporal claims freshness-first', () => {
@@ -334,7 +375,7 @@ describe('Track E — claim-level verification before citation', () => {
       { index: 2, publishedAt: undefined },
     ]);
     assert.equal(flagged.length, 1, 'only the temporal claim is questioned');
-    assert.equal(flagged[0].index, 0, 'the flag names the sentence index');
+    assert.equal(flagged[0].sentenceIndex, 0, 'the flag names the sentence ordinal (never a citation id)');
     assert.deepEqual(flagged[0].citedIndices, [1]);
     assert.match(flagged[0].reason, /stale/i);
   });
@@ -373,6 +414,8 @@ describe('Track E — provider-side recency reaches the mechanism', () => {
     const wideSrc = await readSrc('wideAgent.ts');
     assert.match(wideSrc, /recencyFilter/, 'wide discovery threads recency through its search seam');
     const researcherSrc = await readSrc('researcherAgent.ts');
-    assert.match(researcherSrc, /publishedAt/, 'researcher harvest retains provider dates (auto-recency arrives via the surface it wraps)');
+    assert.match(researcherSrc, /hitDates/, 'researcher indexes search-hit dates for harvest re-attachment');
+    assert.match(researcherSrc, /hitDates\.get\(url\)/, 'harvest consults the hit-date index (scrape pages carry no dates)');
+    assert.match(agentSrc, /resolveRecencyForQuery\(subq\)/, 'the delegated loop resolves recency per subquery (no objective-wide over-scoping)');
   });
 });

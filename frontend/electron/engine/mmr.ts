@@ -240,7 +240,10 @@ export function selectPassagesWithMMR<T = any>(
       // Track E freshness (SPEC #155): under temporal intent, stale
       // candidates lose weight and fresh ones keep it; without intent the
       // multiplier is exactly 1.0 (undated is neutral outside temporal
-      // intent), so timeless ranking is bit-identical to before.
+      // intent), so timeless ranking is bit-identical to before. The
+      // multiplier scales the joint (relevance − novelty + offset) term —
+      // stale-diverse and stale-redundant are discounted equally, which is
+      // the intent (age is orthogonal to redundancy).
       const temporal = options.temporalIntent === true;
       const freshMultiplier = temporal
         ? freshnessMultiplier(candidate.publishedAt, options.now ?? Date.now(), true)

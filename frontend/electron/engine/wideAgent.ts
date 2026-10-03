@@ -247,6 +247,9 @@ export class WideResearchAgent {
             domain: page.domain,
             snippet: page.content.slice(0, 160),
             credibility: page.credibilityScore,
+            // Track E retention: same date the final sourceItems carry —
+            // streamed and final never diverge.
+            ...(page.publishedAt ? { publishedAt: page.publishedAt } : {}),
           });
         },
       });
@@ -330,17 +333,20 @@ export class WideResearchAgent {
     });
     if (signal?.aborted) return undefined;
 
-    const sourceItems: SourceItem[] = synthesis.references.map(reference => ({
-      url: reference.url,
-      title: reference.title || reference.domain || reference.url,
-      domain: reference.domain || '',
-      snippet: reference.snippet,
-      credibilityScore: pagesByUrl.get(reference.url)?.credibilityScore ?? 0,
-      // Track E retention: admitted sources carry dates where supplied.
-      ...(pagesByUrl.get(reference.url)?.publishedAt ? { publishedAt: pagesByUrl.get(reference.url)!.publishedAt! } : {}),
-      citationIndex: reference.index,
-      isCited: reference.cited,
-    }));
+    const sourceItems: SourceItem[] = synthesis.references.map(reference => {
+      const page = pagesByUrl.get(reference.url);
+      return {
+        url: reference.url,
+        title: reference.title || reference.domain || reference.url,
+        domain: reference.domain || '',
+        snippet: reference.snippet,
+        credibilityScore: page?.credibilityScore ?? 0,
+        // Track E retention: admitted sources carry dates where supplied.
+        ...(page?.publishedAt ? { publishedAt: page.publishedAt } : {}),
+        citationIndex: reference.index,
+        isCited: reference.cited,
+      };
+    });
     const finalTelemetry = this.createTelemetry({
       activeBudget,
       discovered: discovered.size,

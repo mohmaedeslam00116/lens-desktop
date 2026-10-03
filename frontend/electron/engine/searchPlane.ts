@@ -313,9 +313,10 @@ export interface ExtensionSearchOutcome {
   /** The provider that actually resolved — observed, never assumed. */
   provider: string;
   /**
-   * The recency actually applied provider-side (Track E echo): the caller
-   * sees what scoping served the results instead of assuming it. Undefined
-   * when no recency rode the call.
+   * The recency forwarded provider-side on this call (Track E echo): the
+   * caller sees which scoping rode the request instead of assuming it.
+   * Forwarded, not observed-applied — a vendored transport may ignore a
+   * filter it does not implement. Undefined when no recency rode the call.
    */
   recencyFilter?: 'day' | 'week' | 'month' | 'year';
 }
@@ -393,7 +394,7 @@ export async function searchViaExtension(
     return {
       results: (out?.results ?? []).map(toItem),
       provider: resolved,
-      // Track E echo: report the recency that actually rode the call.
+      // Track E echo: the recency forwarded provider-side (see field docs).
       ...(options?.recencyFilter ? { recencyFilter: options.recencyFilter } : {}),
     };
   } finally {

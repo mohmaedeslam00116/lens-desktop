@@ -303,13 +303,10 @@ Return ONLY a valid JSON array of strings, for example:
     const isAr = language === 'ar';
     const initialSourceCap = depth === 'quick' ? 4 : depth === 'storm' ? 12 : 8;
 
-    // Track E freshness (SPEC #155): a freshness-seeking objective applies
-    // its intent recency provider-side on every delegated search — one
-    // resolution, one channel. Timeless objectives resolve undefined and
-    // ride the plane exactly as before (no silent scoping).
-    const queryRecency = resolveRecencyForQuery(query);
-    const planeOpts = queryRecency ? { recencyFilter: queryRecency } : undefined;
-
+    // Track E freshness (SPEC #155, review): recency resolves PER SUBQUERY —
+    // a temporal objective must not over-scope its timeless milestones
+    // (e.g. "limitations drawbacks" rides unscoped while "latest
+    // benchmarks" scopes week). One helper, one channel, per-query truth.
     for (let i = 0; i < activeSubqueries.length; i++) {
       if (signal?.aborted) return;
       const subq = activeSubqueries[i];
@@ -328,7 +325,11 @@ Return ONLY a valid JSON array of strings, for example:
 
       let searchHits: any[] = [];
       try {
-        searchHits = await primarySearchPlane(subq, searchProvider, undefined, 6, signal, undefined, planeOpts);
+        const subqRecency = resolveRecencyForQuery(subq);
+        searchHits = await primarySearchPlane(
+          subq, searchProvider, undefined, 6, signal, undefined,
+          subqRecency ? { recencyFilter: subqRecency } : undefined
+        );
       } catch (err) {
         if (signal?.aborted) return;
         console.warn(`[Agent] Search failed for subquery "${subq}":`, err);
@@ -429,7 +430,11 @@ Return ONLY a valid JSON array of strings, for example:
 
         let hopHits: any[] = [];
         try {
-          hopHits = await primarySearchPlane(targetQ, searchProvider, undefined, 3, signal, undefined, planeOpts);
+          const hopRecency = resolveRecencyForQuery(targetQ);
+          hopHits = await primarySearchPlane(
+            targetQ, searchProvider, undefined, 3, signal, undefined,
+            hopRecency ? { recencyFilter: hopRecency } : undefined
+          );
         } catch (err) {
           if (signal?.aborted) return;
           console.warn(`[Agent] Search failed for adaptive query "${targetQ}":`, err);
