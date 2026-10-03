@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 
 import { DeepResearchAgent } from '../dist-electron/engine/agent.js';
 import { setActiveCore, resetActiveCore, getActiveCore } from '../dist-electron/engine/modelGateway.js';
+import { makeFixtureFetch } from '../dist-electron/engine/parityHarness.js';
+import { __testSeams as scrapeSeams, resetScrapePlane } from '../dist-electron/engine/scrapePlane.js';
+import { makeFixture } from './parity_fixture_builders.mjs';
 
 async function pi() {
   return await import('@earendil-works/pi-ai');
@@ -31,6 +34,8 @@ function baseRequest(overrides = {}) {
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+  scrapeSeams.setLookupOverride(null);
+  resetScrapePlane();
   resetActiveCore();
 });
 
@@ -42,7 +47,12 @@ describe('Standard research loop on the pi core (ticket 05)', () => {
       ai.fauxAssistantMessage('["fusion energy basics","tokamak benchmarks 2026"]'),
       ai.fauxAssistantMessage('# Fusion Energy Report\n\nKey findings summarized.'),
     ]);
-    stubFetchEmpty();
+    // Track G (SPEC #155): zero-evidence runs abstain, so this end-to-end
+    // contract serves sourced fixtures (real planes, routed fetch) — an
+    // empty wire would (correctly) abstain instead of reporting.
+    const fixture = makeFixture('std', 'Fusion energy', ['fusion energy basics', 'tokamak benchmarks 2026']);
+    globalThis.fetch = makeFixtureFetch(fixture);
+    scrapeSeams.setLookupOverride(async () => [{ address: '93.184.216.34', family: 4 }]);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
     assert.equal(getActiveCore(), 'pi');
 

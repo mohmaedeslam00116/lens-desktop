@@ -7,6 +7,9 @@ import { WideResearchAgent } from '../dist-electron/engine/wideAgent.js';
 import { ParentResearchAgent, deriveFacetAssignments } from '../dist-electron/engine/parentAgent.js';
 import { createResearchAgent } from '../dist-electron/engine/server.js';
 import { setActiveCore, resetActiveCore } from '../dist-electron/engine/modelGateway.js';
+import { makeFixtureFetch } from '../dist-electron/engine/parityHarness.js';
+import { __testSeams as scrapeSeams, resetScrapePlane } from '../dist-electron/engine/scrapePlane.js';
+import { makeScriptedResearcherFactory } from './parity_fixture_builders.mjs';
 
 async function pi() {
   return await import('@earendil-works/pi-ai');
@@ -65,8 +68,67 @@ const REPORT = '# Fusion Energy Report\n\nKey findings summarized.';
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+  scrapeSeams.setLookupOverride(null);
+  resetScrapePlane();
   resetActiveCore();
 });
+
+/**
+ * Track G (SPEC #155) sourced fixture: agency runs with zero admitted
+ * evidence (correctly) abstain, so lifecycle/report contracts serve routed
+ * fixtures through the real planes. Article pages clear the vendored
+ * 500-char usefulness bar.
+ */
+function ddgResultsPage(entries) {
+  return `<html><body>${entries
+    .map(
+      (e) => `<div class="result">
+        <h2 class="result__a" href="${e.url}">${e.title}</h2>
+        <a class="result__snippet" href="${e.url}">${e.snippet}</a>
+      </div>`
+    )
+    .join('')}</body></html>`;
+}
+
+const FILLER = 'Controlled laboratory conditions with calibrated instrumentation and independent measurement runs documented every observation in the comparison suite. ';
+
+function serveSourced() {
+  const queries = ['fusion energy basics', 'tokamak benchmarks 2026'];
+  const searchHtml = {};
+  const pageHtml = {};
+  const pagesByFacet = {};
+  for (const q of queries) {
+    const entries = [];
+    const urls = [];
+    for (let i = 1; i <= 2; i++) {
+      const url = `https://${q.replace(/[^a-z0-9]+/gi, '')}-src${i}.example/article`;
+      entries.push({ url, title: `${q} source ${i}`, snippet: `${q} overview` });
+      urls.push(url);
+      pageHtml[url] =
+        `<html><head><title>${q} source ${i}</title></head><body><article>` +
+        `<p>Fusion energy investigation reports on ${q}: detailed evidence shows measurable progress and reproducible results across independent measurements.</p>` +
+        `<p>Additional analysis of ${q} confirms the reported trends under controlled comparison with performance metrics recorded per run.</p>` +
+        `<p>${FILLER.repeat(8)}</p>` +
+        `</article></body></html>`;
+    }
+    searchHtml[q] = ddgResultsPage(entries);
+    pagesByFacet[q] = urls;
+  }
+  globalThis.fetch = makeFixtureFetch({
+    name: 'agency-sourced', query: 'Fusion energy', language: 'en',
+    plan: approvedPlan, report: REPORT,
+    searchHtml, pageHtml,
+  });
+  scrapeSeams.setLookupOverride(async () => [{ address: '93.184.216.34', family: 4 }]);
+  return { pagesByFacet };
+}
+
+function scriptedFactory(pagesByFacet) {
+  return makeScriptedResearcherFactory({
+    report: REPORT,
+    pagesFor: (options) => pagesByFacet[options.facet] ?? [],
+  });
+}
 
 describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => {
   it('derives facet assignments 1:1 from the approved plan in plan order', () => {
@@ -78,12 +140,13 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
   });
 
   it('executes agency mode end-to-end: facets derived, todo plan tracked, lifecycle streamed (faux providers, no network)', async () => {
-    stubFetchEmpty();
+    // Track G: sourced wire + scripted researchers (see helper above).
+    const { pagesByFacet } = serveSourced();
     const faux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
     const emitted = [];
-    const agent = new ParentResearchAgent('s-agency', (e) => emitted.push(e));
+    const agent = new ParentResearchAgent('s-agency', (e) => emitted.push(e), undefined, scriptedFactory(pagesByFacet));
     await agent.run(baseRequest());
 
     // Lifecycle: one role_selected + one started + one completed per facet
@@ -124,7 +187,9 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
   });
 
   it('is byte-equivalent to the legacy loop on identical fixtures (final report + shared event backbone)', async () => {
-    stubFetchEmpty();
+    // Track G: sourced wire on both legs — abstain≡abstain equality would
+    // prove nothing about the equivalence contract.
+    const { pagesByFacet } = serveSourced();
     const emittedLegacy = [];
     const legacyFaux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => legacyFaux.provider });
@@ -134,7 +199,7 @@ describe('ParentResearchAgent (ticket #88 — agency orchestrator seam)', () => 
     const emittedAgency = [];
     const agencyFaux = await makeFaux(REPORT);
     setActiveCore('pi', { overrideFactory: async () => agencyFaux.provider });
-    await new ParentResearchAgent('s-parity', (e) => emittedAgency.push(e)).run(baseRequest());
+    await new ParentResearchAgent('s-parity', (e) => emittedAgency.push(e), undefined, scriptedFactory(pagesByFacet)).run(baseRequest());
 
     // 1. The final report event is byte-equivalent.
     const legacyFinished = emittedLegacy.find((e) => e.type === 'finished');

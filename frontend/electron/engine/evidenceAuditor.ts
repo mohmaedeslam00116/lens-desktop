@@ -1,4 +1,5 @@
 import { tokenizeBilingual } from './bm25';
+import { extractContradictionCallouts, type DetectedContradiction } from './contradictions';
 
 /**
  * evidenceAuditor.ts — advisory Evidence Auditor (ADR-0010 decision 4,
@@ -53,6 +54,13 @@ export interface ClaimVerdict {
   bestEvidenceIndex: number;
 }
 
+/** A detected evidence conflict the report never calls out (Track G). */
+export interface UnresolvedConflict {
+  topicOrMetric: string;
+  sourceA: { index: number; value: number | string; domain: string };
+  sourceB: { index: number; value: number | string; domain: string };
+}
+
 /** Structured audit outcome for one completed research run. */
 export interface EvidenceAudit {
   verdicts: ClaimVerdict[];
@@ -61,6 +69,12 @@ export interface EvidenceAudit {
   unsupported: number;
   /** Aggregate [0,1] support across all audited claims. */
   overallSupport: number;
+  /**
+   * Track G honesty: detected evidence conflicts with no matching callout
+   * in the report. Empty when the evidence agrees or the report surfaces
+   * every conflict — never a false alarm, only unmarked ones.
+   */
+  unresolvedConflicts: UnresolvedConflict[];
   /** `advisory` today; `gating` arrives only with the post-#94 settings
    * flag (ADR-0010 decision 4). */
   mode: 'advisory' | 'gating';
@@ -71,6 +85,12 @@ export interface AuditOptions {
   language?: 'ar' | 'en';
   /** Escalation seam: advisory by default (ADR-0010 decision 4). */
   mode?: 'advisory' | 'gating';
+  /**
+   * Pre-detected evidence contradictions (Track G): the auditor checks
+   * each against the report's contradiction callouts and marks the
+   * unmarked ones unresolved. Omit when no contradiction detection ran.
+   */
+  contradictions?: DetectedContradiction[];
 }
 
 /** Sentence splitting that keeps Arabic sentence boundaries (؟،، ؛ ! .) and
@@ -181,12 +201,34 @@ export function auditEvidenceClaims(
       ? 0
       : Number((verdicts.reduce((sum, v) => sum + v.supportRatio, 0) / verdicts.length).toFixed(3));
 
+  // Track G honesty: every detected evidence conflict needs a matching
+  // callout in the report. A conflict is resolved when a callout cites BOTH
+  // of its sources; anything else stays unresolved (advisory, like the
+  // verdicts — it annotates, never gates).
+  const callouts = extractContradictionCallouts(report);
+  const unresolvedConflicts: UnresolvedConflict[] = [];
+  for (const c of options.contradictions ?? []) {
+    const calledOut = callouts.some(
+      (call) =>
+        call.sourceIndices.includes(c.sourceA.index) &&
+        call.sourceIndices.includes(c.sourceB.index)
+    );
+    if (!calledOut) {
+      unresolvedConflicts.push({
+        topicOrMetric: c.topicOrMetric,
+        sourceA: { index: c.sourceA.index, value: c.sourceA.value, domain: c.sourceA.domain },
+        sourceB: { index: c.sourceB.index, value: c.sourceB.value, domain: c.sourceB.domain },
+      });
+    }
+  }
+
   return {
     verdicts,
     supported,
     partiallySupported,
     unsupported,
     overallSupport,
+    unresolvedConflicts,
     mode: options.mode ?? 'advisory',
     language: options.language ?? 'en',
   };
@@ -197,10 +239,18 @@ export function auditEvidenceClaims(
 export function formatAuditSummary(audit: EvidenceAudit): string {
   const total = audit.verdicts.length;
   const pct = Math.round(audit.overallSupport * 100);
+  const conflicts = audit.unresolvedConflicts ?? [];
+  const conflictNote = (ar: boolean): string => {
+    if (conflicts.length === 0) return '';
+    const topics = conflicts.map((c) => c.topicOrMetric).join('; ');
+    return ar
+      ? ` تعارضات غير محسومة (${conflicts.length}): ${topics} — تحقق عبر source_check قبل الاستشهاد.`
+      : ` Unresolved conflicts (${conflicts.length}): ${topics} — verify via source_check before citing.`;
+  };
   if (audit.language === 'ar') {
-    return `تدقيق الأدلة (استشاري): تم دعم ${audit.supported} من ${total} ادعاءً مهمًا بأدلة مسترجعة (${audit.partiallySupported} جزئي، ${audit.unsupported} غير مدعوم)؛ نسبة الدعم ${pct}٪.`;
+    return `تدقيق الأدلة (استشاري): تم دعم ${audit.supported} من ${total} ادعاءً مهمًا بأدلة مسترجعة (${audit.partiallySupported} جزئي، ${audit.unsupported} غير مدعوم)؛ نسبة الدعم ${pct}٪.${conflictNote(true)}`;
   }
-  return `Evidence audit (advisory): ${audit.supported} of ${total} important claims supported by retrieved evidence (${audit.partiallySupported} partial, ${audit.unsupported} unsupported); overall support ${pct}%.`;
+  return `Evidence audit (advisory): ${audit.supported} of ${total} important claims supported by retrieved evidence (${audit.partiallySupported} partial, ${audit.unsupported} unsupported); overall support ${pct}%.${conflictNote(false)}`;
 }
 
 /** Bilingual markdown section appended to the report so the report itself

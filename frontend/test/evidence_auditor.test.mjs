@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
@@ -10,6 +10,9 @@ import {
 import { DeepResearchAgent } from '../dist-electron/engine/agent.js';
 import { ParentResearchAgent } from '../dist-electron/engine/parentAgent.js';
 import { setActiveCore, resetActiveCore } from '../dist-electron/engine/modelGateway.js';
+import { makeFixtureFetch } from '../dist-electron/engine/parityHarness.js';
+import { __testSeams as scrapeSeams, resetScrapePlane } from '../dist-electron/engine/scrapePlane.js';
+import { makeScriptedResearcherFactory } from './parity_fixture_builders.mjs';
 
 async function pi() {
   return await import('@earendil-works/pi-ai');
@@ -19,6 +22,69 @@ const realFetch = globalThis.fetch;
 function stubFetchEmpty() {
   globalThis.fetch = (async () =>
     new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } }));
+}
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  scrapeSeams.setLookupOverride(null);
+  resetScrapePlane();
+  resetActiveCore();
+});
+
+/**
+ * Track G (SPEC #155) sourced fixture: the audit contracts need ADMITTED
+ * evidence — zero-evidence runs (correctly) abstain instead of reporting.
+ * Search pages route the run's subquery strings; article pages carry the
+ * REPORT's grounded sentences verbatim (plus filler clearing the vendored
+ * 500-char usefulness bar) so support verdicts stay meaningful.
+ */
+function ddgResultsPage(entries) {
+  return `<html><body>${entries
+    .map(
+      (e) => `<div class="result">
+        <h2 class="result__a" href="${e.url}">${e.title}</h2>
+        <a class="result__snippet" href="${e.url}">${e.snippet}</a>
+      </div>`
+    )
+    .join('')}</body></html>`;
+}
+
+const FILLER = 'Controlled laboratory conditions with calibrated instrumentation and independent measurement runs documented every observation in the comparison suite. ';
+
+function sourcedFixture(subqueries) {
+  const searchHtml = {};
+  const pageHtml = {};
+  const pagesByFacet = {};
+  for (const q of subqueries) {
+    const entries = [];
+    const urls = [];
+    for (let i = 1; i <= 2; i++) {
+      const url = `https://${q.replace(/[^a-z0-9]+/gi, '')}-src${i}.example/article`;
+      entries.push({ url, title: `${q} source ${i}`, snippet: `${q} overview` });
+      urls.push(url);
+      pageHtml[url] =
+        `<html><head><title>${q} source ${i}</title></head><body><article>` +
+        `<p>Fusion reactors convert mass into energy through nuclear fusion.</p>` +
+        `<p>Tokamak devices confine plasma using magnetic fields at extreme temperatures.</p>` +
+        `<p>The EPR reactor achieved grid-connected fusion power in 2026 with Q=11.</p>` +
+        `<p>${FILLER.repeat(8)}</p>` +
+        `</article></body></html>`;
+    }
+    searchHtml[q] = ddgResultsPage(entries);
+    pagesByFacet[q] = urls;
+  }
+  return { searchHtml, pageHtml, pagesByFacet };
+}
+
+function serveSourced(subqueries) {
+  const fixture = sourcedFixture(subqueries);
+  globalThis.fetch = makeFixtureFetch({
+    name: 'audit-sourced', query: 'Fusion energy', language: 'en',
+    plan: approvedPlan, report: REPORT,
+    searchHtml: fixture.searchHtml, pageHtml: fixture.pageHtml,
+  });
+  scrapeSeams.setLookupOverride(async () => [{ address: '93.184.216.34', family: 4 }]);
+  return fixture;
 }
 
 const approvedPlan = {
@@ -124,7 +190,9 @@ describe('Evidence auditor core (ticket #91 — advisory, deterministic, offline
 
 describe('Audit integration in research runs (advisory — parity preserved)', () => {
   it('legacy loop: audit_telemetry streams, the audit section is the final chunk, and the finished report includes it', async () => {
-    stubFetchEmpty();
+    // Track G: sourced wire (zero-evidence runs abstain) — the audit needs
+    // admitted evidence to be meaningful.
+    serveSourced(['fusion energy basics', 'tokamak benchmarks', 'reactor safety']);
     const faux = await makeFaux(REPORT, { withSubqueries: true });
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
@@ -150,14 +218,20 @@ describe('Audit integration in research runs (advisory — parity preserved)', (
   });
 
   it('agency run: audit runs after researcher fan-out; verdicts visible in telemetry and report; parity backbone intact', async () => {
-    stubFetchEmpty();
+    // Track G: sourced wire + scripted researchers (real planes, routed
+    // fetch) — findings must exist for the audit to mean anything.
+    const { pagesByFacet } = serveSourced(['fusion energy basics', 'tokamak benchmarks 2026']);
     // 2 researchers x 2 tool-loop rounds each: 4 researcher responses + 1 synthesis.
     const faux = await makeFaux(REPORT, { responses: 5 });
     setActiveCore('pi', { overrideFactory: async () => faux.provider });
 
     const emitted = [];
+    const factory = makeScriptedResearcherFactory({
+      report: REPORT,
+      pagesFor: (options) => pagesByFacet[options.facet] ?? [],
+    });
     const parent = new ParentResearchAgent('s-91-agency', (e) => emitted.push(e), undefined,
-      undefined, { respecialization: false });
+      factory, { respecialization: false });
     // researcher_mode on: the audit must run after the researcher fan-out.
     await parent.run(baseRequest({ researcher_mode: true }));
 
@@ -184,7 +258,9 @@ describe('Audit integration in research runs (advisory — parity preserved)', (
   });
 
   it('advisory mode never changes admission: the finished event is byte-identical to a no-audit run except the report section', async () => {
-    stubFetchEmpty();
+    // Track G: sourced wire on both runs (see above) — vacuous abstain≡abstain
+    // equality would prove nothing about the audit contract.
+    serveSourced(['fusion energy basics', 'tokamak benchmarks', 'reactor safety']);
     // Run 1: with the audit wired (current build).
     const fauxA = await makeFaux(REPORT, { withSubqueries: true });
     setActiveCore('pi', { overrideFactory: async () => fauxA.provider });
